@@ -265,6 +265,11 @@ export async function closeWindow(profileId: number): Promise<void> {
 // 原页面不变 —— 用户看到的就是「点了完全没反应」，无法判断是点错还是网络问题。
 // 改走主进程后：加载由我们发起，失败时能在 did-fail-load 拿到 Chromium 的错误码
 // （多为 ERR_PROXY_CONNECTION_FAILED 一类），带着错误码回到起始页明确告知原因。
+//
+// 每次导航挂上的一次性监听统一登记到 navCleanups：「取消」时要先摘监听再 stop()，
+// 否则 stop() 触发的 did-fail-load（ERR_ABORTED）会被当成真实失败，把起始页刷成错误页。
+const navCleanups = new Map<number, () => void>()
+
 ipcMain.on('env-navigate', (event, rawUrl: unknown) => {
   const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
   // 只接受 http(s)，避免 file:// / javascript: 之类被拼进地址栏带进来
@@ -279,32 +284,60 @@ ipcMain.on('env-navigate', (event, rawUrl: unknown) => {
   }
   const win = profileId ? windows.get(profileId) : undefined
   if (!win || win.isDestroyed()) return
+  // 收窄出一份 webContents：下面的 onFail/onDone 是函数声明（会提升），
+  // TS 不会把外层 `if (!win) return` 的收窄带进提升函数的闭包里，直接用 win 会报
+  // "possibly undefined"。这里在收窄之后取出一个新的 const，闭包里用它就安全了。
+  const wc = win.webContents
 
-  const onFail = (
+  // 用函数声明而不是 const 箭头函数：cleanup 被 onFail/onDone 引用，
+  // 函数声明会提升，不用操心声明顺序（const 版要么触发 TDZ，要么得把 cleanup 提到最前）
+  function onFail(
     _e: Electron.Event,
     _errorCode: number,
     errorDescription: string,
     _validatedURL: string,
     isMainFrame: boolean
-  ) => {
+  ) {
     if (!isMainFrame) return
-    win.webContents.off('did-fail-load', onFail)
-    win.webContents.off('did-finish-load', onDone)
+    cleanup()
     const entry = rendererEntry()
     const hash = `#/browser?profileId=${profileId}&navError=${encodeURIComponent(
       errorDescription || 'ERR_UNKNOWN'
     )}&navUrl=${encodeURIComponent(url)}`
-    if (entry.url) void win.webContents.loadURL(`${entry.url}${hash}`)
-    else if (entry.file) void win.webContents.loadFile(entry.file, { hash: hash.slice(1) })
+    if (entry.url) void wc.loadURL(`${entry.url}${hash}`)
+    else if (entry.file) void wc.loadFile(entry.file, { hash: hash.slice(1) })
   }
   // 加载成功（或后续任何一次成功加载）后摘掉监听，避免越积越多
-  const onDone = () => {
-    win.webContents.off('did-fail-load', onFail)
-    win.webContents.off('did-finish-load', onDone)
+  function onDone() {
+    cleanup()
   }
-  win.webContents.on('did-fail-load', onFail)
-  win.webContents.on('did-finish-load', onDone)
-  void win.webContents.loadURL(url)
+  function cleanup() {
+    wc.off('did-fail-load', onFail)
+    wc.off('did-finish-load', onDone)
+    if (navCleanups.get(profileId) === cleanup) navCleanups.delete(profileId)
+  }
+  // 同一次导航重复进入时先清掉上一轮的监听
+  navCleanups.get(profileId)?.()
+  navCleanups.set(profileId, cleanup)
+  wc.on('did-fail-load', onFail)
+  wc.on('did-finish-load', onDone)
+  void wc.loadURL(url)
+})
+
+// 起始页加载遮罩上的「取消」：只 stop() 不够，监听还在，停掉触发的 ERR_ABORTED
+// 会走失败分支把页面刷成错误页 —— 必须先 cleanup() 再 stop()。
+ipcMain.on('env-navigate-cancel', (event) => {
+  let profileId = 0
+  for (const [id, win] of windows) {
+    if (win.webContents === event.sender) {
+      profileId = id
+      break
+    }
+  }
+  const win = profileId ? windows.get(profileId) : undefined
+  if (!win || win.isDestroyed()) return
+  navCleanups.get(profileId)?.()
+  win.webContents.stop()
 })
 
 // ===== 多窗口同步（键鼠轨迹级） =====

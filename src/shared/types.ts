@@ -220,6 +220,34 @@ export function normalizeSearchEngine(v: unknown): SearchEngine | undefined {
   return SEARCH_ENGINES.some((e) => e.value === v) ? (v as SearchEngine) : undefined
 }
 
+// 主机名样式：多级标签 + 可选端口 / 路径
+const HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d+)?(?:\/\S*)?$/i
+// 末段必须是字母型 TLD（2-24 位）：这是「网址」与「带点的关键词」的分界线
+const TLD_RE = /\.[a-z]{2,24}(?:[:/]|$)/i
+const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:\/\S*)?$/
+const LOCALHOST_RE = /^localhost(?::\d+)?(?:\/\S*)?$/i
+
+/**
+ * 判断输入框里的是「网址」还是「搜索关键词」，返回最终要打开的地址。
+ *
+ * 不能只按「含不含点」判定 —— 那会把 `py3.11`、`node.20`、`v1.2` 这类带点的
+ * 关键词拼成 https://py3.11 直接打不开。这里要求主机名的最后一段像 TLD
+ * （2-24 个字母，后面接 : 或 / 或结束），另外放行 IPv4 与 localhost
+ * （它们没有 TLD，但确实该直接访问）。
+ *
+ * 放在 shared 层是为了可单测：这段逻辑历史上出过 bug，只靠点 UI 很难回归。
+ */
+export function normalizeTarget(raw: string, engine: SearchEngine): string {
+  const s = (raw || '').trim()
+  if (!s) return ''
+  // 只有协议没有主体（如 "http://"）既不是网址，也不该拿去搜索
+  if (/^https?:\/\/\s*$/i.test(s)) return ''
+  if (/^https?:\/\//i.test(s)) return s
+  if (IPV4_RE.test(s) || LOCALHOST_RE.test(s)) return `https://${s}`
+  if (HOST_RE.test(s) && TLD_RE.test(s)) return `https://${s}`
+  return searchUrlFor(engine, s)
+}
+
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
   // 新建环境随机指纹时的默认操作系统

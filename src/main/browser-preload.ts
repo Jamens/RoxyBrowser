@@ -73,6 +73,14 @@
           } catch {
             window.location.href = url
           }
+        },
+        // 起始页加载遮罩上的「取消」：通知主进程停止当前加载并摘掉一次性监听
+        cancel: () => {
+          try {
+            ipcRenderer.send('env-navigate-cancel')
+          } catch {
+            /* ignore */
+          }
         }
       })
     }
