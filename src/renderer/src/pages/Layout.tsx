@@ -15,6 +15,7 @@ import {
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
+import { useIsDark } from '../theme'
 
 const { Sider, Header, Content } = Layout
 
@@ -34,6 +35,7 @@ export default function AppLayout() {
   const location = useLocation()
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)
   const { token } = theme.useToken()
+  const isDark = useIsDark()
 
   useEffect(() => {
     if (!getToken()) {
@@ -57,16 +59,16 @@ export default function AppLayout() {
 
   return (
     <Layout style={{ height: '100%' }}>
-      <Sider width={210} theme="dark" style={{ background: '#101a3a' }}>
+      <Sider width={210} theme={isDark ? 'dark' : 'light'} style={{ background: token.colorBgLayout }}>
         <div style={{ padding: '20px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <GlobalOutlined style={{ fontSize: 26, color: '#5b8cff' }} />
           <div>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>RoxyBrowser</div>
-            <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11 }}>指纹浏览器 Clone</div>
+            <div style={{ color: token.colorText, fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>RoxyBrowser</div>
+            <div style={{ color: token.colorTextSecondary, fontSize: 11 }}>指纹浏览器 Clone</div>
           </div>
         </div>
         <Menu
-          theme="dark"
+          theme={isDark ? 'dark' : 'light'}
           mode="inline"
           selectedKeys={[location.pathname]}
           items={MENUS}
