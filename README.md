@@ -150,6 +150,84 @@ curl http://127.0.0.1:39100/api/v1/profiles -H "Authorization: Bearer <令牌>"
 curl http://127.0.0.1:39100/api/v1/proxies  -H "Authorization: Bearer <令牌>"
 ```
 
+成功响应统一为 `{ "code": 0, "data": ... }`；失败为 `{ "code": <HTTP 状态码>, "message": "..." }` 且带对应 HTTP 状态码。
+
+#### 写入类接口（供脚本调度）
+
+**环境（Profile）**
+
+```bash
+# 查询单条环境
+curl http://127.0.0.1:39100/api/v1/profiles/1 -H "Authorization: Bearer <令牌>"
+
+# 更新环境（可传 name / remark / platform / startUrl / groupId / proxyId / fingerprint 任意子集；groupId、proxyId 传空串解除关联）
+curl -X PUT http://127.0.0.1:39100/api/v1/profiles/1 \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"name":"新名字","proxyId":3}'
+
+# 删除环境（级联清理：关联账号、Cookie，并把绑定该代理的其他环境的 proxyId 置空）
+curl -X DELETE http://127.0.0.1:39100/api/v1/profiles/1 -H "Authorization: Bearer <令牌>"
+```
+
+**代理（Proxy）**
+
+```bash
+# 创建代理（host、port 必填；type 默认 http）
+curl -X POST http://127.0.0.1:39100/api/v1/proxies \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"name":"美国节点","type":"http","host":"1.2.3.4","port":8080,"username":"u","password":"p"}'
+
+# 查询单条代理
+curl http://127.0.0.1:39100/api/v1/proxies/3 -H "Authorization: Bearer <令牌>"
+
+# 更新代理（name/type/host/username/password/remark/expiresAt 任意子集；port 为数字）
+curl -X PUT http://127.0.0.1:39100/api/v1/proxies/3 \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"port":8899}'
+
+# 删除代理（同时把关联环境的 proxyId 置空）
+curl -X DELETE http://127.0.0.1:39100/api/v1/proxies/3 -H "Authorization: Bearer <令牌>"
+
+# 从 IP 池分配代理（profileId 可选；country / region 可选过滤）。复用与 /api/proxies/allocate 同一分配逻辑，保证口径唯一
+curl -X POST http://127.0.0.1:39100/api/v1/proxies/allocate \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"profileId":1,"country":"US"}'
+
+# 检测代理连通性（更新 status / latency / country / region / city / isp / exitIp / lastCheckAt）
+curl -X POST http://127.0.0.1:39100/api/v1/proxies/check \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"id":3}'
+```
+
+**指纹（Fingerprint）**
+
+```bash
+# 随机生成指纹（os 可选：mac / windows，缺省按默认 OS 池）
+curl -X POST http://127.0.0.1:39100/api/v1/fingerprint/random \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"os":"windows"}'
+```
+
+**账号（Account）**
+
+```bash
+# 账号列表（自动附带 profileName）
+curl http://127.0.0.1:39100/api/v1/accounts -H "Authorization: Bearer <令牌>"
+
+# 创建账号（profileId 必填且须属于本团队）
+curl -X POST http://127.0.0.1:39100/api/v1/accounts \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"profileId":1,"platform":"Amazon","username":"buyer01","password":"****","remark":"主号"}'
+
+# 更新账号（platform/username/password/remark 任意子集）
+curl -X PUT http://127.0.0.1:39100/api/v1/accounts/5 \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"username":"buyer02"}'
+
+# 删除账号
+curl -X DELETE http://127.0.0.1:39100/api/v1/accounts/5 -H "Authorization: Bearer <令牌>"
+```
+
 令牌可在客户端「自动化 API」页面生成，页面内含完整接口文档与 curl 示例。
 
 ### 10. 系统设置与界面主题

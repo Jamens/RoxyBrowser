@@ -90,9 +90,34 @@ export default function ApiDocs() {
           title: 'POST /api/v1/profiles — 创建环境',
           code: curl('/profiles', '{"name":"API创建的环境","platform":"Amazon","fingerprint":{"os":"windows"}}')
         },
+        { title: 'GET /api/v1/profiles/{id} — 查询单个环境', code: curl('/profiles/1') },
+        {
+          title: 'PUT /api/v1/profiles/{id} — 更新环境',
+          code: curl('/profiles/1', '{"name":"新名字","startUrl":"https://example.com","proxyId":3}')
+        },
+        { title: 'DELETE /api/v1/profiles/{id} — 删除环境（含关联账号/Cookie）', code: `curl -X DELETE "${API_BASE}/api/v1/profiles/1" \\\n  -H "Authorization: Bearer <你的令牌>"` },
         { title: 'POST /api/v1/profiles/{id}/open — 打开环境窗口', code: curl('/profiles/1/open') },
         { title: 'POST /api/v1/profiles/{id}/close — 关闭环境窗口', code: curl('/profiles/1/close') },
-        { title: 'GET /api/v1/proxies — 代理列表', code: curl('/proxies') }
+        { title: 'GET /api/v1/proxies — 代理列表', code: curl('/proxies') },
+        {
+          title: 'POST /api/v1/proxies — 创建代理',
+          code: curl('/proxies', '{"name":"my-proxy","type":"http","host":"1.2.3.4","port":8080,"username":"u","password":"p"}')
+        },
+        { title: 'PUT /api/v1/proxies/{id} — 更新代理', code: curl('/proxies/1', '{"name":"new-name","port":8899}') },
+        { title: 'DELETE /api/v1/proxies/{id} — 删除代理', code: `curl -X DELETE "${API_BASE}/api/v1/proxies/1" \\\n  -H "Authorization: Bearer <你的令牌>"` },
+        { title: 'POST /api/v1/proxies/allocate — 从 IP 池分配代理', code: curl('/proxies/allocate', '{"profileId":1,"country":"US"}') },
+        { title: 'POST /api/v1/proxies/check — 检测代理连通性', code: curl('/proxies/check', '{"id":1}') },
+        {
+          title: 'POST /api/v1/fingerprint/random — 生成随机指纹',
+          code: curl('/fingerprint/random', '{"os":"mac"}')
+        },
+        { title: 'GET /api/v1/accounts — 账号列表', code: curl('/accounts') },
+        {
+          title: 'POST /api/v1/accounts — 创建账号',
+          code: curl('/accounts', '{"profileId":1,"platform":"Amazon","username":"buyer01","password":"secret"}')
+        },
+        { title: 'PUT /api/v1/accounts/{id} — 更新账号', code: curl('/accounts/1', '{"password":"new-secret"}') },
+        { title: 'DELETE /api/v1/accounts/{id} — 删除账号', code: `curl -X DELETE "${API_BASE}/api/v1/accounts/1" \\\n  -H "Authorization: Bearer <你的令牌>"` }
       ].map((item) => (
         <div key={item.title} style={{ marginBottom: 16 }}>
           <Typography.Text strong>{item.title}</Typography.Text>

@@ -302,6 +302,54 @@ function proxyPoolStatus(
   return 'available'
 }
 
+// 带 HTTP 状态码的业务错误，便于在 handler 中统一转为响应
+class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+// 从 IP 池分配代理（供 /api/proxies/allocate 与 v1 共用，保证分配口径唯一）
+async function allocateProxy(
+  teamId: number,
+  opts: { profileId?: number | null; country?: string; region?: string }
+): Promise<{ proxy: ProxyEntity; profileId: number | null; reused: boolean; poolStatus: 'available' | 'in-use' }> {
+  const repo = AppDataSource.getRepository(ProxyEntity)
+  const now = Date.now()
+  const usage = await computeProxyUsage(teamId)
+  const all = await repo.find({ where: { teamId } })
+  // 候选 = 未失效且未过期的代理（active 或 unknown 均可分配，与 proxyPoolStatus 的「available」定义一致）
+  let candidates = all.filter((p) => p.status !== 'invalid' && (!p.expiresAt || new Date(p.expiresAt).getTime() > now))
+  if (opts.country) {
+    const c = String(opts.country).toLowerCase()
+    candidates = candidates.filter((p) => p.country && p.country.toLowerCase().includes(c))
+  }
+  if (opts.region) {
+    const r = String(opts.region).toLowerCase()
+    candidates = candidates.filter((p) => p.region && p.region.toLowerCase().includes(r))
+  }
+  if (!candidates.length)
+    throw new ApiError(409, 'IP 池中无可用代理' + (opts.country ? `（地区：${opts.country}）` : ''))
+  // 优先分配未被任何环境占用的代理
+  const free = candidates.filter((p) => (usage.get(p.id) || 0) === 0)
+  const reused = free.length === 0
+  const chosen = (free.length ? free : candidates)[0]
+  let profileId: number | null = null
+  let poolStatus: 'available' | 'in-use' = 'available'
+  if (opts.profileId) {
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: Number(opts.profileId), teamId } })
+    if (!profile) throw new ApiError(404, '环境不存在')
+    profile.proxyId = chosen.id
+    await profileRepo.save(profile)
+    profileId = profile.id
+    poolStatus = 'in-use'
+  }
+  return { proxy: chosen, profileId, reused, poolStatus }
+}
+
 /**
  * 解析一行代理配置，支持：
  *   socks5://user:pass@1.2.3.4:1080
@@ -773,51 +821,32 @@ function buildApiRouter(): express.Router {
   // 从 IP 池一键分配：优先空闲代理，可按地区筛选，可选绑定到指定环境
   router.post('/proxies/allocate', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const b = req.body || {}
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const now = Date.now()
-    const usage = await computeProxyUsage(req.tid!)
-    const all = await repo.find({ where: { teamId: req.tid } })
-    // 候选 = 未失效且未过期的代理（active 或 unknown 均可分配，与 proxyPoolStatus 的「available」定义一致）
-    let candidates = all.filter(
-      (p) => p.status !== 'invalid' && (!p.expiresAt || new Date(p.expiresAt).getTime() > now)
-    )
-    if (b.country) {
-      const c = String(b.country).toLowerCase()
-      candidates = candidates.filter((p) => p.country && p.country.toLowerCase().includes(c))
+    try {
+      const { proxy, profileId, reused, poolStatus } = await allocateProxy(req.tid!, {
+        profileId: b.profileId,
+        country: b.country,
+        region: b.region
+      })
+      const usage = await computeProxyUsage(req.tid!)
+      if (profileId) {
+        const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: req.tid } })
+        await writeLog(req, 'allocate_proxy', `为环境「${profile?.name}」从 IP 池分配代理「${proxy.name}」(#${proxy.id})`)
+      } else {
+        await writeLog(
+          req,
+          'allocate_proxy',
+          `从 IP 池分配代理「${proxy.name}」(#${proxy.id})` + (reused ? '（池中无空闲代理，复用已占用代理）' : '')
+        )
+      }
+      res.json({
+        proxy: { ...proxy, usageCount: (usage.get(proxy.id) || 0) + (profileId ? 1 : 0), poolStatus },
+        profileId,
+        reused
+      })
+    } catch (e) {
+      if (e instanceof ApiError) return res.status(e.status).json({ message: e.message })
+      throw e
     }
-    if (b.region) {
-      const r = String(b.region).toLowerCase()
-      candidates = candidates.filter((p) => p.region && p.region.toLowerCase().includes(r))
-    }
-    if (!candidates.length)
-      return res.status(409).json({ message: 'IP 池中无可用代理' + (b.country ? `（地区：${b.country}）` : '') })
-    // 优先分配未被任何环境占用的代理
-    const free = candidates.filter((p) => (usage.get(p.id) || 0) === 0)
-    const reused = free.length === 0
-    const chosen = (free.length ? free : candidates)[0]
-    let profileId: number | null = null
-    let poolStatus: 'available' | 'in-use' = 'available'
-    if (b.profileId) {
-      const profileRepo = AppDataSource.getRepository(ProfileEntity)
-      const profile = await profileRepo.findOne({ where: { id: Number(b.profileId), teamId: req.tid } })
-      if (!profile) return res.status(404).json({ message: '环境不存在' })
-      profile.proxyId = chosen.id
-      await profileRepo.save(profile)
-      profileId = profile.id
-      poolStatus = 'in-use'
-      await writeLog(req, 'allocate_proxy', `为环境「${profile.name}」从 IP 池分配代理「${chosen.name}」(#${chosen.id})`)
-    } else {
-      await writeLog(
-        req,
-        'allocate_proxy',
-        `从 IP 池分配代理「${chosen.name}」(#${chosen.id})` + (reused ? '（池中无空闲代理，复用已占用代理）' : '')
-      )
-    }
-    res.json({
-      proxy: { ...chosen, usageCount: (usage.get(chosen.id) || 0) + (profileId ? 1 : 0), poolStatus },
-      profileId,
-      reused
-    })
   })
 
   // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布
@@ -1447,6 +1476,198 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProxyEntity)
     const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid } })
     res.json({ code: 0, data: list })
+  })
+
+  // ===== 自动化 API v1 写入类（供脚本调度） =====
+  // 约定：成功返回 { code: 0, data }；失败返回 { code, message }，并记录 HTTP 状态码
+
+  // --- 环境：查询单条 / 更新 / 删除 ---
+  v1.get('/profiles/:id', async (req: Request, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
+    res.json({ code: 0, data: mapProfile(p) })
+  })
+
+  v1.put('/profiles/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
+    const b = req.body || {}
+    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId'] as const
+    for (const f of fields) {
+      if (f in b) (p as any)[f] = b[f] === '' && (f === 'groupId' || f === 'proxyId') ? null : b[f]
+    }
+    if (b.fingerprint) p.fingerprint = b.fingerprint
+    await repo.save(p)
+    res.json({ code: 0, data: { id: p.id, name: p.name } })
+  })
+
+  v1.delete('/profiles/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
+    await repo.remove(p)
+    // 清理关联数据，避免孤儿记录
+    await AppDataSource.getRepository(AccountEntity).delete({ profileId: p.id })
+    await AppDataSource.getRepository(CookieEntity).delete({ profileId: p.id })
+    await AppDataSource.getRepository(ProfileEntity).update({ teamId: tid, proxyId: p.id }, { proxyId: null })
+    res.json({ code: 0, data: { id: p.id } })
+  })
+
+  // --- 代理：创建 / 查询单条 / 更新 / 删除 / 分配 / 检测 ---
+  v1.post('/proxies', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const b = req.body || {}
+    if (!b.host || !b.port) return res.status(400).json({ code: 400, message: 'host and port required' })
+    const p = await repo.save(
+      repo.create({
+        teamId: tid,
+        name: b.name || `${b.host}:${b.port}`,
+        type: b.type || 'http',
+        host: b.host,
+        port: Number(b.port),
+        username: b.username || '',
+        password: b.password || '',
+        remark: b.remark || ''
+      })
+    )
+    res.json({ code: 0, data: p })
+  })
+
+  v1.get('/proxies/:id', async (req: Request, res: Response) => {
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
+    res.json({ code: 0, data: p })
+  })
+
+  v1.put('/proxies/:id', async (req: Request, res: Response) => {
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
+    const b = req.body || {}
+    for (const f of ['name', 'type', 'host', 'username', 'password', 'remark', 'expiresAt'] as const) {
+      if (f in b) (p as any)[f] = b[f]
+    }
+    if (b.port) p.port = Number(b.port)
+    await repo.save(p)
+    res.json({ code: 0, data: p })
+  })
+
+  v1.delete('/proxies/:id', async (req: Request, res: Response) => {
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
+    await repo.remove(p)
+    await AppDataSource.getRepository(ProfileEntity).update(
+      { teamId: (req as AuthedRequest).tid, proxyId: p.id },
+      { proxyId: null }
+    )
+    res.json({ code: 0, data: { id: p.id } })
+  })
+
+  v1.post('/proxies/allocate', async (req: Request, res: Response) => {
+    const b = req.body || {}
+    try {
+      const { proxy, profileId, reused, poolStatus } = await allocateProxy((req as AuthedRequest).tid!, {
+        profileId: b.profileId,
+        country: b.country,
+        region: b.region
+      })
+      const usage = await computeProxyUsage((req as AuthedRequest).tid!)
+      res.json({
+        code: 0,
+        data: { proxy: { ...proxy, usageCount: (usage.get(proxy.id) || 0) + (profileId ? 1 : 0), poolStatus }, profileId, reused }
+      })
+    } catch (e) {
+      if (e instanceof ApiError) return res.status(e.status).json({ code: e.status, message: e.message })
+      throw e
+    }
+  })
+
+  v1.post('/proxies/check', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const id = Number((req.body || {}).id)
+    const p = await repo.findOne({ where: { id, teamId: tid } })
+    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
+    const settings = await getSettings()
+    const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
+    p.status = result.ok ? 'active' : 'invalid'
+    p.latency = result.ok ? result.latency : null
+    p.country = result.country
+    p.region = result.region
+    p.city = result.city
+    p.isp = result.isp
+    p.exitIp = result.exitIp
+    p.lastCheckAt = new Date()
+    await repo.save(p)
+    res.json({ code: 0, data: p })
+  })
+
+  // --- 指纹：随机生成 ---
+  v1.post('/fingerprint/random', async (req: Request, res: Response) => {
+    const os = (req.body || {}).os
+    res.json({ code: 0, data: randomFingerprint(os === 'mac' ? 'mac' : os === 'windows' ? 'windows' : undefined) })
+  })
+
+  // --- 账号：列表 / 创建 / 更新 / 删除 ---
+  v1.get('/accounts', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profiles = await profileRepo.find({ where: { teamId: tid, isTemplate: false } })
+    const profileIds = new Set(profiles.map((p) => p.id))
+    const nameMap = new Map(profiles.map((p) => [p.id, p.name]))
+    const all = await repo.find({ order: { id: 'DESC' } })
+    res.json({ code: 0, data: all.filter((a) => profileIds.has(a.profileId)).map((a) => ({ ...a, profileName: nameMap.get(a.profileId) || '' })) })
+  })
+
+  v1.post('/accounts', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: Number((req.body || {}).profileId), teamId: tid } })
+    if (!profile) return res.status(400).json({ code: 400, message: 'profile not found' })
+    const a = await repo.save(
+      repo.create({
+        profileId: profile.id,
+        platform: (req.body || {}).platform || '',
+        username: (req.body || {}).username || '',
+        password: (req.body || {}).password || '',
+        remark: (req.body || {}).remark || ''
+      })
+    )
+    res.json({ code: 0, data: a })
+  })
+
+  v1.put('/accounts/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const ids = new Set((await profileRepo.find({ where: { teamId: tid } })).map((p) => p.id))
+    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
+    if (!a || !ids.has(a.profileId)) return res.status(404).json({ code: 404, message: 'account not found' })
+    for (const f of ['platform', 'username', 'password', 'remark'] as const) {
+      if (f in (req.body || {})) (a as any)[f] = (req.body as any)[f]
+    }
+    await repo.save(a)
+    res.json({ code: 0, data: a })
+  })
+
+  v1.delete('/accounts/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const ids = new Set((await profileRepo.find({ where: { teamId: tid } })).map((p) => p.id))
+    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
+    if (!a || !ids.has(a.profileId)) return res.status(404).json({ code: 404, message: 'account not found' })
+    await repo.remove(a)
+    res.json({ code: 0, data: { id: a.id } })
   })
 
   // ===== 批量能力：导入 / 导出 / 复制 / 批量随机指纹 =====
