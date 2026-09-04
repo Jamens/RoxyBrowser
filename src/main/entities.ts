@@ -216,7 +216,8 @@ export class CookieEntity {
   @Column({ type: 'varchar', length: 255, default: '' })
   name: string
 
-  @Column({ type: 'text', default: '' })
+  // TEXT 列在 MySQL 5.7 下不允许设 DEFAULT，去掉 default（插入时显式赋值即可）
+  @Column({ type: 'text' })
   value: string
 
   @Column({ type: 'varchar', length: 512, default: '/' })
