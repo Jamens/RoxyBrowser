@@ -30,7 +30,14 @@ interface ProfileInfo {
   seq: number;
   platform: string;
   startUrl: string;
-  proxyCountry: string;
+  /** 绑定的代理信息（含检测状态）。未绑定代理时为 null —— 此时走系统/直连 */
+  proxy: {
+    id: number;
+    label: string;
+    status: string;
+    checked: boolean;
+    country: string;
+  } | null;
   searchEngine: SearchEngine;
   fingerprint: {
     os: string;
@@ -56,7 +63,7 @@ const QUICK_LINKS: { name: string; url: string; key?: MessageKey }[] = [
 ];
 
 /** Chromium 网络错误码 → 人话。绝大多数打开失败其实都是代理不通 */
-function navErrorReason(code: string, t: TranslateFn): string {
+function navErrorReason(code: string, t: TranslateFn, proxyLabel?: string): string {
   if (code.startsWith("ERR_CERT")) return t("browser.err.cert");
   if (code === "ERR_INTERNET_DISCONNECTED" || code === "ERR_NETWORK_CHANGED")
     return t("browser.err.offline");
@@ -72,7 +79,10 @@ function navErrorReason(code: string, t: TranslateFn): string {
     code === "ERR_NO_SUPPORTED_PROXIES" ||
     code === "ERR_MANDATORY_PROXY_CONFIGURATION_FAILED"
   ) {
-    return t("browser.err.proxy");
+    // 有代理地址就说清是哪一条，用户不用回头去猜绑定到哪了
+    return proxyLabel
+      ? t("browser.err.proxyWithAddr", { label: proxyLabel })
+      : t("browser.err.proxy");
   }
   if (
     code === "ERR_CONNECTION_RESET" ||
@@ -128,6 +138,10 @@ export default function BrowserTab() {
   }, [profileId, apiBase]);
 
   const engine: SearchEngine = info?.searchEngine || "bing";
+  // 绑定了代理但「从未检测通过」或「最近检测为失效」——这种代理几乎必然连不上，
+  // 而后果是整个环境断网，不是某个站点打不开，所以按高风险处理。
+  const proxyRisk =
+    !!info?.proxy && (!info.proxy.checked || info.proxy.status === "invalid");
   const engineLabel =
     SEARCH_ENGINES.find((e) => e.value === engine)?.label || "Bing";
 
@@ -189,14 +203,44 @@ export default function BrowserTab() {
             <Tag icon={<SafetyOutlined />} color="success">
               {t("browser.envActive")}
             </Tag>
-            {info?.proxyCountry && (
+            {info?.proxy?.country && (
               <Tag color="blue">
-                {t("browser.proxyRegion", { country: info.proxyCountry })}
+                {t("browser.proxyRegion", { country: info.proxy.country })}
               </Tag>
             )}
             {info?.platform && <Tag color="purple">{info.platform}</Tag>}
           </Space>
         </div>
+
+        {/* 代理预警：必须在用户点链接「之前」就讲清楚。
+            环境窗口一旦绑定了不可用的代理，Chromium 连代理本身都连不上，
+            所有站点（包括本来能直连的国内站）会一起 ERR_PROXY_CONNECTION_FAILED。
+            不提前预警，用户只会以为「搜索功能坏了」——本次线上问题就是这么来的。 */}
+        {proxyRisk && info.proxy && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 20, textAlign: "left" }}
+            message={t("browser.proxyWarnTitle")}
+            description={
+              <>
+                <div style={{ fontSize: 12 }}>
+                  {info.proxy.checked
+                    ? t("browser.proxyWarnInvalid", { label: info.proxy.label })
+                    : t("browser.proxyWarnUnchecked", {
+                        label: info.proxy.label,
+                      })}
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  {t("browser.proxyWarnAllBlocked")}
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>
+                  {t("browser.proxyWarnHow")}
+                </div>
+              </>
+            }
+          />
+        )}
 
         <Input.Search
           size="large"
@@ -245,7 +289,7 @@ export default function BrowserTab() {
                 <div style={{ fontSize: 12, wordBreak: "break-all" }}>
                   {t("browser.navFailedDesc", {
                     url: navUrl,
-                    reason: navErrorReason(navError, t),
+                    reason: navErrorReason(navError, t, info?.proxy?.label),
                   })}
                 </div>
                 <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>

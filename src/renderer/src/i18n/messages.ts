@@ -130,6 +130,14 @@ const zhCN = {
   'browser.err.cert': '证书校验失败（代理做了 HTTPS 中间人，或系统时间不对）',
   'browser.err.offline': '网络未连接',
   'browser.err.unknown': '未知错误（{code}）',
+  'browser.err.proxyWithAddr': '代理 {label} 连接失败（该代理不可达或账号过期）',
+
+  // ---- 起始页：代理预警 ----
+  'browser.proxyWarnTitle': '该环境的代理很可能不可用',
+  'browser.proxyWarnUnchecked': '绑定的代理 {label} 尚未通过检测',
+  'browser.proxyWarnInvalid': '绑定的代理 {label} 最近一次检测结果为失效',
+  'browser.proxyWarnAllBlocked': '代理不可用时，本环境所有网页都会打不开（包括本来能直连的站点）',
+  'browser.proxyWarnHow': '请到主窗口「代理 IP」页重新检测或更换代理，或在环境编辑里改为「不使用代理（直连）」',
 
   // ---- 设置：起始页搜索引擎 ----
   'settings.searchEngine': '起始页搜索引擎',
@@ -263,6 +271,14 @@ const enUS: MessageDict = {
   'browser.err.cert': 'Certificate check failed (proxy MITM or wrong system time)',
   'browser.err.offline': 'No network connection',
   'browser.err.unknown': 'Unknown error ({code})',
+  'browser.err.proxyWithAddr': 'Proxy {label} is unreachable (down or account expired)',
+
+  // ---- Start page: proxy warning ----
+  'browser.proxyWarnTitle': 'The proxy of this profile is probably unusable',
+  'browser.proxyWarnUnchecked': 'Bound proxy {label} has never passed a check',
+  'browser.proxyWarnInvalid': 'Bound proxy {label} failed its last check',
+  'browser.proxyWarnAllBlocked': 'When the proxy is down, every page in this profile fails to open (even sites reachable directly)',
+  'browser.proxyWarnHow': 'Re-check or replace it on the "Proxy IP" page, or set the profile to "No proxy (direct)"',
 
   // ---- Settings: start-page search engine ----
   'settings.searchEngine': 'Start-page search engine',
@@ -394,6 +410,14 @@ const jaJP: MessageDict = {
   'browser.err.cert': '証明書検証失敗（プロキシの HTTPS 中継、または時刻ずれ）',
   'browser.err.offline': 'ネットワーク未接続',
   'browser.err.unknown': '不明なエラー（{code}）',
+  'browser.err.proxyWithAddr': 'プロキシ {label} に接続できません（停止中、またはアカウント期限切れ）',
+
+  // ---- スタートページ：プロキシ警告 ----
+  'browser.proxyWarnTitle': 'この環境のプロキシは利用できない可能性があります',
+  'browser.proxyWarnUnchecked': '紐づくプロキシ {label} は検査に合格していません',
+  'browser.proxyWarnInvalid': '紐づくプロキシ {label} は直近の検査で失敗しました',
+  'browser.proxyWarnAllBlocked': 'プロキシが使えないと、この環境では（直接開けるサイトも含め）すべてのページが開けません',
+  'browser.proxyWarnHow': 'メインウィンドウの「プロキシ IP」で再検査・差し替えするか、環境設定を「プロキシなし（直接接続）」にしてください',
 
   // ---- 設定：スタートページの検索エンジン ----
   'settings.searchEngine': 'スタートページの検索エンジン',
@@ -525,6 +549,14 @@ const deDE: MessageDict = {
   'browser.err.cert': 'Zertifikatsprüfung fehlgeschlagen (Proxy-MITM oder falsche Systemzeit)',
   'browser.err.offline': 'Keine Netzwerkverbindung',
   'browser.err.unknown': 'Unbekannter Fehler ({code})',
+  'browser.err.proxyWithAddr': 'Proxy {label} nicht erreichbar (down oder Konto abgelaufen)',
+
+  // ---- Startseite: Proxy-Warnung ----
+  'browser.proxyWarnTitle': 'Der Proxy dieser Umgebung ist wahrscheinlich nicht nutzbar',
+  'browser.proxyWarnUnchecked': 'Der gebundene Proxy {label} hat noch keine Prüfung bestanden',
+  'browser.proxyWarnInvalid': 'Der gebundene Proxy {label} ist bei der letzten Prüfung durchgefallen',
+  'browser.proxyWarnAllBlocked': 'Ist der Proxy down, lassen sich in dieser Umgebung alle Seiten nicht öffnen (auch direkt erreichbare)',
+  'browser.proxyWarnHow': 'Auf der Seite „Proxy-IP" erneut prüfen oder ersetzen, oder die Umgebung auf „Kein Proxy (direkt)" stellen',
 
   // ---- Einstellungen: Suchmaschine der Startseite ----
   'settings.searchEngine': 'Suchmaschine der Startseite',

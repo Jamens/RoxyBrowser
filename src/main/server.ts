@@ -538,11 +538,29 @@ function buildApiRouter(): express.Router {
     const p = await repo.findOne({ where: { id: Number(req.params.id) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     const settings = await getSettings()
-    let proxyCountry = ''
+    // 代理信息一并返回（含检测状态）：起始页据此在「用户点链接之前」就预警。
+    // 环境窗口一旦绑定了不可用的代理，所有站点（包括本可直连的国内站）都会
+    // ERR_PROXY_CONNECTION_FAILED 全挂；不提前说清楚，用户只会以为是搜索功能坏了。
+    let proxy: null | {
+      id: number
+      label: string
+      status: string
+      checked: boolean
+      country: string
+    } = null
     if (p.proxyId) {
       const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-      const proxy = await proxyRepo.findOne({ where: { id: p.proxyId } })
-      proxyCountry = proxy?.country || ''
+      const px = await proxyRepo.findOne({ where: { id: p.proxyId } })
+      if (px) {
+        proxy = {
+          id: px.id,
+          // 形如 socks5://1.2.3.4:1080，直接在页面上告诉用户是哪一条
+          label: `${px.type}://${px.host}:${px.port}`,
+          status: px.status || 'unknown',
+          checked: !!px.lastCheckAt && px.status === 'active',
+          country: px.country || ''
+        }
+      }
     }
     res.json({
       id: p.id,
@@ -550,7 +568,7 @@ function buildApiRouter(): express.Router {
       seq: p.seq,
       platform: p.platform,
       startUrl: p.startUrl,
-      proxyCountry,
+      proxy,
       searchEngine: settings.searchEngine,
       fingerprint: {
         os: p.fingerprint.os,
