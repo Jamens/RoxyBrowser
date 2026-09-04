@@ -1,4 +1,5 @@
 // 共享类型定义（主进程 / 渲染进程共用）
+import type { LocaleCode } from './locales'
 
 export type OSKind = 'windows' | 'mac' | 'android' | 'ios'
 export type WebRTCMode = 'disable' | 'real'
@@ -200,6 +201,11 @@ export interface AppSettings {
   // 自动模式时段：白天起始小时（含）/ 黑夜起始小时（含），区间 [dayStart, nightStart) 为白天
   autoDayStart: number
   autoNightStart: number
+  // 所在国家（ISO 3166-1 alpha-2）。自动模式下的白天/黑夜判定按该国的 IANA 时区换算，
+  // 冬夏令时由运行时时区库自动处理（见 shared/timezone.ts）
+  country: string
+  // 界面语言（切换国家时会自动带出该国默认语言，也可单独覆盖）
+  language: LocaleCode
   // 代理检测超时（秒）
   proxyCheckTimeout: number
   // 代理定时巡检间隔（分钟），0 表示关闭
@@ -215,6 +221,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'auto',
   autoDayStart: 7,
   autoNightStart: 18,
+  country: 'CN',
+  language: 'zh-CN',
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
   logRetentionDays: 90

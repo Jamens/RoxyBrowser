@@ -32,6 +32,8 @@ import {
   RpaScriptEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
+import { normalizeCountry } from '../shared/countries'
+import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
@@ -1469,6 +1471,12 @@ function buildApiRouter(): express.Router {
   router.put('/settings', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AppSettingsEntity)
     const merged = { ...DEFAULT_SETTINGS, ...(req.body || {}) } as Record<string, unknown>
+    // 国家 / 语言走白名单：非法值直接回落默认，避免把脏数据写进 JSON 列
+    // （theme.ts 与 i18n 都按这些值取时区与词典，脏值会导致界面/主题取不到而崩溃）
+    const country = normalizeCountry(merged.country as string) || DEFAULT_SETTINGS.country
+    const language = normalizeLocale(merged.language as string) || DEFAULT_SETTINGS.language
+    merged.country = country
+    merged.language = language
     let row = await repo.findOne({ where: { key: 'global' } })
     if (!row) row = repo.create({ key: 'global', settings: merged })
     else row.settings = merged

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { countryTimezone } from '@shared/countries'
+import { localHourInTimeZone } from '@shared/timezone'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 
@@ -14,12 +16,22 @@ function readAutoHours(): { dayStart: number; nightStart: number } {
   }
 }
 
+/**
+ * 自动模式下的「当前小时」取自设置里所选国家的本地时间，而不是宿主机本地时间。
+ * 这样人在中国（UTC+8）却把国家设为美国时，白天/黑夜按纽约时间算；
+ * 且走 IANA 时区由运行时换算，冬夏令时自动生效，无需维护偏移表。
+ */
+export function currentCountryHour(): number {
+  const country = localStorage.getItem('roxy_country') || 'CN'
+  return localHourInTimeZone(countryTimezone(country))
+}
+
 // 自动模式时段：[dayStart, nightStart) 为白天，其余为黑夜（默认 7:00-18:00）
 export function resolveDark(mode: string): boolean {
   if (mode === 'dark') return true
   if (mode === 'light') return false
   const { dayStart, nightStart } = readAutoHours()
-  const h = new Date().getHours()
+  const h = currentCountryHour()
   return !(h >= dayStart && h < nightStart)
 }
 

@@ -3,12 +3,14 @@ import { Card, Tabs, Form, Input, Button, message } from 'antd'
 import { UserOutlined, LockOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api, setToken } from '../api'
+import { useT } from '../i18n'
 
 export default function Login() {
   const [form] = Form.useForm()
   const [regForm] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const t = useT()
 
   const doLogin = async (values: { username: string; password: string }) => {
     setLoading(true)
@@ -28,7 +30,7 @@ export default function Login() {
     try {
       const res = await api.post<{ token: string }>('/api/auth/register', values)
       setToken(res.token)
-      message.success('注册成功')
+      message.success(t('login.registerSuccess'))
       navigate('/')
     } catch (e) {
       message.error((e as Error).message)
@@ -51,7 +53,7 @@ export default function Login() {
         <div style={{ fontSize: 34, color: '#fff', fontWeight: 700, letterSpacing: 1 }}>
           <GlobalOutlined /> RoxyBrowser Clone
         </div>
-        <div style={{ color: 'rgba(255,255,255,0.75)', marginTop: 8 }}>指纹浏览器 · 跨境电商多账号防关联</div>
+        <div style={{ color: 'rgba(255,255,255,0.75)', marginTop: 8 }}>{t('app.tagline')}</div>
       </div>
       <Card style={{ width: 400, boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
         <Tabs
@@ -59,40 +61,64 @@ export default function Login() {
           items={[
             {
               key: 'login',
-              label: '登录',
+              label: t('login.tab'),
               children: (
                 <Form form={form} layout="vertical" onFinish={doLogin} initialValues={{ username: 'admin', password: '123456' }}>
-                  <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-                    <Input prefix={<UserOutlined />} placeholder="用户名（默认 admin）" size="large" />
+                  <Form.Item
+                    name="username"
+                    rules={[{ required: true, message: t('login.usernameRequired') }]}
+                  >
+                    <Input
+                      prefix={<UserOutlined />}
+                      placeholder={t('login.usernamePlaceholder')}
+                      size="large"
+                    />
                   </Form.Item>
-                  <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-                    <Input.Password prefix={<LockOutlined />} placeholder="密码（默认 123456）" size="large" />
+                  <Form.Item
+                    name="password"
+                    rules={[{ required: true, message: t('login.passwordRequired') }]}
+                  >
+                    <Input.Password
+                      prefix={<LockOutlined />}
+                      placeholder={t('login.passwordPlaceholder')}
+                      size="large"
+                    />
                   </Form.Item>
                   <Button type="primary" htmlType="submit" block size="large" loading={loading}>
-                    登 录
+                    {t('login.submit')}
                   </Button>
                 </Form>
               )
             },
             {
               key: 'register',
-              label: '注册',
+              label: t('login.registerTab'),
               children: (
                 <Form form={regForm} layout="vertical" onFinish={doRegister}>
-                  <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-                    <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
+                  <Form.Item
+                    name="username"
+                    rules={[{ required: true, message: t('login.usernameRequired') }]}
+                  >
+                    <Input prefix={<UserOutlined />} placeholder={t('login.username')} size="large" />
                   </Form.Item>
-                  <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-                    <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
+                  <Form.Item
+                    name="password"
+                    rules={[{ required: true, message: t('login.passwordRequired') }]}
+                  >
+                    <Input.Password
+                      prefix={<LockOutlined />}
+                      placeholder={t('login.password')}
+                      size="large"
+                    />
                   </Form.Item>
                   <Form.Item name="nickname">
-                    <Input placeholder="昵称（可选）" size="large" />
+                    <Input placeholder={t('login.nicknamePlaceholder')} size="large" />
                   </Form.Item>
                   <Form.Item name="teamName">
-                    <Input placeholder="团队空间名称（可选）" size="large" />
+                    <Input placeholder={t('login.teamNamePlaceholder')} size="large" />
                   </Form.Item>
                   <Button type="primary" htmlType="submit" block size="large" loading={loading}>
-                    注册并创建团队空间
+                    {t('login.registerSubmit')}
                   </Button>
                 </Form>
               )

@@ -19,21 +19,23 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
 import { useIsDark } from '../theme'
+import { useI18n, type TranslateFn } from '../i18n'
 
 const { Sider, Header, Content } = Layout
 
-const MENUS = [
-  { key: '/envs', icon: <AppstoreOutlined />, label: '环境管理' },
-  { key: '/templates', icon: <ChromeOutlined />, label: '窗口模板' },
-  { key: '/proxies', icon: <GlobalOutlined />, label: '代理 IP' },
-  { key: '/accounts', icon: <KeyOutlined />, label: '账号中心' },
-  { key: '/cookies', icon: <SnippetsOutlined />, label: 'Cookie 管理' },
-  { key: '/extensions', icon: <AppstoreAddOutlined />, label: '扩展管理' },
-  { key: '/rpa', icon: <VideoCameraOutlined />, label: 'RPA 脚本' },
-  { key: '/team', icon: <TeamOutlined />, label: '团队空间' },
-  { key: '/logs', icon: <FileTextOutlined />, label: '操作日志' },
-  { key: '/settings', icon: <SettingOutlined />, label: '设置' },
-  { key: '/api', icon: <ApiOutlined />, label: '自动化 API' }
+// 菜单项随语言动态生成，故做成函数而非常量（模块级常量拿不到 t）
+const buildMenus = (t: TranslateFn) => [
+  { key: '/envs', icon: <AppstoreOutlined />, label: t('nav.envs') },
+  { key: '/templates', icon: <ChromeOutlined />, label: t('nav.templates') },
+  { key: '/proxies', icon: <GlobalOutlined />, label: t('nav.proxies') },
+  { key: '/accounts', icon: <KeyOutlined />, label: t('nav.accounts') },
+  { key: '/cookies', icon: <SnippetsOutlined />, label: t('nav.cookies') },
+  { key: '/extensions', icon: <AppstoreAddOutlined />, label: t('nav.extensions') },
+  { key: '/rpa', icon: <VideoCameraOutlined />, label: t('nav.rpa') },
+  { key: '/team', icon: <TeamOutlined />, label: t('nav.team') },
+  { key: '/logs', icon: <FileTextOutlined />, label: t('nav.logs') },
+  { key: '/settings', icon: <SettingOutlined />, label: t('nav.settings') },
+  { key: '/api', icon: <ApiOutlined />, label: t('nav.api') }
 ]
 
 export default function AppLayout() {
@@ -42,6 +44,7 @@ export default function AppLayout() {
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)
   const { token } = theme.useToken()
   const isDark = useIsDark()
+  const { t } = useI18n()
 
   useEffect(() => {
     if (!getToken()) {
@@ -59,7 +62,7 @@ export default function AppLayout() {
 
   const logout = () => {
     clearToken()
-    message.success('已退出登录')
+    message.success(t('layout.logoutSuccess'))
     navigate('/login')
   }
 
@@ -69,15 +72,17 @@ export default function AppLayout() {
         <div style={{ padding: '20px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <GlobalOutlined style={{ fontSize: 26, color: '#5b8cff' }} />
           <div>
-            <div style={{ color: token.colorText, fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>RoxyBrowser</div>
-            <div style={{ color: token.colorTextSecondary, fontSize: 11 }}>指纹浏览器 Clone</div>
+            <div style={{ color: token.colorText, fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>
+              {t('app.brand')}
+            </div>
+            <div style={{ color: token.colorTextSecondary, fontSize: 11 }}>{t('app.subtitle')}</div>
           </div>
         </div>
         <Menu
           theme={isDark ? 'dark' : 'light'}
           mode="inline"
           selectedKeys={[location.pathname]}
-          items={MENUS}
+          items={buildMenus(t)}
           onClick={({ key }) => navigate(key)}
           style={{ background: 'transparent', border: 'none' }}
         />
@@ -100,7 +105,7 @@ export default function AppLayout() {
                 {
                   key: 'logout',
                   icon: <LogoutOutlined />,
-                  label: '退出登录',
+                  label: t('layout.logout'),
                   onClick: logout
                 }
               ]

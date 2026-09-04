@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ConfigProvider, theme } from 'antd'
 import { useIsDark } from './theme'
+import { I18nProvider, useI18n } from './i18n'
+import { antdLocaleFor } from './i18n/antdLocale'
 import Login from './pages/Login'
 import AppLayout from './pages/Layout'
 import Environments from './pages/Environments'
@@ -18,6 +20,17 @@ import Settings from './pages/Settings'
 import BrowserTab from './pages/BrowserTab'
 
 export default function App() {
+  // I18nProvider 必须包在外层，AppShell 才能通过 useI18n 拿到当前语言，
+  // 再把对应的 antd 语言包喂给 ConfigProvider
+  return (
+    <I18nProvider>
+      <AppShell />
+    </I18nProvider>
+  )
+}
+
+function AppShell() {
+  const { locale } = useI18n()
   const isDark = useIsDark()
   const algorithm = isDark ? theme.darkAlgorithm : undefined
   // 主色随明暗微调：浅色用标准蓝 #1677ff，暗色用更亮的 #4096ff 提升对比
@@ -30,6 +43,7 @@ export default function App() {
 
   return (
     <ConfigProvider
+      locale={antdLocaleFor(locale)}
       theme={{
         algorithm,
         token: { colorPrimary, borderRadius: 8 },
