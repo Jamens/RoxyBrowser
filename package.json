@@ -1,0 +1,53 @@
+{
+  "name": "roxy-browser-clone",
+  "version": "1.0.0",
+  "description": "RoxyBrowser 功能克隆 - 指纹浏览器桌面端（跨境电商多账号防关联）",
+  "main": "out/main/index.js",
+  "author": "roxy-clone",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "app": "electron-vite build && electron out/main/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dayjs": "^1.11.13",
+    "express": "^4.21.2",
+    "http-proxy-agent": "^7.0.2",
+    "https-proxy-agent": "^7.0.5",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.4",
+    "reflect-metadata": "^0.2.2",
+    "socks-proxy-agent": "^8.0.4",
+    "typeorm": "^0.3.20"
+  },
+  "devDependencies": {
+    "@ant-design/icons": "^5.5.1",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.20.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "antd": "^5.22.2",
+    "electron": "^33.2.1",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules
+out
+out-tsc
+dist
+release
+*.log
+.DS_Store
+list.json
+list2.json
+logs.json
+tk.json
+v1.json
+*.tsbuildinfo

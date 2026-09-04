@@ -1,0 +1,253 @@
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+  Unique
+} from 'typeorm'
+
+@Entity('users')
+@Unique(['username'])
+export class UserEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'varchar', length: 64 })
+  username: string
+
+  @Column({ type: 'varchar', length: 128 })
+  passwordHash: string
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  nickname: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('teams')
+export class TeamEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('team_members')
+@Unique(['teamId', 'userId'])
+export class TeamMemberEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int' })
+  userId: number
+
+  // owner | admin | member
+  @Column({ type: 'varchar', length: 16, default: 'member' })
+  role: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('groups')
+@Index(['teamId'])
+export class GroupEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'varchar', length: 64 })
+  name: string
+
+  @Column({ type: 'int', default: 0 })
+  sort: number
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('proxies')
+@Index(['teamId'])
+export class ProxyEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'varchar', length: 128, default: '' })
+  name: string
+
+  // http | https | socks5
+  @Column({ type: 'varchar', length: 16, default: 'http' })
+  type: string
+
+  @Column({ type: 'varchar', length: 128 })
+  host: string
+
+  @Column({ type: 'int' })
+  port: number
+
+  @Column({ type: 'varchar', length: 128, default: '' })
+  username: string
+
+  @Column({ type: 'varchar', length: 256, default: '' })
+  password: string
+
+  @Column({ type: 'varchar', length: 256, default: '' })
+  remark: string
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  country: string
+
+  // unknown | active | invalid
+  @Column({ type: 'varchar', length: 16, default: 'unknown' })
+  status: string
+
+  @Column({ type: 'int', nullable: true })
+  latency: number | null
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  exitIp: string
+
+  @Column({ type: 'datetime', nullable: true })
+  lastCheckAt: Date | null
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('profiles')
+@Index(['teamId'])
+export class ProfileEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int', nullable: true })
+  groupId: number | null
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  // 环境序号，如 1001
+  @Column({ type: 'int' })
+  seq: number
+
+  @Column({ type: 'varchar', length: 512, default: '' })
+  remark: string
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  platform: string
+
+  @Column({ type: 'varchar', length: 512, default: '' })
+  startUrl: string
+
+  @Column({ type: 'int', nullable: true })
+  proxyId: number | null
+
+  @Column({ type: 'json' })
+  fingerprint: Record<string, unknown>
+
+  @Column({ type: 'tinyint', default: 0 })
+  isTemplate: boolean
+
+  // idle | running
+  @Column({ type: 'varchar', length: 16, default: 'idle' })
+  status: string
+
+  @Column({ type: 'datetime', nullable: true })
+  lastOpenedAt: Date | null
+
+  @Column({ type: 'int' })
+  createdBy: number
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+
+  @UpdateDateColumn({ type: 'datetime' })
+  updatedAt: Date
+}
+
+@Entity('accounts')
+@Index(['profileId'])
+export class AccountEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  profileId: number
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  platform: string
+
+  @Column({ type: 'varchar', length: 128 })
+  username: string
+
+  @Column({ type: 'varchar', length: 256, default: '' })
+  password: string
+
+  @Column({ type: 'varchar', length: 256, default: '' })
+  remark: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('operation_logs')
+@Index(['teamId'])
+export class OperationLogEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int' })
+  userId: number
+
+  @Column({ type: 'varchar', length: 64 })
+  username: string
+
+  @Column({ type: 'varchar', length: 64 })
+  action: string
+
+  @Column({ type: 'text' })
+  detail: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('api_tokens')
+@Index(['teamId'])
+export class ApiTokenEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  @Column({ type: 'varchar', length: 128 })
+  token: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
