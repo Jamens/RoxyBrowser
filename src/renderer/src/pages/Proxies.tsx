@@ -182,21 +182,25 @@ export default function Proxies() {
   }
 
   const columns: ColumnsType<ProxyDTO> = [
-    { title: '名称', dataIndex: 'name' },
+    { title: '名称', dataIndex: 'name', width: 140, ellipsis: true },
     { title: '协议', dataIndex: 'type', width: 80, render: (v) => <Tag color="blue">{String(v).toUpperCase()}</Tag> },
     {
       title: '地址',
       dataIndex: 'host',
+      width: 160,
+      ellipsis: true,
       render: (_, r) => (
-        <Typography.Text copyable={{ text: `${r.host}:${r.port}` }}>
+        <Typography.Text copyable={{ text: `${r.host}:${r.port}` }} ellipsis>
           {r.host}:{r.port}
         </Typography.Text>
       )
     },
-    { title: '出口 IP', dataIndex: 'exitIp', width: 130, render: (v) => v || '-' },
+    { title: '出口 IP', dataIndex: 'exitIp', width: 130, ellipsis: true, render: (v) => v || '-' },
     {
       title: '地区',
       key: 'region',
+      width: 150,
+      ellipsis: true,
       render: (_, r) => (
         <Space direction="vertical" size={0}>
           <Space size={4}>
@@ -218,7 +222,7 @@ export default function Proxies() {
       width: 90,
       render: (v, r) => poolStatusTag(v, r.status)
     },
-    { title: '用量', dataIndex: 'usageCount', width: 80, render: (v) => (v ? `${v} 环境` : '-') },
+    { title: '用量', dataIndex: 'usageCount', width: 90, ellipsis: true, render: (v) => (v ? `${v} 环境` : '-') },
     {
       title: '延迟',
       dataIndex: 'latency',
@@ -335,7 +339,14 @@ export default function Proxies() {
         支持 HTTP / HTTPS / SOCKS5 协议，检测后会自动记录出口 IP、国家 / 地区 / 城市 / 运营商。绑定到环境后，环境窗口流量全部走此代理。「分配到环境」可从 IP 池一键挑选空闲代理并绑定，支持按地区筛选。
       </Typography.Paragraph>
 
-      <Table rowKey="id" size="middle" columns={columns} dataSource={list} pagination={{ pageSize: 10 }} />
+      <Table
+        rowKey="id"
+        size="middle"
+        columns={columns}
+        dataSource={list}
+        pagination={{ pageSize: 10 }}
+        scroll={{ x: 1350 }}
+      />
 
       <Modal title={editing ? '编辑代理' : '添加代理'} open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
         <Form form={form} layout="vertical" initialValues={emptyForm}>
