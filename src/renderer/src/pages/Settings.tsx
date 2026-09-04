@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Card, Form, Select, InputNumber, Button, Space, Typography, message, Divider } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
@@ -16,7 +16,8 @@ export default function Settings() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const load = async () => {
+  // useCallback 稳定 load，否则每次渲染都生成新引用，会导致 useEffect 无限重跑 + 重复请求
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const s = await api.get<AppSettings>('/api/settings')
@@ -29,7 +30,7 @@ export default function Settings() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [form])
 
   useEffect(() => {
     load()
