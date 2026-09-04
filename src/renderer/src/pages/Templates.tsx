@@ -105,6 +105,7 @@ export default function Templates() {
         isTemplate
         groups={groups}
         proxies={proxies}
+        extensions={[]}
       />
     </Card>
   )

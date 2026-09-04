@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS `profiles` (
   `isTemplate`    TINYINT(1)     NOT NULL DEFAULT 0,
   `status`        VARCHAR(16)    NOT NULL DEFAULT 'idle', -- idle | running
   `lastOpenedAt`  DATETIME       NULL,
+  `extensions`    JSON           NULL,        -- 启用的扩展 ID 列表（关联 extensions 表）
   `createdBy`     INT            NOT NULL,
   `createdAt`     DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updatedAt`     DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -187,6 +188,21 @@ CREATE TABLE IF NOT EXISTS `api_tokens` (
   `createdAt` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_api_tokens_team` (`teamId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 11.5) 扩展（浏览器插件）表
+CREATE TABLE IF NOT EXISTS `extensions` (
+  `id`          INT            NOT NULL AUTO_INCREMENT,
+  `teamId`      INT            NOT NULL,
+  `ownerId`     INT            NULL,     -- 创建者用户 ID，账户级隔离
+  `name`        VARCHAR(128)   NOT NULL,
+  `version`     VARCHAR(32)    NOT NULL DEFAULT '',
+  `description` TEXT           NULL,
+  `extPath`     VARCHAR(512)   NOT NULL DEFAULT '', -- 解压后扩展目录在 userData 下的相对路径
+  `iconPath`    VARCHAR(512)   NOT NULL DEFAULT '', -- 图标在 userData 下的相对路径，空表示无图标
+  `createdAt`   DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_extensions_team` (`teamId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- 12) 应用设置表（单例，key 固定为 'global'）

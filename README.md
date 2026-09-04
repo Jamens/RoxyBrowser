@@ -127,6 +127,20 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 后端接口：`GET/POST /api/cookies`、`PUT/DELETE /api/cookies/:id`、`DELETE /api/cookies`（清空）、`POST /api/cookies/import`、`GET /api/cookies/export`、`POST /api/cookies/apply`。
 
+### 7.2 扩展管理（浏览器插件）
+
+为每个浏览器环境安装并加载 Chrome 扩展（插件），用于广告拦截、翻译、爬虫脚本等场景：
+
+- **扩展库**：在「扩展管理」页添加扩展，支持两种方式——
+  - **本地路径**：直接填入本机已解压扩展目录的绝对路径（可指向 Chrome 用户数据目录下的 `Extensions/xxxx/版本` 文件夹）。
+  - **上传目录**：选择本地已解压的扩展文件夹，前端递归读取后由后端解析 `manifest.json` 并保存到应用数据目录。
+- **按环境启用**：在「环境管理 → 编辑环境」中勾选要启用的扩展；打开该环境窗口时自动用 Electron 的 `session.loadExtension` 加载。
+- **隔离与权限**：扩展数据按账户隔离（同其他业务数据一致）；加载失败（扩展损坏或使用了 Electron 不支持的 API）仅告警，不影响窗口打开。
+
+> ⚠️ Electron 只支持加载**解压后的扩展目录**，**不支持 `.crx` 打包格式**，且扩展必须在持久会话中加载（本工具每个环境使用 `persist:env-<id>` 持久会话，天然满足）。
+
+后端接口：`GET/POST /api/extensions`、`GET /api/extensions/:id/icon`、`DELETE /api/extensions/:id`；环境绑定通过 `PUT /api/profiles/:id` 的 `extensions` 字段（扩展 ID 数组）。
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。

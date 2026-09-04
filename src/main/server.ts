@@ -4,8 +4,8 @@ import cors from 'cors'
 import http from 'http'
 import crypto from 'crypto'
 import { homedir } from 'os'
-import { mkdirSync, writeFileSync } from 'fs'
-import { join } from 'path'
+import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, statSync } from 'fs'
+import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import mysql from 'mysql2/promise'
@@ -14,6 +14,7 @@ import { HttpProxyAgent } from 'http-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import type { AddressInfo } from 'net'
+import { app } from 'electron'
 
 import {
   UserEntity,
@@ -26,7 +27,8 @@ import {
   CookieEntity,
   OperationLogEntity,
   ApiTokenEntity,
-  AppSettingsEntity
+  AppSettingsEntity,
+  ExtensionEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint } from '../shared/fingerprint'
 import type { Fingerprint, AppSettings } from '../shared/types'
@@ -167,6 +169,7 @@ function mapProfile(p: ProfileEntity, groupName?: string | null, proxy?: ProxyEn
     isTemplate: p.isTemplate,
     status: p.status,
     lastOpenedAt: p.lastOpenedAt,
+    extensions: p.extensions,
     createdBy: p.createdBy,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt
@@ -430,6 +433,30 @@ function parseProxyLine(line: string): { type: string; host: string; port: numbe
   return null
 }
 
+// ---------- 扩展（浏览器插件）存储辅助 ----------
+// 扩展以「解压目录」形式存放在 userData/extensions/<id>/（Electron 仅支持解压目录，不支持 .crx）
+function extUserDir(): string {
+  return join(app.getPath('userData'), 'extensions')
+}
+function readExtensionManifest(dir: string): Record<string, unknown> | null {
+  const mPath = join(dir, 'manifest.json')
+  if (!existsSync(mPath)) return null
+  try {
+    return JSON.parse(readFileSync(mPath, 'utf8')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+function pickExtensionIcon(manifest: Record<string, unknown> | null): string {
+  const icons = (manifest?.icons ?? {}) as Record<string, string>
+  if (!icons || Object.keys(icons).length === 0) return ''
+  const key = ['128', '96', '64', '48', '32', '16'].find((k) => icons[k]) || Object.keys(icons)[0]
+  return icons[key] ? String(icons[key]).replace(/^\//, '') : ''
+}
+function normalizeRelPath(p: string): string {
+  return p.split('/').join(sep)
+}
+
 // ---------- API 路由 ----------
 function buildApiRouter(): express.Router {
   const router = express.Router()
@@ -672,7 +699,7 @@ function buildApiRouter(): express.Router {
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     const body = req.body || {}
-    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId'] as const
+    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId', 'extensions'] as const
     for (const f of fields) {
       if (f in body) (p as any)[f] = body[f] === '' && (f === 'groupId' || f === 'proxyId') ? null : body[f]
     }
@@ -1519,7 +1546,7 @@ function buildApiRouter(): express.Router {
     const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
     if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
     const b = req.body || {}
-    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId'] as const
+    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId', 'extensions'] as const
     for (const f of fields) {
       if (f in b) (p as any)[f] = b[f] === '' && (f === 'groupId' || f === 'proxyId') ? null : b[f]
     }
@@ -1914,6 +1941,92 @@ function buildApiRouter(): express.Router {
     res.json({ text, count: list.length })
   })
 
+  // ---------- 扩展管理（浏览器插件） ----------
+  router.get('/extensions', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ExtensionEntity)
+    const list = await repo.find({ where: ownerScope(req), order: { id: 'DESC' } })
+    res.json(
+      list.map((e) => ({
+        id: e.id,
+        name: e.name,
+        version: e.version,
+        description: e.description,
+        createdAt: e.createdAt
+      }))
+    )
+  })
+
+  router.post('/extensions', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const body = req.body || {}
+    const repo = AppDataSource.getRepository(ExtensionEntity)
+    const ext = repo.create({ teamId: req.tid!, ownerId: req.uid!, name: '', version: '', description: null, extPath: '', iconPath: '' })
+    const saved = await repo.save(ext)
+    const dest = join(extUserDir(), String(saved.id))
+    mkdirSync(dest, { recursive: true })
+    try {
+      if (body.localPath) {
+        const src = String(body.localPath)
+        if (!existsSync(src) || !statSync(src).isDirectory()) {
+          throw new Error('本地路径不存在或不是目录')
+        }
+        if (!existsSync(join(src, 'manifest.json'))) {
+          throw new Error('该目录不含 manifest.json，不是有效的扩展目录')
+        }
+        cpSync(src, dest, { recursive: true })
+      } else if (Array.isArray(body.files) && body.files.length) {
+        for (const f of body.files as Array<{ path: string; data: string }>) {
+          if (!f || !f.path) continue
+          const target = join(dest, normalizeRelPath(f.path))
+          mkdirSync(join(target, '..'), { recursive: true })
+          writeFileSync(target, Buffer.from(f.data || '', 'base64'))
+        }
+        if (!existsSync(join(dest, 'manifest.json'))) {
+          throw new Error('上传内容中未找到 manifest.json，不是有效的扩展目录')
+        }
+      } else {
+        throw new Error('请提供 localPath（本地已解压扩展目录）或 files（上传的目录文件列表）')
+      }
+      const manifest = readExtensionManifest(dest)
+      if (!manifest) {
+        throw new Error('目录中没有 manifest.json，无法识别为扩展')
+      }
+      saved.name = String(manifest.name || '未命名扩展').slice(0, 128)
+      saved.version = String(manifest.version || '').slice(0, 32)
+      saved.description = manifest.description ? String(manifest.description) : null
+      saved.extPath = `extensions/${saved.id}`
+      const iconRel = pickExtensionIcon(manifest)
+      saved.iconPath = iconRel ? `extensions/${saved.id}/${iconRel}` : ''
+      await repo.save(saved)
+      await writeLog(req, 'create_extension', `添加扩展「${saved.name}」(#${saved.id})`)
+      res.json({ id: saved.id, name: saved.name, version: saved.version, description: saved.description, createdAt: saved.createdAt })
+    } catch (e) {
+      await repo.remove(saved).catch(() => {})
+      rmSync(dest, { recursive: true, force: true })
+      res.status(400).json({ message: (e as Error).message })
+    }
+  })
+
+  router.get('/extensions/:id/icon', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ExtensionEntity)
+    const ext = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!ext || !ext.iconPath) return res.status(404).end()
+    const abs = join(app.getPath('userData'), ext.iconPath)
+    if (!existsSync(abs)) return res.status(404).end()
+    res.sendFile(abs)
+  })
+
+  router.delete('/extensions/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ExtensionEntity)
+    const ext = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!ext) return res.status(404).json({ message: '扩展不存在' })
+    const dest = join(extUserDir(), String(ext.id))
+    const name = ext.name
+    await repo.remove(ext)
+    rmSync(dest, { recursive: true, force: true })
+    await writeLog(req, 'delete_extension', `删除扩展「${name}」(#${ext.id})`)
+    res.json({ ok: true })
+  })
+
   router.use('/v1', wrapAsync(v1))
   return wrapAsync(router)
 }
@@ -1951,7 +2064,8 @@ export async function bootstrap(): Promise<string> {
       CookieEntity,
       OperationLogEntity,
       ApiTokenEntity,
-      AppSettingsEntity
+      AppSettingsEntity,
+      ExtensionEntity
     ]
   })
   await AppDataSource.initialize()

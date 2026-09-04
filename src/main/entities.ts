@@ -198,6 +198,10 @@ export class ProfileEntity {
   @Column({ type: 'datetime', nullable: true })
   lastOpenedAt: Date | null
 
+  // 启用的扩展 ID 列表（关联 extensions 表）；null/空数组 = 不加载任何扩展
+  @Column({ type: 'json', nullable: true })
+  extensions: number[] | null
+
   @Column({ type: 'int' })
   createdBy: number
 
@@ -333,6 +337,40 @@ export class ApiTokenEntity {
 
   @Column({ type: 'varchar', length: 128 })
   token: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
+@Entity('extensions')
+@Index(['teamId'])
+export class ExtensionEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  @Column({ type: 'varchar', length: 32, default: '' })
+  version: string
+
+  @Column({ type: 'text', nullable: true })
+  description: string | null
+
+  // 解压后扩展目录在 userData 下的相对路径，如 extensions/5
+  @Column({ type: 'varchar', length: 512, default: '' })
+  extPath: string
+
+  // 图标在 userData 下的相对路径（取自 manifest.json icons），空表示无图标
+  @Column({ type: 'varchar', length: 512, default: '' })
+  iconPath: string
 
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date

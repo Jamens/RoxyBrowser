@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO } from '@shared/types'
+import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
 import { getTimezoneOffsetMinutes } from '@shared/fingerprint'
 
 const PLATFORMS = [
@@ -25,9 +25,10 @@ interface Props {
   isTemplate?: boolean
   groups: GroupDTO[]
   proxies: ProxyDTO[]
+  extensions: ExtensionDTO[]
 }
 
-export default function ProfileForm({ open, onClose, onSaved, initial, isTemplate, groups, proxies }: Props) {
+export default function ProfileForm({ open, onClose, onSaved, initial, isTemplate, groups, proxies, extensions }: Props) {
   const [form] = Form.useForm()
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)
@@ -44,6 +45,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
           remark: initial.remark,
           proxyId: initial.proxyId ?? undefined
         })
+        form.setFieldValue('extensions', initial.extensions ?? [])
         setFp(initial.fingerprint)
       } else {
         setFp(null)
@@ -95,6 +97,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         startUrl: values.startUrl || '',
         remark: values.remark || '',
         proxyId: values.proxyId ?? null,
+        extensions: Array.isArray(values.extensions) ? values.extensions : [],
         isTemplate: !!isTemplate && !initial,
         fingerprint: { ...fp, tzOffset: getTimezoneOffsetMinutes(fp.timezone) }
       }
@@ -156,6 +159,14 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                 )}
                 <Form.Item name="remark" label="备注">
                   <Input.TextArea rows={2} placeholder="备注信息（如店铺名、运营人员）" />
+                </Form.Item>
+                <Form.Item name="extensions" label="启用扩展" extra="勾选的扩展会在打开此环境窗口时自动加载">
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    placeholder="不启用任何扩展"
+                    options={extensions.map((e) => ({ value: e.id, label: `${e.name}${e.version ? ' v' + e.version : ''}` }))}
+                  />
                 </Form.Item>
               </Form>
             )

@@ -9,6 +9,7 @@ import Templates from './pages/Templates'
 import Proxies from './pages/Proxies'
 import Accounts from './pages/Accounts'
 import Cookies from './pages/Cookies'
+import Extensions from './pages/Extensions'
 import Team from './pages/Team'
 import Logs from './pages/Logs'
 import ApiDocs from './pages/ApiDocs'
@@ -53,6 +54,7 @@ export default function App() {
             <Route path="/proxies" element={<Proxies />} />
             <Route path="/accounts" element={<Accounts />} />
             <Route path="/cookies" element={<Cookies />} />
+            <Route path="/extensions" element={<Extensions />} />
             <Route path="/team" element={<Team />} />
             <Route path="/logs" element={<Logs />} />
             <Route path="/settings" element={<Settings />} />

@@ -1,7 +1,8 @@
-import { BrowserWindow, ipcMain, session, shell, Menu } from 'electron'
+import { BrowserWindow, ipcMain, session, shell, Menu, app } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { AppDataSource } from './server'
-import { ProfileEntity, ProxyEntity, CookieEntity } from './entities'
+import { ProfileEntity, ProxyEntity, CookieEntity, ExtensionEntity } from './entities'
 import type { Fingerprint } from '../shared/types'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
@@ -31,6 +32,46 @@ export async function seedCookies(ses: Electron.Session, profileId: number): Pro
   const list = await repo.find({ where: { profileId } })
   for (const c of list) await setElectronCookie(ses, c)
   return list.length
+}
+
+/**
+ * 加载某环境启用的扩展。
+ * Electron 仅支持加载「解压目录」，且必须在持久 session 中加载（我们的 persist:env-<id> 正是）。
+ * 扩展加载失败（损坏/不支持的 API）仅告警，不阻断窗口打开。
+ */
+async function loadProfileExtensions(ses: Electron.Session, profileId: number): Promise<void> {
+  try {
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId } })
+    const ids: number[] = Array.isArray(profile?.extensions) ? (profile!.extensions as number[]) : []
+    if (!ids.length) return
+    const repo = AppDataSource.getRepository(ExtensionEntity)
+    // Electron 不同版本 loadExtension 挂载位置不同：
+    //   - 新版在 ses.extensions.loadExtension（this 必须是 extensions 实例，不能改绑）
+    //   - 旧版在 ses.loadExtension
+    const extApi = (ses as unknown as { extensions?: { loadExtension?: (p: string, o?: object) => Promise<unknown> } }).extensions
+    const legacyLoader = (ses as unknown as { loadExtension?: (p: string, o?: object) => Promise<unknown> }).loadExtension
+    if (typeof extApi?.loadExtension !== 'function' && typeof legacyLoader !== 'function') {
+      console.warn('[roxy] 当前 Electron 不支持 loadExtension，跳过扩展加载')
+      return
+    }
+    for (const id of ids) {
+      const ext = await repo.findOne({ where: { id } })
+      if (!ext || !ext.extPath) continue
+      const abs = join(app.getPath('userData'), ext.extPath)
+      if (!existsSync(abs)) continue
+      try {
+        if (typeof extApi?.loadExtension === 'function') {
+          await extApi.loadExtension(abs, { allowFileAccess: true })
+        } else {
+          await legacyLoader!(abs, { allowFileAccess: true })
+        }
+      } catch (e) {
+        console.warn(`[roxy] 加载扩展「${ext.name}」(#${id}) 失败:`, (e as Error).message)
+      }
+    }
+  } catch (e) {
+    console.warn('[roxy] 加载扩展出错:', (e as Error).message)
+  }
 }
 
 /** 立即把 Cookie 应用到已打开的环境窗口；环境未运行则抛错（提示下次打开自动注入） */
@@ -148,6 +189,13 @@ export async function openWindow(profileId: number): Promise<void> {
     await seedCookies(ses, profileId)
   } catch {
     /* Cookie 注入失败不阻断环境打开 */
+  }
+
+  // 加载该环境启用的扩展（在导航前，确保扩展随页面生效）
+  try {
+    await loadProfileExtensions(ses, profileId)
+  } catch {
+    /* 扩展加载失败不阻断环境打开 */
   }
 
   // 环境内新窗口也在同一 BrowserWindow 打开

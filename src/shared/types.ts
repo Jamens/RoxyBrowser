@@ -46,6 +46,8 @@ export interface ProfileDTO {
   isTemplate: boolean
   status: 'idle' | 'running'
   lastOpenedAt: string | null
+  // 启用的扩展 ID 列表（关联 extensions 表）
+  extensions?: number[] | null
   createdBy: string
   createdAt: string
   updatedAt: string
@@ -134,6 +136,15 @@ export interface TokenDTO {
   id: number
   name: string
   token: string
+  createdAt: string
+}
+
+// 浏览器扩展（插件）元数据。扩展以「解压目录」形式存储在 userData/extensions/<id>/
+export interface ExtensionDTO {
+  id: number
+  name: string
+  version: string
+  description: string | null
   createdAt: string
 }
 

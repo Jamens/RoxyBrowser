@@ -12,12 +12,13 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
-import type { ProfileDTO, GroupDTO, ProxyDTO } from '@shared/types'
+import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
 
 export default function Environments() {
   const [list, setList] = useState<ProfileDTO[]>([])
   const [groups, setGroups] = useState<GroupDTO[]>([])
   const [proxies, setProxies] = useState<ProxyDTO[]>([])
+  const [extensions, setExtensions] = useState<ExtensionDTO[]>([])
   const [keyword, setKeyword] = useState('')
   const [groupId, setGroupId] = useState<number | undefined>()
   const [loading, setLoading] = useState(false)
@@ -38,14 +39,16 @@ export default function Environments() {
       const params = new URLSearchParams()
       if (keyword) params.set('keyword', keyword)
       if (groupId) params.set('groupId', String(groupId))
-      const [p, g, x] = await Promise.all([
+      const [p, g, x, e] = await Promise.all([
         api.get<ProfileDTO[]>(`/api/profiles?${params.toString()}`),
         api.get<GroupDTO[]>('/api/groups'),
-        api.get<ProxyDTO[]>('/api/proxies')
+        api.get<ProxyDTO[]>('/api/proxies'),
+        api.get<ExtensionDTO[]>('/api/extensions')
       ])
       setList(p)
       setGroups(g)
       setProxies(x)
+      setExtensions(e)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -409,6 +412,7 @@ export default function Environments() {
         initial={editing}
         groups={groups}
         proxies={proxies}
+        extensions={extensions}
       />
 
       <Modal title="新建分组" open={groupModalOpen} onOk={addGroup} onCancel={() => setGroupModalOpen(false)}>
