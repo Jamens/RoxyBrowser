@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag, Spin } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
@@ -34,6 +34,13 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)
   const [presets, setPresets] = useState<FingerprintPresetDTO[]>([])
+  // 当前选中的预设 id。之前这里写死 value={null}，等于把 Select 钉成空值——
+  // onChange 照样触发（指纹会写到下面各字段），但框自己永远显示 placeholder，
+  // 用户看到的就是「选了没填进去」。
+  const [presetId, setPresetId] = useState<string | undefined>(undefined)
+  // 用户是否已经手动指定过指纹（选预设 / 随机 / 改字段）。新建环境会异步拉一套
+  // 随机指纹，这个标记用来防止那次异步结果把用户先选好的指纹覆盖掉。
+  const userPickedRef = useRef(false)
 
   useEffect(() => {
     if (open && !presets.length) {
@@ -46,6 +53,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   useEffect(() => {
     if (open) {
       form.resetFields()
+      setPresetId(undefined)
+      userPickedRef.current = false
       if (initial) {
         form.setFieldsValue({
           name: initial.name,
@@ -65,11 +74,12 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         api
           .post<Fingerprint>('/api/fingerprint/random', {})
           .then((f) => {
-            if (!cancelled) setFp(f)
+            // 用户在结果返回前先选了预设 / 点了随机，就不要再覆盖
+            if (!cancelled && !userPickedRef.current) setFp(f)
           })
           .catch(() => {
             // 接口异常时退回本地生成，保证表单仍能打开
-            if (!cancelled) setFp(defaultFingerprint())
+            if (!cancelled && !userPickedRef.current) setFp(defaultFingerprint())
           })
         return () => {
           cancelled = true
@@ -79,12 +89,28 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
     return undefined
   }, [open, initial, form])
 
+  // 套用预设：写入指纹 + 记住选中的是哪一套，让下拉框把名字显示出来
+  const applyPreset = (id: string) => {
+    const p = presets.find((x) => x.id === id)
+    if (!p) return
+    userPickedRef.current = true
+    setPresetId(id)
+    setFp(p.fingerprint)
+    message.success(`已套用预设「${p.name}」`)
+  }
+
   const randomize = async () => {
     const f = await api.post<Fingerprint>('/api/fingerprint/random', { os: fp?.os })
+    userPickedRef.current = true
+    // 随机出来的不再是任何一套预设，清掉选中态，避免下拉框显示的名字名不副实
+    setPresetId(undefined)
     setFp(f)
   }
 
   const setFpField = (key: keyof Fingerprint, value: unknown) => {
+    // 手工改动任一字段后，指纹就不再等于那套预设了，同步清掉选中态
+    setPresetId(undefined)
+    userPickedRef.current = true
     setFp((prev) => {
       if (!prev) return prev
       const next = { ...prev, [key]: value } as Fingerprint
@@ -221,21 +247,30 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                 <Space style={{ marginBottom: 16 }} wrap>
                   <Select
                     showSearch
+                    allowClear
                     optionFilterProp="label"
                     placeholder="选择指纹预设"
                     style={{ minWidth: 260 }}
-                    value={null}
-                    onChange={(id: string) => {
-                      const p = presets.find((x) => x.id === id)
-                      if (p) {
-                        setFp(p.fingerprint)
-                        message.success(`已套用预设「${p.name}」`)
-                      }
+                    value={presetId}
+                    onChange={(id?: string) => {
+                      if (id) return applyPreset(id)
+                      // allowClear 清空：只是不再标记为这套预设，指纹本身保留
+                      setPresetId(undefined)
+                      userPickedRef.current = true
                     }}
+                    // 下拉里带出规格说明（options 上的 description 字段 antd 不会渲染，
+                    // 必须自己画）。label 保持纯文本，否则 optionFilterProp="label" 搜索会失效。
+                    optionRender={(opt) => (
+                      <div>
+                        <div>{opt.label}</div>
+                        <div style={{ fontSize: 11, opacity: 0.55 }}>
+                          {presets.find((p) => p.id === opt.value)?.description}
+                        </div>
+                      </div>
+                    )}
                     options={presets.map((p) => ({
                       value: p.id,
-                      label: p.name,
-                      description: p.description
+                      label: p.name
                     }))}
                   />
                   <Button type="primary" icon={<ThunderboltOutlined />} onClick={randomize}>
@@ -252,7 +287,14 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                         // 移动端设备池与桌面差异大（UA/平台/GPU/触摸/像素比联动），
                         // 切到 Android/iOS 时整套重新生成，避免手工拼出不一致的指纹
                         if (v === 'android' || v === 'ios') {
-                          api.post<Fingerprint>('/api/fingerprint/random', { os: v }).then(setFp).catch(() => message.error('生成失败'))
+                          api
+                            .post<Fingerprint>('/api/fingerprint/random', { os: v })
+                            .then((f) => {
+                              userPickedRef.current = true
+                              setPresetId(undefined)
+                              setFp(f)
+                            })
+                            .catch(() => message.error('生成失败'))
                         } else {
                           setFpField('os', v)
                         }
