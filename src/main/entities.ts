@@ -112,7 +112,16 @@ export class ProxyEntity {
   @Column({ type: 'varchar', length: 64, default: '' })
   country: string
 
-  // unknown | active | invalid
+  // 州/省（ip-api regionName）
+  @Column({ type: 'varchar', length: 64, default: '' })
+  region: string
+
+  @Column({ type: 'varchar', length: 64, default: '' })
+  city: string
+
+  @Column({ type: 'varchar', length: 128, default: '' })
+  isp: string
+
   @Column({ type: 'varchar', length: 16, default: 'unknown' })
   status: string
 
@@ -121,6 +130,10 @@ export class ProxyEntity {
 
   @Column({ type: 'varchar', length: 64, default: '' })
   exitIp: string
+
+  // 代理到期时间（购买的住宅/数据中心代理常有有效期），为空表示长期有效
+  @Column({ type: 'datetime', nullable: true })
+  expiresAt: Date | null
 
   @Column({ type: 'datetime', nullable: true })
   lastCheckAt: Date | null

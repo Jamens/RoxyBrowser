@@ -62,9 +62,16 @@ export interface ProxyDTO {
   password: string
   remark: string
   country: string
+  region: string
+  city: string
+  isp: string
   status: 'unknown' | 'active' | 'invalid'
   latency: number | null
   exitIp: string
+  expiresAt: string | null
+  // IP 池衍生字段（列表接口附带，非持久列）
+  usageCount?: number
+  poolStatus?: 'available' | 'in-use' | 'expired' | 'invalid' | 'unknown'
   lastCheckAt: string | null
   createdAt: string
 }

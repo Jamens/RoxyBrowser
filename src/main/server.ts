@@ -188,21 +188,63 @@ function httpGetViaProxy(
   })
 }
 
-async function checkProxy(proxy: ProxyEntity): Promise<{ ok: boolean; country: string; exitIp: string; latency: number }> {
+async function checkProxy(
+  proxy: ProxyEntity
+): Promise<{ ok: boolean; country: string; region: string; city: string; isp: string; exitIp: string; latency: number }> {
   try {
-    const { body, ms } = await httpGetViaProxy('http://ip-api.com/json/?fields=status,country,query', {
-      type: proxy.type,
-      host: proxy.host,
-      port: proxy.port,
-      username: proxy.username,
-      password: proxy.password
-    })
+    const { body, ms } = await httpGetViaProxy(
+      'http://ip-api.com/json/?fields=status,country,regionName,city,isp,query',
+      {
+        type: proxy.type,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username,
+        password: proxy.password
+      }
+    )
     const data = JSON.parse(body)
-    if (data.status !== 'success') return { ok: false, country: '', exitIp: '', latency: ms }
-    return { ok: true, country: data.country || '', exitIp: data.query || '', latency: ms }
+    if (data.status !== 'success')
+      return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: ms }
+    return {
+      ok: true,
+      country: data.country || '',
+      region: data.regionName || '',
+      city: data.city || '',
+      isp: data.isp || '',
+      exitIp: data.query || '',
+      latency: ms
+    }
   } catch {
-    return { ok: false, country: '', exitIp: '', latency: 0 }
+    return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: 0 }
   }
+}
+
+// 统计每个代理被多少个环境绑定（proxyId 计数）
+async function computeProxyUsage(teamId: number): Promise<Map<number, number>> {
+  const profileRepo = AppDataSource.getRepository(ProfileEntity)
+  const rows = await profileRepo
+    .createQueryBuilder('p')
+    .select('p.proxyId', 'proxyId')
+    .addSelect('COUNT(p.id)', 'cnt')
+    .where('p.teamId = :tid', { tid: teamId })
+    .andWhere('p.proxyId IS NOT NULL')
+    .groupBy('p.proxyId')
+    .getRawMany()
+  const map = new Map<number, number>()
+  for (const r of rows) map.set(Number(r.proxyId), Number(r.cnt))
+  return map
+}
+
+// 根据检测状态 / 到期时间 / 被占用情况计算 IP 池视角下的状态
+function proxyPoolStatus(
+  p: ProxyEntity,
+  usageCount: number,
+  now: number
+): 'available' | 'in-use' | 'expired' | 'invalid' | 'unknown' {
+  if (p.status === 'invalid') return 'invalid'
+  if (p.expiresAt && new Date(p.expiresAt).getTime() < now) return 'expired'
+  if (usageCount > 0) return 'in-use'
+  return 'available'
 }
 
 /**
@@ -600,7 +642,14 @@ function buildApiRouter(): express.Router {
   router.get('/proxies', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
     const list = await repo.find({ where: { teamId: req.tid }, order: { id: 'DESC' } })
-    res.json(list)
+    const usage = await computeProxyUsage(req.tid!)
+    const now = Date.now()
+    res.json(
+      list.map((p) => {
+        const cnt = usage.get(p.id) || 0
+        return { ...p, usageCount: cnt, poolStatus: proxyPoolStatus(p, cnt, now) }
+      })
+    )
   })
 
   router.post('/proxies', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -628,7 +677,7 @@ function buildApiRouter(): express.Router {
     const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
     if (!p) return res.status(404).json({ message: '代理不存在' })
     const b = req.body || {}
-    for (const f of ['name', 'type', 'host', 'username', 'password', 'remark'] as const) {
+    for (const f of ['name', 'type', 'host', 'username', 'password', 'remark', 'expiresAt'] as const) {
       if (f in b) (p as any)[f] = b[f]
     }
     if (b.port) p.port = Number(b.port)
@@ -656,10 +705,103 @@ function buildApiRouter(): express.Router {
     p.status = result.ok ? 'active' : 'invalid'
     p.latency = result.ok ? result.latency : null
     p.country = result.country
+    p.region = result.region
+    p.city = result.city
+    p.isp = result.isp
     p.exitIp = result.exitIp
     p.lastCheckAt = new Date()
     await repo.save(p)
     res.json(p)
+  })
+
+  // 从 IP 池一键分配：优先空闲代理，可按地区筛选，可选绑定到指定环境
+  router.post('/proxies/allocate', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const b = req.body || {}
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const now = Date.now()
+    const usage = await computeProxyUsage(req.tid!)
+    const all = await repo.find({ where: { teamId: req.tid } })
+    // 候选 = 未失效且未过期的代理（active 或 unknown 均可分配，与 proxyPoolStatus 的「available」定义一致）
+    let candidates = all.filter(
+      (p) => p.status !== 'invalid' && (!p.expiresAt || new Date(p.expiresAt).getTime() > now)
+    )
+    if (b.country) {
+      const c = String(b.country).toLowerCase()
+      candidates = candidates.filter((p) => p.country && p.country.toLowerCase().includes(c))
+    }
+    if (b.region) {
+      const r = String(b.region).toLowerCase()
+      candidates = candidates.filter((p) => p.region && p.region.toLowerCase().includes(r))
+    }
+    if (!candidates.length)
+      return res.status(409).json({ message: 'IP 池中无可用代理' + (b.country ? `（地区：${b.country}）` : '') })
+    // 优先分配未被任何环境占用的代理
+    const free = candidates.filter((p) => (usage.get(p.id) || 0) === 0)
+    const reused = free.length === 0
+    const chosen = (free.length ? free : candidates)[0]
+    let profileId: number | null = null
+    let poolStatus: 'available' | 'in-use' = 'available'
+    if (b.profileId) {
+      const profileRepo = AppDataSource.getRepository(ProfileEntity)
+      const profile = await profileRepo.findOne({ where: { id: Number(b.profileId), teamId: req.tid } })
+      if (!profile) return res.status(404).json({ message: '环境不存在' })
+      profile.proxyId = chosen.id
+      await profileRepo.save(profile)
+      profileId = profile.id
+      poolStatus = 'in-use'
+      await writeLog(req, 'allocate_proxy', `为环境「${profile.name}」从 IP 池分配代理「${chosen.name}」(#${chosen.id})`)
+    } else {
+      await writeLog(
+        req,
+        'allocate_proxy',
+        `从 IP 池分配代理「${chosen.name}」(#${chosen.id})` + (reused ? '（池中无空闲代理，复用已占用代理）' : '')
+      )
+    }
+    res.json({
+      proxy: { ...chosen, usageCount: (usage.get(chosen.id) || 0) + (profileId ? 1 : 0), poolStatus },
+      profileId,
+      reused
+    })
+  })
+
+  // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布
+  router.get('/proxies/pool-stats', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const list = await repo.find({ where: { teamId: req.tid } })
+    const usage = await computeProxyUsage(req.tid!)
+    const now = Date.now()
+    let available = 0
+    let inUse = 0
+    let expired = 0
+    let invalid = 0
+    let unknown = 0
+    let active = 0
+    const byCountry = new Map<string, { country: string; total: number; available: number }>()
+    for (const p of list) {
+      const ps = proxyPoolStatus(p, usage.get(p.id) || 0, now)
+      if (ps === 'available') available++
+      else if (ps === 'in-use') inUse++
+      else if (ps === 'expired') expired++
+      else if (ps === 'invalid') invalid++
+      else unknown++
+      if (p.status === 'active') active++
+      if (p.country) {
+        const c = byCountry.get(p.country) || { country: p.country, total: 0, available: 0 }
+        c.total++
+        if (ps === 'available') c.available++
+        byCountry.set(p.country, c)
+      }
+    }
+    res.json({
+      total: list.length,
+      active,
+      available,
+      inUse,
+      expired,
+      invalid,
+      unknown,
+      byCountry: [...byCountry.values()].sort((a, b) => b.total - a.total)
+    })
   })
 
   // ===== 账号中心 =====
