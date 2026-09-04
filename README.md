@@ -45,6 +45,7 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 - 环境列表：序号、名称、分组、平台标签、指纹摘要、绑定代理、运行状态、最后打开时间
 - 批量打开 / 批量关闭、搜索、按分组筛选、5 秒轮询刷新运行状态
 - 每个环境可设置起始页 URL，打开后进入内置新标签页（地址栏 + 快捷入口 + 当前指纹摘要）
+- **状态自愈**：Electron 进程退出时所有窗口都会销毁，启动时自动把 DB 中残留的 `running` 状态重置为 `idle`，避免「界面显示运行中、实际无窗口」导致打开 / 关闭 / RPA 回放全部失灵（重启不会自动重开之前运行的环境，需手动重新打开）
 
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
@@ -236,7 +237,7 @@ curl -X POST http://127.0.0.1:39100/api/v1/proxies/check \
 **指纹（Fingerprint）**
 
 ```bash
-# 随机生成指纹（os 可选：mac / windows，缺省按默认 OS 池）
+# 随机生成指纹（os 可选：windows / mac / android / ios，缺省按默认 OS 池）
 curl -X POST http://127.0.0.1:39100/api/v1/fingerprint/random \
   -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
   -d '{"os":"windows"}'

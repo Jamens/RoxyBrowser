@@ -2208,6 +2208,13 @@ export async function bootstrap(): Promise<string> {
   })
   await AppDataSource.initialize()
 
+  // 重启自愈：进程退出时所有 BrowserWindow 都会被销毁，但 DB 里可能残留
+  // status='running'。若不清理，UI 会显示「运行中」却无真实窗口，导致打开/
+  // 关闭/RPA 回放全部失灵。启动时把残留 running 重置为 idle。
+  await AppDataSource.getRepository(ProfileEntity)
+    .update({ status: 'running' }, { status: 'idle' })
+    .catch(() => undefined)
+
   // 3. 种子数据：默认管理员
   const userRepo = AppDataSource.getRepository(UserEntity)
   const adminCount = await userRepo.count()
