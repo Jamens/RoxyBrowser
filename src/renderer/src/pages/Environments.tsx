@@ -31,7 +31,7 @@ export default function Environments() {
   const [editing, setEditing] = useState<ProfileDTO | null>(null)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [groupForm] = Form.useForm()
-  const pollRef = useRef<ReturnType<typeof setInterval>>()
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +57,9 @@ export default function Environments() {
 
   useEffect(() => {
     pollRef.current = setInterval(load, 5000)
-    return () => clearInterval(pollRef.current)
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
   }, [load])
 
   const openProfile = async (id: number) => {
