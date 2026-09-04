@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, InputNumber, Typography
+  Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, InputNumber, Typography, Upload
 } from 'antd'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import {
+  PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined,
+  ImportOutlined, ExportOutlined
+} from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
+import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ProxyDTO } from '@shared/types'
 
 const emptyForm = { name: '', type: 'http', host: '', port: 1080, username: '', password: '', remark: '' }
@@ -16,6 +20,8 @@ export default function Proxies() {
   const [editing, setEditing] = useState<ProxyDTO | null>(null)
   const [form] = Form.useForm()
   const [checking, setChecking] = useState<number | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +43,43 @@ export default function Proxies() {
       message.success('已保存')
       setOpen(false)
       load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const doImport = async () => {
+    if (!importText.trim()) {
+      message.warning('请粘贴代理列表')
+      return
+    }
+    try {
+      const res = await api.post<{ imported: number; failed: string[] }>('/api/proxies/import', { text: importText })
+      if (res.imported) message.success(`成功导入 ${res.imported} 条代理`)
+      if (res.failed.length) message.warning(`${res.failed.length} 行格式无法识别：${res.failed.slice(0, 3).join(' / ')}`)
+      setImportOpen(false)
+      setImportText('')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const pickFile = async (file: File) => {
+    try {
+      setImportText(await readTextFile(file))
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+    return false
+  }
+
+  const exportProxies = async () => {
+    try {
+      const res = await api.get<{ text: string; count: number }>('/api/proxies/export')
+      if (!res.count) return message.warning('暂无代理可导出')
+      downloadText(res.text, `roxy-proxies-${nowStamp()}.txt`, 'text/plain;charset=utf-8')
+      message.success(`已导出 ${res.count} 条代理`)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -134,6 +177,12 @@ export default function Proxies() {
             }}
           >
             添加代理
+          </Button>
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
+            批量导入
+          </Button>
+          <Button icon={<ExportOutlined />} onClick={exportProxies}>
+            导出
           </Button>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
         </Space>

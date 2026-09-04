@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, message, Dropdown
+  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, message, Upload
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined
 } from '@ant-design/icons'
-import { downloadText } from '../utils/download'
+import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
@@ -360,6 +360,30 @@ export default function Environments() {
             <Input placeholder="例如：Amazon 店铺组" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="导入环境"
+        open={importOpen}
+        onOk={doImport}
+        onCancel={() => setImportOpen(false)}
+        okText="开始导入"
+        width={640}
+      >
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          支持从本工具导出的 JSON 导入（含完整指纹配置）；也可只给 name / platform，系统会自动生成随机指纹。
+        </Typography.Paragraph>
+        <Upload accept=".json" beforeUpload={pickImportFile} showUploadList={false}>
+          <Button icon={<ImportOutlined />} style={{ marginBottom: 12 }}>
+            选择 JSON 文件
+          </Button>
+        </Upload>
+        <Input.TextArea
+          rows={10}
+          placeholder='例如：[{"name":"Amazon 店 01","platform":"Amazon"}]'
+          value={importText}
+          onChange={(e) => setImportText(e.target.value)}
+        />
       </Modal>
     </div>
   )
