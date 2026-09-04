@@ -59,8 +59,10 @@
   def(navigator, 'doNotTrack', fp.doNotTrack)
 
   // ===== 移动端：触摸能力 + 像素比 =====
+  // 桌面（非触摸）统一归 0，避免真实宿主机是触摸屏时把 maxTouchPoints 漏成 10 等；
+  // 移动端固定 5。这是反检测最稳妥的默认值。
+  def(navigator, 'maxTouchPoints', fp.touch ? 5 : 0)
   if (fp.touch) {
-    def(navigator, 'maxTouchPoints', 5)
     // 'ontouchstart' in window 是常见触摸检测手段
     def(window, 'ontouchstart', null)
   }
@@ -69,15 +71,18 @@
   }
 
   // ===== userAgentData（UA-CH）=====
-  // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮
+  // 关键：不能只在原生 userAgentData 实例上 redefine 子字段——Chromium 每次访问
+  // navigator.userAgentData 都返回一个新对象（或只读原型属性），子字段改写不会落到
+  // 真正被读取的实例上，导致宿主 platform（如 Windows）原样泄漏。必须整体替换 getter。
   const isMobile = fp.os === 'android' || fp.os === 'ios'
   if (fp.os === 'ios') {
+    // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮
     try {
       delete (navigator as any).userAgentData
     } catch {
       /* ignore */
     }
-  } else if ((navigator as any).userAgentData) {
+  } else {
     const uadPlatform = fp.os === 'mac' ? 'macOS' : fp.os === 'android' ? 'Android' : 'Windows'
     const major = fp.uaFullVersion.split('.')[0]
     const brands = [
@@ -85,27 +90,29 @@
       { brand: 'Google Chrome', version: major },
       { brand: 'Not A;Brand', version: '99' }
     ]
-    const uad = (navigator as any).userAgentData
+    const uad: any = {
+      brands,
+      mobile: isMobile,
+      platform: uadPlatform,
+      getHighEntropyValues: (_hints: string[]) =>
+        Promise.resolve({
+          brands,
+          mobile: isMobile,
+          platform: uadPlatform,
+          platformVersion: fp.os === 'mac' ? '14.6.1' : fp.os === 'android' ? '14.0.0' : '15.0.0',
+          uaFullVersion: fp.uaFullVersion,
+          architecture: fp.os === 'mac' ? 'arm' : fp.os === 'android' ? 'arm' : 'x86',
+          bitness: '64',
+          model: '',
+          wow64: false
+        })
+    }
     try {
-      Object.defineProperty(uad, 'brands', { get: () => brands, configurable: true })
-      Object.defineProperty(uad, 'platform', { get: () => uadPlatform, configurable: true })
-      Object.defineProperty(uad, 'mobile', { get: () => isMobile, configurable: true })
-      if (uad.getHighEntropyValues) {
-        const origGet = uad.getHighEntropyValues.bind(uad)
-        uad.getHighEntropyValues = (hints: string[]) =>
-          origGet(hints).then((r: any) => {
-            r.platform = uadPlatform
-            r.platformVersion = fp.os === 'mac' ? '14.6.1' : fp.os === 'android' ? '14.0.0' : '15.0.0'
-            r.uaFullVersion = fp.uaFullVersion
-            r.architecture = fp.os === 'mac' ? 'arm' : fp.os === 'android' ? 'arm' : 'x86'
-            r.model = ''
-            r.mobile = isMobile
-            return r
-          })
-      }
+      delete (navigator as any).userAgentData
     } catch {
       /* ignore */
     }
+    def(navigator, 'userAgentData', uad)
   }
 
   // ===== screen =====

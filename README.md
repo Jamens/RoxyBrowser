@@ -51,7 +51,7 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：
 
-- **桌面 + 移动端**：支持 Windows / macOS / Android / iOS 四种形态。移动端注入触摸能力（`maxTouchPoints`、`ontouchstart`）、`devicePixelRatio`；Android 的 UA-CH 带 `mobile=true` 与 `platform="Android"`；iOS 按 Safari 形态（移除 `userAgentData`），环境窗口按手机尺寸打开。
+- **桌面 + 移动端**：支持 Windows / macOS / Android / iOS 四种形态。UA-CH（`navigator.userAgentData`）全平台接管——`brands` / `platform`（Windows / macOS / Android）/ `mobile` 与 `getHighEntropyValues` 高熵字段均与 UA 严格一致；移动端额外注入触摸能力（`maxTouchPoints`、`ontouchstart`）、`devicePixelRatio`；iOS 按 Safari 形态（移除 `userAgentData`），环境窗口按手机尺寸打开。
 - **指纹预设库**：内置十余套「验证过的指纹组合」（如 `Windows 11 · Chrome 129 · 德国`、`Pixel 8 · Android 14 · 美东`、`iPhone 15 Pro · iOS 17.5 · 美西`），各字段之间保证一致（UA ↔ 平台 ↔ GPU ↔ 屏幕 ↔ 时区语言），一键套用，避免手工拼出互相矛盾的指纹。
 
 | 维度       | 实现方式                                                                                |
@@ -301,6 +301,16 @@ src/
 4. **`ELECTRON_RUN_AS_NODE`**：若当前终端设置了该环境变量，Electron 会以纯 Node 模式启动导致 `ipcMain` 等 API 不可用，启动前请 `unset ELECTRON_RUN_AS_NODE`（Windows PowerShell：`$env:ELECTRON_RUN_AS_NODE=$null`）。
 5. **`pnpm add` 中断会弄脏 node_modules**：pnpm 依赖安装被中断（如 electron postinstall 失败）后，可能留下断裂的 symlink，表现为 `Cannot find package 'electron-vite'`。此时执行 `node scripts/fix-pnpm-links.mjs` 可就地重建链接（junction 方式，不删除任何文件）；彻底解决请删掉 `node_modules` 后重装。
 6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可。
+
+## 运行时验证（真实窗口 E2E）
+
+指纹注入、RPA 回放、多窗口同步回声抑制均已通过**真实 Electron 窗口**端到端验证（非仅接口 / 路由层探活）：
+
+- **指纹注入真值回读**：桌面 / 移动两套环境分别校验 UA、`platform`、`languages`、`hardwareConcurrency`、`deviceMemory`、`screen`、`timezone` / `tzOffset`、`userAgentData`（UA-CH 的 `platform` 与 `mobile`）、WebGL Vendor / Renderer、Canvas 噪声、触摸与 `devicePixelRatio`，全部与设定一致。
+- **RPA 回放真实驱动页面**：`sync-apply` 下发的 `click` / `input` 能真实命中按钮、写入输入框。
+- **回声抑制**：回放期间不会把自身合成事件回发为 `sync-event`。
+
+> 测试中发现并修复的运行时问题：`navigator.userAgentData` 曾被宿主平台值「穿透」（桌面 / 移动都漏成宿主 Windows），以及桌面 `maxTouchPoints` 漏成宿主真实值；均已修正为桌面 `0`、移动 `5`、UA-CH 与 UA 严格一致。
 
 ## 打包分发
 
