@@ -23,6 +23,8 @@ export default function Environments() {
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<React.Key[]>([])
   const [syncMode, setSyncMode] = useState(false)
+  const [windows, setWindows] = useState<{ id: number; title: string }[]>([])
+  const [syncIds, setSyncIds] = useState<number[]>([])
   const [formOpen, setFormOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
@@ -88,20 +90,59 @@ export default function Environments() {
     }
   }
 
+  /** 下发同步配置；ids 为空数组 = 同步到全部已打开窗口 */
+  const pushSync = async (enabled: boolean, ids: number[]) => {
+    await api.post('/api/sync', { enabled, ids })
+  }
+
   const toggleSync = async (checked: boolean) => {
     setSyncMode(checked)
     localStorage.setItem('roxy_sync', checked ? '1' : '0')
     try {
-      await api.post('/api/sync', { enabled: checked })
-      message.info(checked ? '窗口同步已开启：滚动 / 点击 / 输入将同步到所有已打开的环境窗口' : '窗口同步已关闭')
+      await pushSync(checked, syncIds)
+      message.info(
+        checked
+          ? syncIds.length
+            ? `轨迹级同步已开启：将同步到 ${syncIds.length} 个指定窗口`
+            : '轨迹级同步已开启：键鼠轨迹 / 滚动 / 输入将同步到全部已打开窗口'
+          : '窗口同步已关闭'
+      )
     } catch {
       message.error('设置失败')
+    }
+  }
+
+  const changeSyncIds = async (ids: number[]) => {
+    setSyncIds(ids)
+    if (!syncMode) return
+    try {
+      await pushSync(true, ids)
+    } catch {
+      message.error('同步范围设置失败')
     }
   }
 
   useEffect(() => {
     setSyncMode(localStorage.getItem('roxy_sync') === '1')
   }, [])
+
+  // 打开中的窗口列表（用于选择同步对象），同步开启时才轮询
+  useEffect(() => {
+    if (!syncMode) {
+      setWindows([])
+      return
+    }
+    const fetchWindows = async () => {
+      try {
+        setWindows(await api.get<{ id: number; title: string }[]>('/api/windows'))
+      } catch {
+        /* 忽略轮询失败 */
+      }
+    }
+    fetchWindows()
+    const timer = setInterval(fetchWindows, 3000)
+    return () => clearInterval(timer)
+  }, [syncMode])
 
   // ===== 批量能力 =====
   const exportProfiles = async () => {
@@ -259,9 +300,23 @@ export default function Environments() {
       <Card
         title="环境管理 — 浏览器指纹环境"
         extra={
-          <Space>
-            <span>窗口同步</span>
+          <Space wrap>
+            <Tooltip title="同步鼠标轨迹（贝塞尔插值）、按下/抬起、滚轮、键盘、输入、滚动到其它环境窗口">
+              <span>轨迹级同步</span>
+            </Tooltip>
             <Switch checked={syncMode} onChange={toggleSync} checkedChildren="开" unCheckedChildren="关" />
+            {syncMode && (
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="全部已打开窗口"
+                style={{ minWidth: 260 }}
+                value={syncIds}
+                onChange={changeSyncIds}
+                options={windows.map((w) => ({ value: w.id, label: w.title }))}
+                maxTagCount={2}
+              />
+            )}
           </Space>
         }
       >

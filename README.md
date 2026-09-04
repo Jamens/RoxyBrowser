@@ -73,9 +73,29 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 保存一套指纹 + 平台 + 起始页配置，一键「从模板创建环境」，保证环境设置的完美一致性。
 
-### 5. 多窗口同步
+### 5. 多窗口同步（键鼠轨迹级）
 
-开启后，任意环境窗口的**滚动 / 点击 / 输入**会实时同步到所有已打开的环境窗口，适合批量发帖、互动、监控。
+开启后，任意环境窗口的操作会实时重放到其它环境窗口，适合批量发帖、互动、监控。
+
+同步的事件类型：
+
+| 类别 | 事件 |
+| --- | --- |
+| 鼠标 | `mousemove` / `mousedown` / `mouseup` / `click` / `wheel` |
+| 键盘 | `keydown` / `keyup`（含 Ctrl / Alt / Shift / Meta 组合键） |
+| 表单 | `input` / `change` / `focus` |
+| 页面 | `scroll` |
+
+实现要点（区别于简单的坐标广播）：
+
+- **元素锚定**：事件位置编码为「稳定 selector + 元素内相对坐标」，而不是裸视口坐标。优先使用 `id` / `data-*` / `aria-label` / `name` 等稳定属性，退化时才用结构路径，因此各窗口尺寸不同也能命中同一控件；命中元素比视口还大时自动改用视口相对坐标，避免相对坐标被放大失真。
+- **轨迹插值**：鼠标移动不是一次性跳转，而是沿带随机弧度的二次贝塞尔曲线、按缓动逐点派发 `pointermove` + `mousemove`。源窗口发 1 个 `mousemove`，目标窗口会重现出十余个连续采样点，轨迹形态接近真人。
+- **完整按键序列**：`click` 不会直接调 `element.click()`，而是重放 `mousedown → mouseup → click` 并带随机按压时长；`click` 由「按下与抬起落在同一元素」配对补发（模拟内核行为），避免与来源的 `click` 事件叠加导致目标窗口被点两次。
+- **视口纠偏**：目标元素不在视口内时先 `scrollIntoView` 再重新计算落点，落点始终钳制在视口范围内。
+- **回环抑制**：重放期间用时间窗抑制自身采集（而非布尔开关），否则多帧轨迹动画会被自己的监听器二次采集并广播回去，形成回声放大。
+- **同步范围可选**：开关旁可指定「只同步到哪几个窗口」，不选则同步到全部已打开窗口。
+
+> 注意：同步的是**渲染层事件序列**。若目标页面用 `isTrusted` 做校验，合成事件仍是 `false`（这需要内核级注入，本项目未做）。
 
 ### 6. 团队协作
 
@@ -143,20 +163,24 @@ src/
 ## 打包分发
 
 ```bash
-pnpm icon        # 生成托盘图标 resources/tray.png 与应用图标 resources/icon.ico（纯 Node，无依赖）
-pnpm dist        # 构建 + 打包 Windows NSIS 安装包 → release/RoxyBrowser Clone Setup 1.0.0.exe
-pnpm dist:dir    # 仅打包免安装目录 → release/win-unpacked/（调试分发更快）
-pnpm dist:fresh  # 输出到 release-nsis/（当 release/ 目录被占用无法清理时使用）
+pnpm icon         # 生成 resources/tray.png 与 resources/icon.ico（纯 Node，无第三方依赖）
+pnpm dist         # 构建 + 打包 Windows 安装包（NSIS + 免安装版）→ dist/
+pnpm dist:dir     # 仅产出免安装目录 → release/win-unpacked/（调试分发更快）
 ```
 
-打包配置见 `electron-builder.yml`：
+打包配置在 **`package.json` 的 `build` 字段**（非独立的 electron-builder.yml）：
 
-- `appId: com.roxyclone.desktop`，产品名 `RoxyBrowser Clone`，简体中文安装向导（`nsis.language: 2052`）
+- `appId: com.roxyclone.browser`，产品名 `RoxyBrowserClone`，简体中文安装向导（`nsis.language: 2052`）
 - 支持自定义安装路径、创建桌面与开始菜单快捷方式
-- `asarUnpack: resources/**` —— 托盘图标需真实文件系统可读，故从 asar 中解包
-- 国内镜像已在 `.npmrc` 配置（`electron_mirror` / `electron-builder-binaries_mirror`），避免下载超时
+- 同时产出 NSIS 安装包与 Portable 免安装版：
+  - `dist/RoxyBrowserClone-1.0.0-win32-x64.exe`（≈84 MB，安装向导）
+  - `dist/RoxyBrowserClone-1.0.0-win32-x64-Portable.exe`（≈75 MB，双击即用）
+- `resources/` 打进 `app.asar`，托盘图标按「asar 内 / asar.unpacked / extraResources」三种路径依次探测（`src/main/index.ts` 的 `trayIconPath()`）
+- 国内镜像：Electron 用 `.npmrc` 的 `electron_mirror`，打包器二进制用环境变量 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`
 
-> 打包产物未做代码签名，Windows SmartScreen 会提示「未知发布者」，选择「仍要运行」即可；正式分发请接入代码签名证书。
+> **已知环境限制**：在受限终端（如带删除保护沙箱的 IDE 内置终端）中，electron-builder 收尾清理临时文件可能报错，**但安装包已在此之前生成完毕**，属无害告警；普通终端下不会出现。若 `release/` 残留旧目录无法清理，用 `-c.directories.output=<新目录>` 换个输出路径即可。
+>
+> 打包产物未做代码签名，Windows SmartScreen 会提示「未知发布者」，选择「仍要运行」即可；正式分发请接入代码签名证书（EV 更佳）。
 
 ## 与商业产品的差异说明
 

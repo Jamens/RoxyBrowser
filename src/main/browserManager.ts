@@ -5,7 +5,12 @@ import { ProfileEntity, ProxyEntity } from './entities'
 import type { Fingerprint } from '../shared/types'
 
 const windows = new Map<number, BrowserWindow>()
+// BrowserWindow.getTitle() 返回的是页面 <title>，所有环境窗口都一样，
+// 无法用于区分同步对象，所以单独记录环境名
+const windowTitles = new Map<number, string>()
 let syncEnabled = false
+// 参与同步的环境窗口；空集合表示「全部已打开窗口」
+const syncTargets = new Set<number>()
 
 export function setSyncMode(enabled: boolean) {
   syncEnabled = enabled
@@ -13,8 +18,21 @@ export function setSyncMode(enabled: boolean) {
 export function getSyncMode() {
   return syncEnabled
 }
+export function setSyncTargets(ids: number[]) {
+  syncTargets.clear()
+  for (const id of ids || []) syncTargets.add(Number(id))
+}
+export function getSyncTargets(): number[] {
+  return [...syncTargets]
+}
 export function getRunningWindowIds(): number[] {
   return [...windows.keys()]
+}
+/** 已打开窗口的详细信息，供 UI 选择同步对象 */
+export function getRunningWindows(): { id: number; title: string }[] {
+  return [...windows.entries()]
+    .filter(([, w]) => !w.isDestroyed())
+    .map(([id]) => ({ id, title: windowTitles.get(id) || `环境 #${id}` }))
 }
 
 function rendererEntry(): { url?: string; file?: string } {
@@ -118,6 +136,7 @@ export async function openWindow(profileId: number): Promise<void> {
 
   win.on('closed', () => {
     windows.delete(profileId)
+    windowTitles.delete(profileId)
     markClosed(profileId)
   })
   win.once('ready-to-show', () => win.show())
@@ -130,6 +149,7 @@ export async function openWindow(profileId: number): Promise<void> {
     await win.loadFile(entry.file, { hash: hash.slice(1) })
   }
   windows.set(profileId, win)
+  windowTitles.set(profileId, `${profile.name}`)
 }
 
 export async function closeWindow(profileId: number): Promise<void> {
@@ -137,13 +157,32 @@ export async function closeWindow(profileId: number): Promise<void> {
   if (win && !win.isDestroyed()) win.close()
 }
 
-// ===== 多窗口同步 =====
-ipcMain.on('sync-event', (event, payload) => {
+// ===== 多窗口同步（键鼠轨迹级） =====
+// 事件量很大（mousemove 约 20/s），这里只做转发，不做序列化排队：
+// 丢弃过期事件比堆积延迟更重要，否则鼠标轨迹会明显滞后。
+ipcMain.on('sync-event', (event, payload: Record<string, unknown>) => {
   if (!syncEnabled) return
-  const sender = event.sender
-  for (const [, win] of windows) {
+  if (!payload || typeof payload !== 'object') return
+
+  // 反查来源窗口，避免回声；同时给接收端标注来源
+  let sourceId = 0
+  for (const [id, win] of windows) {
+    if (win.webContents === event.sender) {
+      sourceId = id
+      break
+    }
+  }
+  // 只转发「在同步组内、且已打开」的窗口；未指定同步组时广播到全部
+  const scoped = syncTargets.size > 0
+
+  for (const [id, win] of windows) {
     if (win.isDestroyed()) continue
-    if (win.webContents === sender) continue
-    win.webContents.send('sync-apply', payload)
+    if (id === sourceId) continue
+    if (scoped && !syncTargets.has(id)) continue
+    try {
+      win.webContents.send('sync-apply', { ...payload, __from: sourceId })
+    } catch {
+      /* 窗口正在关闭，忽略 */
+    }
   }
 })

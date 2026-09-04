@@ -1,7 +1,8 @@
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
 import { join, resolve } from 'path'
-import { bootstrap, setBrowserBridge, setSyncToggle } from './server'
-import { openWindow, closeWindow, setSyncMode } from './browserManager'
+import { existsSync } from 'fs'
+import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider } from './server'
+import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows } from './browserManager'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -10,8 +11,13 @@ let tray: Tray | null = null
 let isQuiting = false
 
 function trayIconPath(): string {
-  // 主进程始终从 out/main 运行，resources 位于项目根目录
-  return resolve(__dirname, '../../resources/tray.png')
+  // 主进程从 out/main 运行，按不同打包形态依序探测图标位置
+  const candidates = [
+    resolve(__dirname, '../../resources/tray.png'), // 开发态 / 打包后位于 app.asar 内
+    resolve(__dirname, '../../../app.asar.unpacked/resources/tray.png'), // electron-builder asarUnpack 后
+    resolve(__dirname, '../../../resources/tray.png') // extraResources 场景
+  ]
+  return candidates.find((p) => existsSync(p)) || candidates[0]
 }
 
 function createTray(apiBase: string) {
@@ -112,7 +118,12 @@ if (!gotLock) {
 
       // 2. 注入浏览器窗口桥 + 同步开关
       setBrowserBridge({ openWindow, closeWindow })
-      setSyncToggle(setSyncMode)
+      setSyncToggle(({ enabled, ids }) => {
+        setSyncMode(enabled)
+        // ids 为空数组 = 同步到全部已打开窗口
+        setSyncTargets(ids && ids.length ? ids : [])
+      })
+      setWindowsProvider(getRunningWindows)
 
       // 3. 托盘（支持关闭到后台常驻）
       createTray(apiBase)

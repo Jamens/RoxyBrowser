@@ -55,9 +55,14 @@ export function setBrowserBridge(b: BrowserBridge) {
 }
 
 // 窗口同步开关处理（由 main 注入）
-let syncToggle: ((enabled: boolean) => void) | null = null
-export function setSyncToggle(fn: (enabled: boolean) => void) {
+type SyncOptions = { enabled: boolean; ids?: number[] }
+let syncToggle: ((opts: SyncOptions) => void) | null = null
+export function setSyncToggle(fn: (opts: SyncOptions) => void) {
   syncToggle = fn
+}
+let windowsProvider: (() => { id: number; title: string }[]) | null = null
+export function setWindowsProvider(fn: () => { id: number; title: string }[]) {
+  windowsProvider = fn
 }
 
 // ---------- 工具 ----------
@@ -238,8 +243,22 @@ function parseProxyLine(line: string): { type: string; host: string; port: numbe
     return { type: type.toLowerCase() === 'socks5' ? 'socks5' : type.toLowerCase() === 'https' ? 'https' : 'http', host, port: Number(port), username, password }
   }
 
-  // 冒号分隔：host:port[:user[:pass]]
   const parts = raw.split(':').map((s) => s.trim())
+
+  // 与 /proxies/export 对应的格式：type:host:port:username:password
+  const KNOWN_TYPES = ['http', 'https', 'socks5', 'socks4', 'socks']
+  if (parts.length >= 3 && KNOWN_TYPES.includes(parts[0].toLowerCase()) && Number(parts[2])) {
+    const t = parts[0].toLowerCase()
+    return {
+      type: t === 'socks' || t === 'socks4' ? 'socks5' : t,
+      host: parts[1],
+      port: Number(parts[2]),
+      username: parts[3] || '',
+      password: parts[4] || ''
+    }
+  }
+
+  // 冒号分隔：host:port[:user[:pass]]
   if (parts.length >= 2 && parts[0] && Number(parts[1])) {
     return {
       type: 'http',
@@ -311,9 +330,17 @@ function buildApiRouter(): express.Router {
   })
 
   // ===== 窗口同步开关 =====
+  // body: { enabled: boolean, ids?: number[] } —— ids 为空表示同步到全部已打开窗口
   router.post('/sync', authMiddleware, (req: Request, res: Response) => {
-    if (syncToggle) syncToggle(!!(req.body || {}).enabled)
-    res.json({ ok: true })
+    const body = (req.body || {}) as { enabled?: boolean; ids?: unknown }
+    const ids = Array.isArray(body.ids) ? body.ids.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : undefined
+    if (syncToggle) syncToggle({ enabled: !!body.enabled, ids })
+    res.json({ ok: true, enabled: !!body.enabled, ids: ids || [] })
+  })
+
+  // ===== 已打开的环境窗口（用于选择同步对象） =====
+  router.get('/windows', authMiddleware, (_req: Request, res: Response) => {
+    res.json(windowsProvider ? windowsProvider() : [])
   })
 
   // ===== 浏览器环境（环境内新标签页信息，无需登录态） =====
@@ -389,6 +416,56 @@ function buildApiRouter(): express.Router {
     const groupMap = new Map(groups.map((g) => [g.id, g.name]))
     const proxyMap = new Map(proxies.map((p) => [p.id, p]))
     res.json(list.map((p) => mapProfile(p, p.groupId ? groupMap.get(p.groupId) : null, p.proxyId ? proxyMap.get(p.proxyId) ?? null : null)))
+  })
+
+  // 导出环境（JSON，含完整指纹 + 分组 + 代理 + 账号，可直接迁移到另一台设备）
+  router.get('/profiles/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const groupRepo = AppDataSource.getRepository(GroupEntity)
+    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+    const accountRepo = AppDataSource.getRepository(AccountEntity)
+    const tid = req.tid!
+
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    const qb = repo.createQueryBuilder('p').where('p.teamId = :tid', { tid }).andWhere('p.isTemplate = 0')
+    if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
+    const list = await qb.orderBy('p.seq', 'ASC').getMany()
+
+    const groups = await groupRepo.find({ where: { teamId: tid } })
+    const proxies = await proxyRepo.find({ where: { teamId: tid } })
+    const accounts = await accountRepo.find()
+    const groupMap = new Map(groups.map((g) => [g.id, g.name]))
+    const proxyMap = new Map(proxies.map((x) => [x.id, x]))
+
+    res.json(
+      list.map((p) => {
+        const proxy = p.proxyId ? proxyMap.get(p.proxyId) : null
+        return {
+          name: p.name,
+          platform: p.platform,
+          startUrl: p.startUrl,
+          remark: p.remark,
+          group: p.groupId ? groupMap.get(p.groupId) || null : null,
+          proxy: proxy?.name || null,
+          proxyDetail: proxy
+            ? {
+                type: proxy.type,
+                host: proxy.host,
+                port: proxy.port,
+                username: proxy.username,
+                password: proxy.password
+              }
+            : null,
+          fingerprint: p.fingerprint,
+          accounts: accounts
+            .filter((a) => a.profileId === p.id)
+            .map((a) => ({ platform: a.platform, username: a.username, password: a.password, remark: a.remark }))
+        }
+      })
+    )
   })
 
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -798,12 +875,23 @@ function buildApiRouter(): express.Router {
 
   // ===== 批量能力：导入 / 导出 / 复制 / 批量随机指纹 =====
 
-  // 导入环境（JSON）
+  // 导入环境（JSON）：兼容纯环境数组，也支持带分组 / 代理 / 账号的完整迁移文件
   router.post('/profiles/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const items: Array<{ name?: string; platform?: string; startUrl?: string; remark?: string; fingerprint?: unknown }> =
-      req.body?.items || []
+    const groupRepo = AppDataSource.getRepository(GroupEntity)
+    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+    const accountRepo = AppDataSource.getRepository(AccountEntity)
+    const payload = req.body || {}
+    const items = (Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload)
+        ? payload
+        : []) as Array<Record<string, unknown>>
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
+
+    // 分组 / 代理按名称复用，缺失则新建
+    const groupIdByName = new Map((await groupRepo.find({ where: { teamId: req.tid } })).map((g) => [g.name, g.id]))
+    const proxyIdByName = new Map((await proxyRepo.find({ where: { teamId: req.tid } })).map((x) => [x.name, x.id]))
 
     let seq = Number(
       (
@@ -814,47 +902,96 @@ function buildApiRouter(): express.Router {
           .getRawOne<{ m: number | null }>()
       )?.m || 1000
     )
+
     const created: Array<{ id: number; name: string }> = []
+    let groupsCreated = 0
+    let proxiesCreated = 0
+    let accountsCreated = 0
+
     for (const item of items) {
+      // 分组
+      let groupId: number | null = null
+      const groupName = item.group ? String(item.group) : ''
+      if (groupName) {
+        if (!groupIdByName.has(groupName)) {
+          const g = await groupRepo.save(groupRepo.create({ teamId: req.tid!, name: groupName, sort: 0 }))
+          groupIdByName.set(groupName, g.id)
+          groupsCreated++
+        }
+        groupId = groupIdByName.get(groupName) ?? null
+      }
+
+      // 代理：先按名称复用，再按迁移文件里的 proxyDetail 就地新建
+      let proxyId: number | null = null
+      const proxyName = item.proxy ? String(item.proxy) : ''
+      if (proxyName) {
+        if (proxyIdByName.has(proxyName)) {
+          proxyId = proxyIdByName.get(proxyName) ?? null
+        } else {
+          const detail = (item.proxyDetail || {}) as Record<string, unknown>
+          if (detail.host && detail.port) {
+            const x = await proxyRepo.save(
+              proxyRepo.create({
+                teamId: req.tid!,
+                name: proxyName,
+                type: String(detail.type || 'http'),
+                host: String(detail.host),
+                port: Number(detail.port),
+                username: String(detail.username || ''),
+                password: String(detail.password || ''),
+                remark: String(detail.remark || '')
+              })
+            )
+            proxyIdByName.set(proxyName, x.id)
+            proxyId = x.id
+            proxiesCreated++
+          }
+        }
+      }
+
       seq += 1
       const p = await repo.save(
         repo.create({
           teamId: req.tid!,
-          name: item.name || `导入环境 ${seq}`,
+          groupId,
+          proxyId,
+          name: (item.name as string) || `导入环境 ${seq}`,
           seq,
-          platform: item.platform || '',
-          startUrl: item.startUrl || DEFAULT_START_URL,
-          remark: item.remark || '',
-          fingerprint: (item.fingerprint as Record<string, unknown>) || (randomFingerprint() as unknown as Record<string, unknown>),
+          platform: (item.platform as string) || '',
+          startUrl: (item.startUrl as string) || DEFAULT_START_URL,
+          remark: (item.remark as string) || '',
+          fingerprint:
+            (item.fingerprint as Record<string, unknown>) ||
+            (randomFingerprint() as unknown as Record<string, unknown>),
           createdBy: req.uid!
         })
       )
       created.push({ id: p.id, name: p.name })
+
+      // 账号
+      for (const acc of (item.accounts || []) as Array<Record<string, unknown>>) {
+        if (!acc?.username) continue
+        await accountRepo.save(
+          accountRepo.create({
+            profileId: p.id,
+            platform: String(acc.platform || ''),
+            username: String(acc.username),
+            password: String(acc.password || ''),
+            remark: String(acc.remark || '')
+          })
+        )
+        accountsCreated++
+      }
     }
-    await writeLog(req, 'import_profiles', `导入 ${created.length} 个环境`)
-    res.json({ created: created.length, items: created })
+
+    await writeLog(
+      req,
+      'import_profiles',
+      `导入 ${created.length} 个环境（新建分组 ${groupsCreated} 个、代理 ${proxiesCreated} 条、账号 ${accountsCreated} 条）`
+    )
+    res.json({ created: created.length, items: created, groupsCreated, proxiesCreated, accountsCreated })
   })
 
-  // 导出环境（JSON，含完整指纹）
-  router.get('/profiles/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const ids = String(req.query.ids || '')
-      .split(',')
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isFinite(n) && n > 0)
-    const qb = repo.createQueryBuilder('p').where('p.teamId = :tid', { tid: req.tid }).andWhere('p.isTemplate = 0')
-    if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
-    const list = await qb.getMany()
-    res.json(
-      list.map((p) => ({
-        name: p.name,
-        platform: p.platform,
-        startUrl: p.startUrl,
-        remark: p.remark,
-        fingerprint: p.fingerprint
-      }))
-    )
-  })
 
   // 复制环境（连同账号一起复制，用于资料迁移）
   router.post('/profiles/:id/duplicate', authMiddleware, async (req: AuthedRequest, res: Response) => {
