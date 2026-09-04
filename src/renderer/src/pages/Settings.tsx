@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Card, Form, Select, InputNumber, Button, Space, Typography, Tag, message, Divider } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import { DEFAULT_SETTINGS, type AppSettings } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings } from '@shared/types'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
@@ -147,6 +147,12 @@ export default function Settings() {
               { value: 'dark', label: t('theme.dark') },
               { value: 'auto', label: t('theme.auto') }
             ]}
+          />
+        </Form.Item>
+        <Form.Item name="searchEngine" label={t('settings.searchEngine')} extra={t('settings.searchEngineExtra')}>
+          <Select
+            style={{ maxWidth: 280 }}
+            options={SEARCH_ENGINES.map((e) => ({ value: e.value, label: e.label }))}
           />
         </Form.Item>
         <Form.Item noStyle shouldUpdate={(prev, cur) => prev.theme !== cur.theme}>

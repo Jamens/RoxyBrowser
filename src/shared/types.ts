@@ -189,6 +189,37 @@ export interface FingerprintPresetDTO {
 // 浏览器环境默认起始页
 export const DEFAULT_START_URL = 'https://www.baidu.com'
 
+// ===== 起始页搜索引擎 =====
+// 键词搜索的目标引擎。默认 Bing：大陆网络与海外代理下均可直达；
+// Google / DuckDuckGo 需环境挂了可用代理才能访问，可在设置页切换。
+export type SearchEngine = 'bing' | 'google' | 'baidu' | 'duckduckgo'
+
+export interface SearchEngineDef {
+  value: SearchEngine
+  /** 展示名（品牌名，不做多语言） */
+  label: string
+  /** 由搜索关键词生成搜索结果页 URL */
+  url: (q: string) => string
+}
+
+export const SEARCH_ENGINES: SearchEngineDef[] = [
+  { value: 'bing', label: 'Bing', url: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}` },
+  { value: 'google', label: 'Google', url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}` },
+  { value: 'baidu', label: '百度 Baidu', url: (q) => `https://www.baidu.com/s?wd=${encodeURIComponent(q)}` },
+  { value: 'duckduckgo', label: 'DuckDuckGo', url: (q) => `https://duckduckgo.com/?q=${encodeURIComponent(q)}` }
+]
+
+/** 取搜索引擎的搜索 URL；未知引擎回落 Bing */
+export function searchUrlFor(engine: string, q: string): string {
+  const e = SEARCH_ENGINES.find((x) => x.value === engine) || SEARCH_ENGINES[0]
+  return e.url(q)
+}
+
+/** 校验并归一化搜索引擎，非法值返回 undefined */
+export function normalizeSearchEngine(v: unknown): SearchEngine | undefined {
+  return SEARCH_ENGINES.some((e) => e.value === v) ? (v as SearchEngine) : undefined
+}
+
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
   // 新建环境随机指纹时的默认操作系统
@@ -206,6 +237,8 @@ export interface AppSettings {
   country: string
   // 界面语言（切换国家时会自动带出该国默认语言，也可单独覆盖）
   language: LocaleCode
+  // 环境起始页：输入关键词时使用的搜索引擎（大陆网络下 Google / DuckDuckGo 不可直达）
+  searchEngine: SearchEngine
   // 代理检测超时（秒）
   proxyCheckTimeout: number
   // 代理定时巡检间隔（分钟），0 表示关闭
@@ -223,6 +256,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoNightStart: 18,
   country: 'CN',
   language: 'zh-CN',
+  searchEngine: 'bing',
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
   logRetentionDays: 90

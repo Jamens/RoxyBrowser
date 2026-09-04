@@ -35,7 +35,7 @@ import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '.
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
-import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
+import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -537,6 +537,7 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
+    const settings = await getSettings()
     let proxyCountry = ''
     if (p.proxyId) {
       const proxyRepo = AppDataSource.getRepository(ProxyEntity)
@@ -550,6 +551,7 @@ function buildApiRouter(): express.Router {
       platform: p.platform,
       startUrl: p.startUrl,
       proxyCountry,
+      searchEngine: settings.searchEngine,
       fingerprint: {
         os: p.fingerprint.os,
         timezone: p.fingerprint.timezone,
@@ -1477,6 +1479,8 @@ function buildApiRouter(): express.Router {
     const language = normalizeLocale(merged.language as string) || DEFAULT_SETTINGS.language
     merged.country = country
     merged.language = language
+    // 搜索引擎同样走白名单：脏值会让起始页拼出错误的搜索 URL
+    merged.searchEngine = normalizeSearchEngine(merged.searchEngine) || DEFAULT_SETTINGS.searchEngine
     let row = await repo.findOne({ where: { key: 'global' } })
     if (!row) row = repo.create({ key: 'global', settings: merged })
     else row.settings = merged

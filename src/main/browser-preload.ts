@@ -49,6 +49,24 @@
     }
   }
 
+  // ===== 应用自身起始页专供：本地 API 地址 =====
+  // 只在应用自己的页面（file:// 构建产物或本地开发服务器）上暴露 window.roxy，
+  // 不落到外部站点上，避免成为可检测痕迹。环境窗口渲染进程继承主进程 env，
+  // ROXY_API_BASE 在主进程启动时已写入（端口被占用递增时也能拿到真实值）。
+  try {
+    if (
+      location.protocol === 'file:' ||
+      location.hostname === 'localhost' ||
+      location.hostname === '127.0.0.1'
+    ) {
+      def(window, 'roxy', {
+        apiBase: process.env.ROXY_API_BASE || 'http://127.0.0.1:39100'
+      })
+    }
+  } catch {
+    /* ignore */
+  }
+
   // ===== navigator =====
   def(navigator, 'userAgent', fp.userAgent)
   def(navigator, 'platform', fp.platform)

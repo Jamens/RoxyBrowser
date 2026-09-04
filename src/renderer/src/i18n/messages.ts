@@ -104,7 +104,21 @@ const zhCN = {
   'common.hour': '时',
   'common.seconds': '秒',
   'common.minutes': '分钟',
-  'common.days': '天'
+  'common.days': '天',
+
+  // ---- 环境起始页（环境窗口首页）----
+  'browser.searchPlaceholder': '输入网址或搜索关键词，回车访问',
+  'browser.envActive': '指纹环境已启用',
+  'browser.proxyRegion': '代理地区：{country}',
+  'browser.engineHint': '输入关键词将以 {engine} 搜索；输入网址则直接访问',
+  'browser.quickNav': '快捷导航',
+  'browser.quickNavExtra': '点击卡片直达对应站点（部分站点需环境代理可用）',
+  'browser.fpSummary': '当前环境指纹摘要（右键页面可返回 / 刷新 / 打开开发者工具）',
+  'browser.fpCheck': '浏览器指纹检测',
+
+  // ---- 设置：起始页搜索引擎 ----
+  'settings.searchEngine': '起始页搜索引擎',
+  'settings.searchEngineExtra': '环境起始页输入关键词时使用的搜索引擎；大陆网络下 Google / DuckDuckGo 需挂代理可达'
 }
 
 export type MessageDict = typeof zhCN
@@ -208,7 +222,21 @@ const enUS: MessageDict = {
   'common.hour': 'h',
   'common.seconds': 's',
   'common.minutes': 'min',
-  'common.days': 'days'
+  'common.days': 'days',
+
+  // ---- Environment start page ----
+  'browser.searchPlaceholder': 'Enter a URL or keywords, press Enter to go',
+  'browser.envActive': 'Fingerprint enabled',
+  'browser.proxyRegion': 'Proxy region: {country}',
+  'browser.engineHint': 'Keywords search with {engine}; URLs open directly',
+  'browser.quickNav': 'Quick links',
+  'browser.quickNavExtra': 'Click a card to open the site (some sites need a working proxy)',
+  'browser.fpSummary': 'Fingerprint summary (right-click for back / reload / DevTools)',
+  'browser.fpCheck': 'Fingerprint test',
+
+  // ---- Settings: start-page search engine ----
+  'settings.searchEngine': 'Start-page search engine',
+  'settings.searchEngineExtra': 'Engine used for keyword searches on environment start pages; Google / DuckDuckGo need a proxy in mainland China'
 }
 
 const jaJP: MessageDict = {
@@ -310,7 +338,21 @@ const jaJP: MessageDict = {
   'common.hour': '時',
   'common.seconds': '秒',
   'common.minutes': '分',
-  'common.days': '日'
+  'common.days': '日',
+
+  // ---- 環境スタートページ ----
+  'browser.searchPlaceholder': 'URL またはキーワードを入力して Enter',
+  'browser.envActive': 'フィンガープリント有効',
+  'browser.proxyRegion': 'プロキシ地域：{country}',
+  'browser.engineHint': 'キーワードは {engine} で検索、URL は直接開きます',
+  'browser.quickNav': 'クイックリンク',
+  'browser.quickNavExtra': 'カードをクリックでサイトへ移動（プロキシが必要な場合あり）',
+  'browser.fpSummary': 'フィンガープリント概要（右クリックで戻る / 更新 / DevTools）',
+  'browser.fpCheck': 'フィンガープリント検査',
+
+  // ---- 設定：スタートページの検索エンジン ----
+  'settings.searchEngine': 'スタートページの検索エンジン',
+  'settings.searchEngineExtra': 'スタートページでキーワード検索に使うエンジン。Google / DuckDuckGo は中国本土ではプロキシが必要です'
 }
 
 const deDE: MessageDict = {
@@ -412,7 +454,21 @@ const deDE: MessageDict = {
   'common.hour': 'Std',
   'common.seconds': 's',
   'common.minutes': 'Min',
-  'common.days': 'Tage'
+  'common.days': 'Tage',
+
+  // ---- Umgebungs-Startseite ----
+  'browser.searchPlaceholder': 'URL oder Suchbegriff eingeben, Enter zum Öffnen',
+  'browser.envActive': 'Fingerprint aktiv',
+  'browser.proxyRegion': 'Proxy-Region: {country}',
+  'browser.engineHint': 'Suchbegriffe mit {engine}; URLs öffnen direkt',
+  'browser.quickNav': 'Schnelllinks',
+  'browser.quickNavExtra': 'Karte anklicken, um die Seite zu öffnen (teilweise Proxy erforderlich)',
+  'browser.fpSummary': 'Fingerprint-Übersicht (Rechtsklick: Zurück / Neu laden / DevTools)',
+  'browser.fpCheck': 'Fingerprint-Test',
+
+  // ---- Einstellungen: Suchmaschine der Startseite ----
+  'settings.searchEngine': 'Suchmaschine der Startseite',
+  'settings.searchEngineExtra': 'Suchmaschine für Keyword-Suchen auf Umgebungs-Startseiten; Google / DuckDuckGo brauchen in Festlandchina einen Proxy'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

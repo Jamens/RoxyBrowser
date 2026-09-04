@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { Input, Tag, Typography, Space, Card } from 'antd'
 import { GlobalOutlined, ArrowRightOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
-import { osLabel } from '@shared/types'
+import { osLabel, searchUrlFor, SEARCH_ENGINES, type SearchEngine } from '@shared/types'
+import type { MessageKey } from '../i18n/messages'
+import { useI18n } from '../i18n'
 
 interface ProfileInfo {
   id: number
@@ -11,6 +13,7 @@ interface ProfileInfo {
   platform: string
   startUrl: string
   proxyCountry: string
+  searchEngine: SearchEngine
   fingerprint: {
     os: string
     timezone: string
@@ -21,7 +24,9 @@ interface ProfileInfo {
   }
 }
 
-const QUICK_LINKS = [
+// 快捷导航：点击直达站点（不是搜索词）。name 为品牌名不做多语言，
+// 最后一项为指纹检测页，标题走 i18n。
+const QUICK_LINKS: { name: string; url: string; key?: MessageKey }[] = [
   { name: 'Amazon', url: 'https://www.amazon.com' },
   { name: 'Facebook', url: 'https://www.facebook.com' },
   { name: 'Instagram', url: 'https://www.instagram.com' },
@@ -29,35 +34,47 @@ const QUICK_LINKS = [
   { name: 'eBay', url: 'https://www.ebay.com' },
   { name: 'Etsy', url: 'https://www.etsy.com' },
   { name: 'Google', url: 'https://www.google.com' },
-  { name: '浏览器指纹检测', url: 'https://browserleaks.com/canvas' }
+  { name: '', url: 'https://browserleaks.com/canvas', key: 'browser.fpCheck' }
 ]
 
 export default function BrowserTab() {
   const [params] = useSearchParams()
   const profileId = params.get('profileId')
+  const { t } = useI18n()
   const [info, setInfo] = useState<ProfileInfo | null>(null)
   const [url, setUrl] = useState('')
 
+  // window.roxy 由 browser-preload 仅在应用自身页面（file:// 或 localhost）上注入，
+  // 端口递增时也是真实值；取不到时回落默认端口
   const apiBase = window.roxy?.apiBase || 'http://127.0.0.1:39100'
 
   useEffect(() => {
     if (!profileId) return
+    let cancelled = false
     fetch(`${apiBase}/api/browser/profile-info/${profileId}`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: ProfileInfo) => {
+        if (cancelled) return
         setInfo(d)
         setUrl(d.startUrl || '')
       })
       .catch(() => {
-        /* ignore */
+        /* 起始页仍可用：搜索走默认引擎，仅无指纹摘要 */
       })
+    return () => {
+      cancelled = true
+    }
   }, [profileId, apiBase])
+
+  const engine: SearchEngine = info?.searchEngine || 'bing'
+  const engineLabel = SEARCH_ENGINES.find((e) => e.value === engine)?.label || 'Bing'
 
   const navigate = (target?: string) => {
     let u = (target ?? url).trim()
     if (!u) return
     if (!/^https?:\/\//i.test(u)) {
-      u = u.includes('.') && !u.includes(' ') ? `https://${u}` : `https://www.google.com/search?q=${encodeURIComponent(u)}`
+      // 形如域名的输入直接补协议访问，否则按设置的搜索引擎搜索
+      u = u.includes('.') && !u.includes(' ') ? `https://${u}` : searchUrlFor(engine, u)
     }
     window.location.href = u
   }
@@ -66,6 +83,9 @@ export default function BrowserTab() {
     <div
       style={{
         minHeight: '100vh',
+        // 固定的品牌深色渐变背景，不随明暗主题变化：
+        // 页内文字因此全部用显式白色系配色，卡片交给 antd 主题（明暗各自成立），
+        // 不再出现「浅色底 + 主题文字」的混搭——那会在暗色主题下变成白底白字。
         background: 'linear-gradient(180deg, #101a3a 0%, #1d2b64 100%)',
         padding: '60px 40px 40px',
         boxSizing: 'border-box'
@@ -81,41 +101,61 @@ export default function BrowserTab() {
           </Typography.Title>
           <Space style={{ marginTop: 8 }}>
             <Tag icon={<SafetyOutlined />} color="success">
-              指纹环境已启用
+              {t('browser.envActive')}
             </Tag>
-            {info?.proxyCountry && <Tag color="blue">代理地区：{info.proxyCountry}</Tag>}
+            {info?.proxyCountry && <Tag color="blue">{t('browser.proxyRegion', { country: info.proxyCountry })}</Tag>}
             {info?.platform && <Tag color="purple">{info.platform}</Tag>}
           </Space>
         </div>
 
         <Input.Search
           size="large"
-          placeholder="输入网址或搜索关键词，回车访问"
+          placeholder={t('browser.searchPlaceholder')}
           enterButton={<ArrowRightOutlined />}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onSearch={() => navigate()}
-          style={{ marginBottom: 36 }}
+          style={{ marginBottom: 8 }}
         />
+        <Typography.Text
+          style={{ display: 'block', textAlign: 'center', marginBottom: 32, fontSize: 12, color: 'rgba(255,255,255,0.58)' }}
+        >
+          {t('browser.engineHint', { engine: engineLabel })}
+        </Typography.Text>
 
+        <div style={{ textAlign: 'center', marginBottom: 12 }}>
+          <Typography.Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 13 }}>
+            {t('browser.quickNav')} · {t('browser.quickNavExtra')}
+          </Typography.Text>
+        </div>
         <Space size={12} wrap style={{ justifyContent: 'center', width: '100%' }}>
-          {QUICK_LINKS.map((l) => (
-            <Card
-              key={l.name}
-              size="small"
-              hoverable
-              onClick={() => navigate(l.url)}
-              style={{ minWidth: 130, textAlign: 'center', borderRadius: 8 }}
-            >
-              <div style={{ fontWeight: 600, fontSize: 13 }}>{l.name}</div>
-            </Card>
-          ))}
+          {QUICK_LINKS.map((l) => {
+            let domain = ''
+            try {
+              domain = new URL(l.url).hostname.replace(/^www\./, '')
+            } catch {
+              domain = l.url
+            }
+            return (
+              <Card
+                key={l.url}
+                size="small"
+                hoverable
+                onClick={() => navigate(l.url)}
+                style={{ minWidth: 130, textAlign: 'center', borderRadius: 8 }}
+              >
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{l.key ? t(l.key) : l.name}</div>
+                {/* 域名随卡片主题色 + 半透明，明暗主题下都可读 */}
+                <div style={{ fontSize: 11, opacity: 0.55, marginTop: 2 }}>{domain}</div>
+              </Card>
+            )
+          })}
         </Space>
 
         {info && (
-          <Card size="small" style={{ marginTop: 40, background: 'rgba(255,255,255,0.92)', borderRadius: 8 }}>
+          <Card size="small" style={{ marginTop: 40, borderRadius: 8 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              当前环境指纹摘要（右键页面可返回 / 刷新 / 打开开发者工具）
+              {t('browser.fpSummary')}
             </Typography.Text>
             <div style={{ marginTop: 8 }}>
               <Tag>{osLabel(info.fingerprint.os)}</Tag>
