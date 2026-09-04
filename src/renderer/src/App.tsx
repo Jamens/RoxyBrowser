@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ConfigProvider, theme } from 'antd'
 import { useIsDark } from './theme'
@@ -19,11 +20,16 @@ export default function App() {
   // 主色随明暗微调：浅色用标准蓝 #1677ff，暗色用更亮的 #4096ff 提升对比
   const colorPrimary = isDark ? '#4096ff' : '#1677ff'
 
+  // 在 <html> 上标记当前主题，便于纯 CSS 做主题相关的微调（如暗色下更重的卡片阴影）
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
+  }, [isDark])
+
   return (
     <ConfigProvider
       theme={{
         algorithm,
-        token: { colorPrimary },
+        token: { colorPrimary, borderRadius: 8 },
         components: {
           Menu: {
             // 选中项高亮跟随主色：背景为主色淡染，文字/左侧 accent 为主色
