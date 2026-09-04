@@ -20,6 +20,8 @@
     audioNoise: boolean
     webrtc: 'disable' | 'real'
     doNotTrack: string
+    touch?: boolean
+    devicePixelRatio?: number
   }
 
   const fpArg = process.argv.find((a: string) => a.startsWith('--roxy-fp='))
@@ -55,7 +57,28 @@
   def(navigator, 'hardwareConcurrency', fp.hardwareConcurrency)
   def(navigator, 'deviceMemory', fp.deviceMemory)
   def(navigator, 'doNotTrack', fp.doNotTrack)
-  if ((navigator as any).userAgentData) {
+
+  // ===== 移动端：触摸能力 + 像素比 =====
+  if (fp.touch) {
+    def(navigator, 'maxTouchPoints', 5)
+    // 'ontouchstart' in window 是常见触摸检测手段
+    def(window, 'ontouchstart', null)
+  }
+  if (typeof fp.devicePixelRatio === 'number' && fp.devicePixelRatio > 0) {
+    def(window, 'devicePixelRatio', fp.devicePixelRatio)
+  }
+
+  // ===== userAgentData（UA-CH）=====
+  // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮
+  const isMobile = fp.os === 'android' || fp.os === 'ios'
+  if (fp.os === 'ios') {
+    try {
+      delete (navigator as any).userAgentData
+    } catch {
+      /* ignore */
+    }
+  } else if ((navigator as any).userAgentData) {
+    const uadPlatform = fp.os === 'mac' ? 'macOS' : fp.os === 'android' ? 'Android' : 'Windows'
     const major = fp.uaFullVersion.split('.')[0]
     const brands = [
       { brand: 'Chromium', version: major },
@@ -65,16 +88,18 @@
     const uad = (navigator as any).userAgentData
     try {
       Object.defineProperty(uad, 'brands', { get: () => brands, configurable: true })
-      Object.defineProperty(uad, 'platform', { get: () => (fp.os === 'mac' ? 'macOS' : 'Windows'), configurable: true })
+      Object.defineProperty(uad, 'platform', { get: () => uadPlatform, configurable: true })
+      Object.defineProperty(uad, 'mobile', { get: () => isMobile, configurable: true })
       if (uad.getHighEntropyValues) {
         const origGet = uad.getHighEntropyValues.bind(uad)
         uad.getHighEntropyValues = (hints: string[]) =>
           origGet(hints).then((r: any) => {
-            r.platform = fp.os === 'mac' ? 'macOS' : 'Windows'
-            r.platformVersion = fp.os === 'mac' ? '14.6.1' : '15.0.0'
+            r.platform = uadPlatform
+            r.platformVersion = fp.os === 'mac' ? '14.6.1' : fp.os === 'android' ? '14.0.0' : '15.0.0'
             r.uaFullVersion = fp.uaFullVersion
-            r.architecture = fp.os === 'mac' ? 'arm' : 'x86'
+            r.architecture = fp.os === 'mac' ? 'arm' : fp.os === 'android' ? 'arm' : 'x86'
             r.model = ''
+            r.mobile = isMobile
             return r
           })
       }
@@ -87,7 +112,7 @@
   def(window.screen, 'width', fp.screenWidth)
   def(window.screen, 'height', fp.screenHeight)
   def(window.screen, 'availWidth', fp.screenWidth)
-  def(window.screen, 'availHeight', fp.screenHeight - (fp.os === 'mac' ? 25 : 40))
+  def(window.screen, 'availHeight', fp.screenHeight - (fp.touch ? 24 : fp.os === 'mac' ? 25 : 40))
 
   // ===== 时区 =====
   const realGetTimezoneOffset = Date.prototype.getTimezoneOffset

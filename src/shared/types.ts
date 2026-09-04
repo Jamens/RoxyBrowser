@@ -1,13 +1,13 @@
 // 共享类型定义（主进程 / 渲染进程共用）
 
-export type OSKind = 'windows' | 'mac'
+export type OSKind = 'windows' | 'mac' | 'android' | 'ios'
 export type WebRTCMode = 'disable' | 'real'
 
 export interface Fingerprint {
   os: OSKind
   userAgent: string
   uaFullVersion: string
-  platform: string // 'Win32' | 'MacIntel'
+  platform: string // 'Win32' | 'MacIntel' | 'Linux armv8l' | 'iPhone'
   languages: string[]
   timezone: string // IANA 时区
   tzOffset: number // 分钟（与 Date.getTimezoneOffset 一致）
@@ -21,6 +21,16 @@ export interface Fingerprint {
   audioNoise: boolean
   webrtc: WebRTCMode
   doNotTrack: '1' | 'unspecified'
+  // ---- 移动端指纹（可选，桌面端不写这些字段） ----
+  // 是否注入触摸能力（maxTouchPoints / ontouchstart）
+  touch?: boolean
+  // 设备像素比（移动端 2~3）
+  devicePixelRatio?: number
+}
+
+/** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */
+export function osLabel(os: string): string {
+  return os === 'windows' ? 'Windows' : os === 'mac' ? 'macOS' : os === 'android' ? 'Android' : os === 'ios' ? 'iOS' : os
 }
 
 export interface ProfileDTO {

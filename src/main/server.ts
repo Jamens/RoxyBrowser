@@ -31,7 +31,7 @@ import {
   ExtensionEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint } from '../shared/fingerprint'
-import type { Fingerprint, AppSettings } from '../shared/types'
+import type { Fingerprint, AppSettings, OSKind } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
 // ---------- 配置 ----------
@@ -785,7 +785,8 @@ function buildApiRouter(): express.Router {
   // 生成随机指纹
   router.post('/fingerprint/random', authMiddleware, (req: Request, res: Response) => {
     const os = (req.body || {}).os
-    res.json(randomFingerprint(os === 'mac' ? 'mac' : os === 'windows' ? 'windows' : undefined))
+    const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
+    res.json(randomFingerprint(valid as OSKind | undefined))
   })
 
   // ===== 代理 =====
@@ -1663,7 +1664,8 @@ function buildApiRouter(): express.Router {
   // --- 指纹：随机生成 ---
   v1.post('/fingerprint/random', async (req: Request, res: Response) => {
     const os = (req.body || {}).os
-    res.json({ code: 0, data: randomFingerprint(os === 'mac' ? 'mac' : os === 'windows' ? 'windows' : undefined) })
+    const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
+    res.json({ code: 0, data: randomFingerprint(valid as OSKind | undefined) })
   })
 
   // --- 账号：列表 / 创建 / 更新 / 删除 ---

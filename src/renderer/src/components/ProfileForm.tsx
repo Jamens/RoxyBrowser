@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
+import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind } from '@shared/types'
+import { osLabel } from '@shared/types'
 import { getTimezoneOffsetMinutes } from '@shared/fingerprint'
 
 const PLATFORMS = [
@@ -187,11 +188,16 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     <Select
                       value={fp.os}
                       style={{ width: 200 }}
-                      onChange={(v) => setFpField('os', v)}
-                      options={[
-                        { value: 'windows', label: 'Windows' },
-                        { value: 'mac', label: 'macOS' }
-                      ]}
+                      onChange={(v) => {
+                        // 移动端设备池与桌面差异大（UA/平台/GPU/触摸/像素比联动），
+                        // 切到 Android/iOS 时整套重新生成，避免手工拼出不一致的指纹
+                        if (v === 'android' || v === 'ios') {
+                          api.post<Fingerprint>('/api/fingerprint/random', { os: v }).then(setFp).catch(() => message.error('生成失败'))
+                        } else {
+                          setFpField('os', v)
+                        }
+                      }}
+                      options={(['windows', 'mac', 'android', 'ios'] as OSKind[]).map((o) => ({ value: o, label: osLabel(o) }))}
                     />
                   </Form.Item>
                   <Form.Item label="User Agent">
@@ -231,10 +237,10 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                   </Form.Item>
                   <Space size="middle" style={{ display: 'flex' }} wrap>
                     <Form.Item label="屏幕宽" style={{ marginBottom: 0 }}>
-                      <InputNumber min={800} max={7680} value={fp.screenWidth} onChange={(v) => setFpField('screenWidth', v || 1920)} />
+                      <InputNumber min={320} max={7680} value={fp.screenWidth} onChange={(v) => setFpField('screenWidth', v || 1920)} />
                     </Form.Item>
                     <Form.Item label="屏幕高" style={{ marginBottom: 0 }}>
-                      <InputNumber min={600} max={4320} value={fp.screenHeight} onChange={(v) => setFpField('screenHeight', v || 1080)} />
+                      <InputNumber min={480} max={4320} value={fp.screenHeight} onChange={(v) => setFpField('screenHeight', v || 1080)} />
                     </Form.Item>
                   </Space>
                   <div style={{ marginTop: 16 }}>

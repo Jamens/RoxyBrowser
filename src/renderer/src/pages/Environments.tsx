@@ -13,6 +13,7 @@ import dayjs from 'dayjs'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
 import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
+import { osLabel } from '@shared/types'
 
 export default function Environments() {
   const [list, setList] = useState<ProfileDTO[]>([])
@@ -234,7 +235,7 @@ export default function Environments() {
       render: (fp: ProfileDTO['fingerprint']) => (
         <Tooltip title={fp.userAgent}>
           <Space size={4} wrap>
-            <Tag>{fp.os === 'mac' ? 'macOS' : 'Windows'}</Tag>
+            <Tag>{osLabel(fp.os)}</Tag>
             <Tag color="geekblue">{fp.timezone.split('/').pop()}</Tag>
             <Tag color="purple">{fp.languages[0]}</Tag>
           </Space>

@@ -5,6 +5,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
 import type { ProfileDTO, GroupDTO, ProxyDTO } from '@shared/types'
+import { osLabel } from '@shared/types'
 
 export default function Templates() {
   const [list, setList] = useState<ProfileDTO[]>([])
@@ -56,7 +57,7 @@ export default function Templates() {
       dataIndex: 'fingerprint',
       render: (fp: ProfileDTO['fingerprint']) => (
         <Space size={4} wrap>
-          <Tag>{fp.os === 'mac' ? 'macOS' : 'Windows'}</Tag>
+          <Tag>{osLabel(fp.os)}</Tag>
           <Tag color="geekblue">{fp.timezone.split('/').pop()}</Tag>
           <Tag color="purple">{fp.languages[0]}</Tag>
           <Tag color="cyan">{fp.screenWidth}×{fp.screenHeight}</Tag>

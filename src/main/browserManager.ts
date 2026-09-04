@@ -138,6 +138,8 @@ export async function openWindow(profileId: number): Promise<void> {
 
   const fp = profile.fingerprint as unknown as Fingerprint
   const fpArg = Buffer.from(JSON.stringify(fp), 'utf8').toString('base64')
+  // 移动端指纹按手机尺寸开窗
+  const isMobile = fp.os === 'android' || fp.os === 'ios'
 
   // 独立 session：每个环境独立 Cookie / 缓存 / 存储
   const ses = session.fromPartition(`persist:env-${profileId}`)
@@ -157,10 +159,10 @@ export async function openWindow(profileId: number): Promise<void> {
   }
 
   const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 900,
-    minHeight: 600,
+    width: isMobile ? 430 : 1280,
+    height: isMobile ? 900 : 820,
+    minWidth: isMobile ? 320 : 900,
+    minHeight: isMobile ? 480 : 600,
     show: false,
     backgroundColor: '#ffffff',
     title: `${profile.name} — RoxyBrowser Clone`,

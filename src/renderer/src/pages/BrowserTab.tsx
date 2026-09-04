@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Input, Tag, Typography, Space, Card } from 'antd'
 import { GlobalOutlined, ArrowRightOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
+import { osLabel } from '@shared/types'
 
 interface ProfileInfo {
   id: number
@@ -117,7 +118,7 @@ export default function BrowserTab() {
               当前环境指纹摘要（右键页面可返回 / 刷新 / 打开开发者工具）
             </Typography.Text>
             <div style={{ marginTop: 8 }}>
-              <Tag>{info.fingerprint.os === 'mac' ? 'macOS' : 'Windows'}</Tag>
+              <Tag>{osLabel(info.fingerprint.os)}</Tag>
               <Tag color="geekblue">{info.fingerprint.timezone}</Tag>
               <Tag color="purple">{info.fingerprint.languages.join(', ')}</Tag>
               <Tag color="cyan">
