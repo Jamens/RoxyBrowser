@@ -1,8 +1,44 @@
 import { BrowserWindow, ipcMain, session, shell, Menu } from 'electron'
 import { join } from 'path'
 import { AppDataSource } from './server'
-import { ProfileEntity, ProxyEntity } from './entities'
+import { ProfileEntity, ProxyEntity, CookieEntity } from './entities'
 import type { Fingerprint } from '../shared/types'
+
+// 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
+async function setElectronCookie(ses: Electron.Session, c: CookieEntity) {
+  const host = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain
+  const url = `http${c.secure ? 's' : ''}://${host}${c.path || '/'}`
+  try {
+    await ses.cookies.set({
+      url,
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path || '/',
+      secure: !!c.secure,
+      httpOnly: !!c.httpOnly,
+      sameSite: (c.sameSite as 'unspecified' | 'no_restriction' | 'lax' | 'strict') || 'unspecified',
+      expirationDate: c.expirationDate ? Math.floor(new Date(c.expirationDate).getTime() / 1000) : undefined
+    })
+  } catch {
+    /* 单条 Cookie 写入失败（如 domain 非法）不影响其余 */
+  }
+}
+
+/** 在环境打开（或立即应用）时，把该环境所有持久化 Cookie 注入到对应 session */
+export async function seedCookies(ses: Electron.Session, profileId: number): Promise<number> {
+  const repo = AppDataSource.getRepository(CookieEntity)
+  const list = await repo.find({ where: { profileId } })
+  for (const c of list) await setElectronCookie(ses, c)
+  return list.length
+}
+
+/** 立即把 Cookie 应用到已打开的环境窗口；环境未运行则抛错（提示下次打开自动注入） */
+export async function applyCookies(profileId: number): Promise<number> {
+  const win = windows.get(profileId)
+  if (!win || win.isDestroyed()) throw new Error('环境未运行，无法立即应用（将在下次打开时自动注入）')
+  return seedCookies(win.webContents.session, profileId)
+}
 
 const windows = new Map<number, BrowserWindow>()
 // BrowserWindow.getTitle() 返回的是页面 <title>，所有环境窗口都一样，
@@ -105,6 +141,13 @@ export async function openWindow(profileId: number): Promise<void> {
       proxyRules,
       proxyBypassRules: '<local>;127.0.0.1;localhost'
     })
+  }
+
+  // 注入该环境持久化的 Cookie（在导航前写入 session，确保首屏即带登录态）
+  try {
+    await seedCookies(ses, profileId)
+  } catch {
+    /* Cookie 注入失败不阻断环境打开 */
   }
 
   // 环境内新窗口也在同一 BrowserWindow 打开

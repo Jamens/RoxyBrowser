@@ -23,6 +23,7 @@ import {
   ProxyEntity,
   ProfileEntity,
   AccountEntity,
+  CookieEntity,
   OperationLogEntity,
   ApiTokenEntity,
   AppSettingsEntity
@@ -994,6 +995,285 @@ function buildApiRouter(): express.Router {
     res.json({ text, count: list.length })
   })
 
+  // ===== Cookie 管理（按环境隔离，团队维度鉴权） =====
+  // 注入发生在环境打开时（browserManager.openWindow 读取并写入 session.cookies）；
+  // 这里负责 Cookie 的持久化、增删改查，以及「立即应用到已打开窗口」。
+
+  function mapCookie(c: CookieEntity) {
+    return {
+      id: c.id,
+      profileId: c.profileId,
+      domain: c.domain,
+      name: c.name,
+      value: c.value,
+      path: c.path || '/',
+      secure: !!c.secure,
+      httpOnly: !!c.httpOnly,
+      sameSite: (c.sameSite as 'no_restriction' | 'lax' | 'strict' | 'unspecified') || 'unspecified',
+      expirationDate: c.expirationDate ? new Date(c.expirationDate).toISOString() : null,
+      hostOnly: !!c.hostOnly,
+      createdAt: new Date(c.createdAt).toISOString()
+    }
+  }
+
+  // 解析多种格式的 Cookie 文本：Netscape / Set-Cookie（name=value; Domain=...）/ EditThisCookie JSON
+  type SameSiteLike = 'no_restriction' | 'lax' | 'strict' | 'unspecified'
+  function parseCookieText(text: string): { cookies: Partial<CookieEntity>[]; failed: string[] } {
+    const failed: string[] = []
+    const cookies: Partial<CookieEntity>[] = []
+    const trimmed = text.replace(/^﻿/, '').trim()
+    if (!trimmed) return { cookies, failed }
+
+    // 整段是 JSON（数组或对象）→ EditThisCookie / 导出格式
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      try {
+        const arr = Array.isArray(JSON.parse(trimmed)) ? JSON.parse(trimmed) : [JSON.parse(trimmed)]
+        for (const o of arr) {
+          if (!o || !o.name) {
+            failed.push(JSON.stringify(o).slice(0, 80))
+            continue
+          }
+          cookies.push({
+            domain: o.domain || '',
+            name: String(o.name),
+            value: o.value != null ? String(o.value) : '',
+            path: o.path || '/',
+            secure: !!o.secure,
+            httpOnly: !!o.httpOnly,
+            sameSite: o.sameSite || 'unspecified',
+            expirationDate: o.expirationDate ? new Date(o.expirationDate) : null,
+            hostOnly: o.hostOnly == null ? true : !!o.hostOnly
+          })
+        }
+      } catch {
+        failed.push('JSON 解析失败')
+      }
+      return { cookies, failed }
+    }
+
+    for (let raw of text.split(/\r?\n/)) {
+      raw = raw.trim()
+      if (!raw || raw.startsWith('# ') || raw.startsWith('//')) continue
+      let line = raw
+      let httpOnly = false
+      if (line.startsWith('#HttpOnly_')) {
+        httpOnly = true
+        line = line.slice('#HttpOnly_'.length)
+      }
+
+      // Netscape 格式：7 个 tab 分隔字段
+      const tab = line.split('\t')
+      if (tab.length >= 7) {
+        const [domain, flag, path, secureFlag, exp, name, value] = tab
+        const expNum = Number(exp)
+        cookies.push({
+          domain,
+          name,
+          value: value || '',
+          path: path || '/',
+          secure: /^TRUE$/i.test(secureFlag),
+          httpOnly,
+          sameSite: 'unspecified',
+          // flag=TRUE 表示包含子域（hostOnly=false）
+          hostOnly: !/^TRUE$/i.test(flag),
+          expirationDate: expNum > 0 ? new Date(expNum * 1000) : null
+        })
+        continue
+      }
+
+      // Set-Cookie 风格：name=value; Domain=...; Path=...; Expires=...; Secure; HttpOnly; SameSite=...
+      const semi = line.split(';').map((s) => s.trim()).filter(Boolean)
+      if (semi.length && semi[0].includes('=')) {
+        const [name, ...rest] = semi[0].split('=')
+        const cookie: Partial<CookieEntity> = {
+          name: name.trim(),
+          value: rest.join('=').trim(),
+          domain: '',
+          path: '/',
+          secure: false,
+          httpOnly: false,
+          sameSite: 'unspecified',
+          hostOnly: true,
+          expirationDate: null
+        }
+        for (let i = 1; i < semi.length; i++) {
+          const seg = semi[i]
+          const eq = seg.indexOf('=')
+          const key = (eq === -1 ? seg : seg.slice(0, eq)).trim().toLowerCase()
+          const val = eq === -1 ? '' : seg.slice(eq + 1).trim()
+          if (key === 'domain') {
+            cookie.domain = val
+            // 带前导点（.example.com）表示含子域 → hostOnly=false；不带点表示仅主机
+            cookie.hostOnly = !val.startsWith('.')
+          } else if (key === 'path') cookie.path = val || '/'
+          else if (key === 'expires') {
+            const t = Date.parse(val)
+            if (!Number.isNaN(t)) cookie.expirationDate = new Date(t)
+          } else if (key === 'max-age') {
+            const n = Number(val)
+            if (!Number.isNaN(n)) cookie.expirationDate = new Date(Date.now() + n * 1000)
+          } else if (key === 'secure') cookie.secure = true
+          else if (key === 'httponly') cookie.httpOnly = true
+          else if (key === 'samesite') cookie.sameSite = (val.toLowerCase() as SameSiteLike) || 'unspecified'
+        }
+        if (!cookie.domain) {
+          failed.push(raw.slice(0, 80))
+          continue
+        }
+        cookies.push(cookie)
+        continue
+      }
+
+      failed.push(raw.slice(0, 80))
+    }
+    return { cookies, failed }
+  }
+
+  // 列出某环境的 Cookie（必须传 profileId，且属于当前团队）
+  router.get('/cookies', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number(req.query.profileId)
+    if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const list = await repo.find({ where: { profileId, teamId: req.tid! }, order: { domain: 'ASC', name: 'ASC' } })
+    res.json(list.map(mapCookie))
+  })
+
+  // 新增 Cookie
+  router.post('/cookies', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), teamId: req.tid! } })
+    if (!profile) return res.status(400).json({ message: '环境不存在' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.save(
+      repo.create({
+        teamId: req.tid!,
+        profileId: profile.id,
+        domain: (req.body.domain || '').trim(),
+        name: (req.body.name || '').trim(),
+        value: req.body.value == null ? '' : String(req.body.value),
+        path: req.body.path || '/',
+        secure: !!req.body.secure,
+        httpOnly: !!req.body.httpOnly,
+        sameSite: req.body.sameSite || 'unspecified',
+        expirationDate: req.body.expirationDate ? new Date(req.body.expirationDate) : null,
+        hostOnly: req.body.hostOnly == null ? true : !!req.body.hostOnly
+      })
+    )
+    await writeLog(req, 'create_cookie', `环境「${profile.name}」新增 Cookie ${c.domain} / ${c.name}`)
+    res.json(mapCookie(c))
+  })
+
+  // 清空某环境的全部 Cookie
+  router.delete('/cookies', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number(req.query.profileId)
+    if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const r = await repo.delete({ profileId, teamId: req.tid! })
+    await writeLog(req, 'clear_cookies', `清空环境「${profile.name}」的 Cookie（${r.affected || 0} 条）`)
+    res.json({ ok: true, deleted: r.affected || 0 })
+  })
+
+  // 批量导入 Cookie 文本（Netscape / Set-Cookie / JSON）
+  router.post('/cookies/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number(req.body.profileId)
+    const text: string = req.body?.text || ''
+    if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    if (!text.trim()) return res.status(400).json({ message: '请粘贴 Cookie 文本' })
+    const { cookies, failed } = parseCookieText(text)
+    if (!cookies.length) return res.status(400).json({ message: '未解析到任何 Cookie', failed })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const saved = await repo.save(
+      cookies.map((c) =>
+        repo.create({
+          teamId: req.tid!,
+          profileId,
+          domain: (c.domain || '').trim(),
+          name: (c.name || '').trim(),
+          value: c.value == null ? '' : String(c.value),
+          path: c.path || '/',
+          secure: !!c.secure,
+          httpOnly: !!c.httpOnly,
+          sameSite: c.sameSite || 'unspecified',
+          expirationDate: c.expirationDate ? new Date(c.expirationDate) : null,
+          hostOnly: c.hostOnly == null ? true : !!c.hostOnly
+        })
+      )
+    )
+    await writeLog(req, 'import_cookies', `环境「${profile.name}」导入 ${saved.length} 条 Cookie`)
+    res.json({ imported: saved.length, failed })
+  })
+
+  // 导出为 Netscape cookie 文本
+  router.get('/cookies/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number(req.query.profileId)
+    if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const list = await repo.find({ where: { profileId, teamId: req.tid! }, order: { domain: 'ASC', name: 'ASC' } })
+    const text = list
+      .map((c) => {
+        const flag = c.hostOnly ? 'FALSE' : 'TRUE'
+        const exp = c.expirationDate ? Math.floor(new Date(c.expirationDate).getTime() / 1000) : 0
+        return [c.domain, flag, c.path || '/', c.secure ? 'TRUE' : 'FALSE', exp, c.name, c.value].join('\t')
+      })
+      .join('\n')
+    res.json({ text, count: list.length })
+  })
+
+  // 立即把 Cookie 写入已打开的环境窗口（未打开则提示下次打开时自动注入）
+  router.post('/cookies/apply', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number(req.query.profileId || req.body.profileId)
+    if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    try {
+      const { applyCookies } = await import('./browserManager')
+      const n = await applyCookies(profileId)
+      await writeLog(req, 'apply_cookies', `环境「${profile.name}」立即注入 ${n} 条 Cookie`)
+      res.json({ ok: true, applied: n })
+    } catch (e) {
+      res.status(400).json({ message: (e as Error).message })
+    }
+  })
+
+  router.put('/cookies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid! } })
+    if (!c) return res.status(404).json({ message: 'Cookie 不存在' })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profile = await profileRepo.findOne({ where: { id: c.profileId, teamId: req.tid! } })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    for (const f of ['domain', 'name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'expirationDate', 'hostOnly'] as const) {
+      if (f in req.body) {
+        if (f === 'expirationDate') (c as any)[f] = req.body[f] ? new Date(req.body[f]) : null
+        else if (f === 'value') (c as any)[f] = req.body[f] == null ? '' : String(req.body[f])
+        else (c as any)[f] = req.body[f]
+      }
+    }
+    await repo.save(c)
+    res.json(mapCookie(c))
+  })
+
+  router.delete('/cookies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid! } })
+    if (!c) return res.status(404).json({ message: 'Cookie 不存在' })
+    await repo.remove(c)
+    res.json({ ok: true })
+  })
+
   // ===== 团队 =====
   router.get('/team', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const teamRepo = AppDataSource.getRepository(TeamEntity)
@@ -1420,6 +1700,7 @@ export async function bootstrap(): Promise<string> {
       ProxyEntity,
       ProfileEntity,
       AccountEntity,
+      CookieEntity,
       OperationLogEntity,
       ApiTokenEntity,
       AppSettingsEntity

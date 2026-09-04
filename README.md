@@ -113,6 +113,20 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 支持**批量导入 / 导出**：可按「环境 + 平台/账号/密码」表格粘贴或上传文件导入，也可将某环境下的账号一键导出。
 
+### 7.1 Cookie 管理（按环境隔离）
+
+每个浏览器环境的 Cookie 独立持久化、独立注入，确保多账号登录态互不串号：
+
+- **管理界面**：在右上角选择环境后，可对该环境的 Cookie 做增 / 删 / 改 / 清空，表格展示域名、名称、值、路径、Secure / HttpOnly / SameSite / 含子域属性与过期时间。
+- **自动注入**：环境每次打开时，自动将该环境保存的 Cookie 写入对应 `session`，首屏即带登录态；环境运行中也可点击「立即应用」热更新到运行窗口。
+- **批量导入**：支持三种业界通用格式——
+  - Netscape cookie 文件（`domain\tflag\tpath\tsecure\texp\tname\tvalue`，`#HttpOnly_` 前缀识别 HttpOnly）
+  - Set-Cookie 串（`name=value; Domain=...; Path=...; Expires=...; Secure; HttpOnly; SameSite=...`）
+  - EditThisCookie / 本系统导出 的 JSON 数组
+- **导出**：一键导出为 Netscape 文本，便于在浏览器插件 / 抓包工具间迁移。
+
+后端接口：`GET/POST /api/cookies`、`PUT/DELETE /api/cookies/:id`、`DELETE /api/cookies`（清空）、`POST /api/cookies/import`、`GET /api/cookies/export`、`POST /api/cookies/apply`。
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。
@@ -153,15 +167,15 @@ src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
 │   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
-│   ├── entities.ts           # 9 张数据表实体
-│   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、同步转发
+│   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
+│   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发
 │   └── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
 │   └── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池）
 └── renderer/src/             # React 前端
-    ├── pages/                # 登录、环境管理、模板、代理、账号、团队、日志、API、设置、新标签页
+    ├── pages/                # 登录、环境管理、模板、代理、账号、Cookie、团队、日志、API、设置、新标签页
     ├── components/ThemeSwitch.tsx  # 三态主题开关（白天/黑夜/自动）
     └── theme.ts              # 主题解析：resolveDark / useIsDark（共享单一定时器）
 ```

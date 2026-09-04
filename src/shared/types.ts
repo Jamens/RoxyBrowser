@@ -95,6 +95,26 @@ export interface AccountDTO {
   createdAt: string
 }
 
+// Cookie 同站点策略（与 Electron session.cookies.set 取值一致）
+export type SameSite = 'no_restriction' | 'lax' | 'strict' | 'unspecified'
+
+export interface CookieDTO {
+  id: number
+  profileId: number
+  profileName?: string
+  domain: string
+  name: string
+  value: string
+  path: string
+  secure: boolean
+  httpOnly: boolean
+  sameSite: SameSite
+  // ISO 字符串，空表示会话级
+  expirationDate: string | null
+  hostOnly: boolean
+  createdAt: string
+}
+
 export interface LogDTO {
   id: number
   username: string

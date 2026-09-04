@@ -196,6 +196,54 @@ export class ProfileEntity {
   updatedAt: Date
 }
 
+@Entity('cookies')
+@Index(['teamId'])
+@Index(['profileId'])
+export class CookieEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int' })
+  profileId: number
+
+  // 域名，可带前导点（.example.com 表示包含子域）
+  @Column({ type: 'varchar', length: 255, default: '' })
+  domain: string
+
+  @Column({ type: 'varchar', length: 255, default: '' })
+  name: string
+
+  @Column({ type: 'text', default: '' })
+  value: string
+
+  @Column({ type: 'varchar', length: 512, default: '/' })
+  path: string
+
+  @Column({ type: 'tinyint', default: 0 })
+  secure: boolean
+
+  @Column({ type: 'tinyint', default: 0 })
+  httpOnly: boolean
+
+  // 'no_restriction' | 'lax' | 'strict' | 'unspecified'
+  @Column({ type: 'varchar', length: 16, default: 'unspecified' })
+  sameSite: string
+
+  // 过期时间（绝对时间），为空表示会话级 Cookie
+  @Column({ type: 'datetime', nullable: true })
+  expirationDate: Date | null
+
+  // 仅作用于精确主机（不含子域）
+  @Column({ type: 'tinyint', default: 1 })
+  hostOnly: boolean
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
 @Entity('accounts')
 @Index(['profileId'])
 export class AccountEntity {
