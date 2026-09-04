@@ -3,6 +3,10 @@ out
 out-tsc
 dist
 release
+release-nsis/
+*.nsis.7z
+_tmp_*
+electron.vite.config.*.mjs
 *.log
 .DS_Store
 list.json
