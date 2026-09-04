@@ -28,7 +28,7 @@ import {
   AppSettingsEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint } from '../shared/fingerprint'
-import type { Fingerprint } from '../shared/types'
+import type { Fingerprint, AppSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
 // ---------- 配置 ----------
@@ -190,7 +190,8 @@ function httpGetViaProxy(
 }
 
 async function checkProxy(
-  proxy: ProxyEntity
+  proxy: ProxyEntity,
+  timeoutMs?: number
 ): Promise<{ ok: boolean; country: string; region: string; city: string; isp: string; exitIp: string; latency: number }> {
   try {
     const { body, ms } = await httpGetViaProxy(
@@ -201,7 +202,8 @@ async function checkProxy(
         port: proxy.port,
         username: proxy.username,
         password: proxy.password
-      }
+      },
+      timeoutMs
     )
     const data = JSON.parse(body)
     if (data.status !== 'success')
@@ -218,6 +220,57 @@ async function checkProxy(
   } catch {
     return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: 0 }
   }
+}
+
+// 读取合并后的全局设置（兜底默认值）
+async function getSettings(): Promise<AppSettings> {
+  const repo = AppDataSource.getRepository(AppSettingsEntity)
+  const row = await repo.findOne({ where: { key: 'global' } })
+  return { ...DEFAULT_SETTINGS, ...((row?.settings as Partial<AppSettings>) || {}) }
+}
+
+// 代理定时巡检调度器
+let proxyCheckTimer: ReturnType<typeof setInterval> | null = null
+async function runProxyCheckAll(): Promise<void> {
+  const repo = AppDataSource.getRepository(ProxyEntity)
+  const list = await repo.find()
+  if (list.length === 0) return
+  const settings = await getSettings()
+  const timeout = (settings.proxyCheckTimeout as number) * 1000
+  for (const p of list) {
+    try {
+      const result = await checkProxy(p, timeout)
+      p.status = result.ok ? 'active' : 'invalid'
+      p.latency = result.ok ? result.latency : null
+      p.country = result.country
+      p.region = result.region
+      p.city = result.city
+      p.isp = result.isp
+      p.exitIp = result.exitIp
+      p.lastCheckAt = new Date()
+      await repo.save(p)
+    } catch (e) {
+      console.error(`[roxy] 巡检代理 #${p.id} 失败:`, (e as Error).message)
+    }
+  }
+  console.log(`[roxy] 定时巡检完成，共检测 ${list.length} 个代理`)
+}
+
+async function startProxyCheckScheduler(): Promise<void> {
+  if (proxyCheckTimer) {
+    clearInterval(proxyCheckTimer)
+    proxyCheckTimer = null
+  }
+  const settings = await getSettings()
+  const interval = settings.proxyCheckInterval as number
+  if (!interval || interval <= 0) {
+    console.log('[roxy] 代理定时巡检未启用（间隔为 0）')
+    return
+  }
+  proxyCheckTimer = setInterval(() => {
+    runProxyCheckAll().catch((e) => console.error('[roxy] 定时巡检异常:', e))
+  }, interval * 60 * 1000)
+  console.log(`[roxy] 代理定时巡检已启动，间隔 ${interval} 分钟`)
 }
 
 // 统计每个代理被多少个环境绑定（proxyId 计数）
@@ -702,7 +755,8 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProxyEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
     if (!p) return res.status(404).json({ message: '代理不存在' })
-    const result = await checkProxy(p)
+    const settings = await getSettings()
+    const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
     p.status = result.ok ? 'active' : 'invalid'
     p.latency = result.ok ? result.latency : null
     p.country = result.country
@@ -1052,6 +1106,8 @@ function buildApiRouter(): express.Router {
     if (!row) row = repo.create({ key: 'global', settings: merged })
     else row.settings = merged
     await repo.save(row)
+    // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
+    startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
     res.json({ ok: true, settings: merged })
   })
 
@@ -1430,5 +1486,9 @@ export async function bootstrap(): Promise<string> {
   }
 
   console.log(`[roxy] API 服务已启动: ${apiBase}`)
+
+  // 5. 启动代理定时巡检调度（间隔由设置决定，0 表示关闭）
+  startProxyCheckScheduler().catch((e) => console.error('[roxy] 启动巡检调度失败:', e))
+
   return apiBase
 }

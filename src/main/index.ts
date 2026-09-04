@@ -111,31 +111,39 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
+    // 1. 启动本地 API 服务 + MySQL（这一步失败是致命的，整体退出）
+    let apiBase: string
     try {
-      // 1. 启动本地 API 服务 + MySQL
-      const apiBase = await bootstrap()
-      process.env.ROXY_API_BASE = apiBase
-
-      // 2. 注入浏览器窗口桥 + 同步开关
-      setBrowserBridge({ openWindow, closeWindow })
-      setSyncToggle(({ enabled, ids }) => {
-        setSyncMode(enabled)
-        // ids 为空数组 = 同步到全部已打开窗口
-        setSyncTargets(ids && ids.length ? ids : [])
-      })
-      setWindowsProvider(getRunningWindows)
-
-      // 3. 托盘（支持关闭到后台常驻）
-      createTray(apiBase)
-
-      // 4. 打开主窗口
-      await createMainWindow()
+      apiBase = await bootstrap()
     } catch (err) {
       const message = (err as Error).message || String(err)
       console.error('[roxy] 启动失败:', message)
       const { dialog } = require('electron') as typeof import('electron')
       dialog.showErrorBox('RoxyBrowser Clone 启动失败', `无法连接数据库或启动服务：\n\n${message}\n\n请确认 MySQL 已启动（默认 127.0.0.1:3307，root/1234560）`)
       app.quit()
+      return
+    }
+    process.env.ROXY_API_BASE = apiBase
+
+    // 2. 注入浏览器窗口桥 + 同步开关
+    setBrowserBridge({ openWindow, closeWindow })
+    setSyncToggle(({ enabled, ids }) => {
+      setSyncMode(enabled)
+      // ids 为空数组 = 同步到全部已打开窗口
+      setSyncTargets(ids && ids.length ? ids : [])
+    })
+    setWindowsProvider(getRunningWindows)
+
+    // 3. 托盘（支持关闭到后台常驻）
+    createTray(apiBase)
+
+    // 4. 打开主窗口
+    //    注意：GUI 窗口打开失败（如无显示器环境）不影响本地 API / 自动化接口继续运行，
+    //    因此这里单独兜底，避免把整个进程带崩。
+    try {
+      await createMainWindow()
+    } catch (err) {
+      console.error('[roxy] 主窗口打开失败，本地 API 继续运行:', (err as Error).message)
     }
 
     app.on('activate', () => {
