@@ -14,4 +14,8 @@ list2.json
 logs.json
 tk.json
 v1.json
+# 凭证 / 运行时产物（切勿提交）
+login.json
+exp.json
+pex.json
 *.tsbuildinfo
