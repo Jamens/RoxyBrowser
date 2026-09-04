@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Layout, Menu, Dropdown, Space, Typography, message } from 'antd'
+import { Layout, Menu, Dropdown, Space, Typography, message, theme } from 'antd'
 import {
   GlobalOutlined,
   AppstoreOutlined,
@@ -14,6 +14,7 @@ import {
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
+import ThemeSwitch from '../components/ThemeSwitch'
 
 const { Sider, Header, Content } = Layout
 
@@ -32,6 +33,7 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)
+  const { token } = theme.useToken()
 
   useEffect(() => {
     if (!getToken()) {
@@ -75,14 +77,15 @@ export default function AppLayout() {
       <Layout>
         <Header
           style={{
-            background: '#fff',
+            background: token.colorBgContainer,
             display: 'flex',
             justifyContent: 'flex-end',
             alignItems: 'center',
-            borderBottom: '1px solid #eee',
+            borderBottom: `1px solid ${token.colorBorderSecondary}`,
             padding: '0 24px'
           }}
         >
+          <ThemeSwitch />
           <Dropdown
             menu={{
               items: [
@@ -101,7 +104,7 @@ export default function AppLayout() {
             </Space>
           </Dropdown>
         </Header>
-        <Content style={{ padding: 20, overflow: 'auto', background: '#f5f6f8' }}>
+        <Content style={{ padding: 20, overflow: 'auto', background: token.colorBgLayout }}>
           <Outlet />
         </Content>
       </Layout>

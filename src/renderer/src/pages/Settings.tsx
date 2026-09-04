@@ -72,12 +72,12 @@ export default function Settings() {
         </Space>
 
         <Divider>界面</Divider>
-        <Form.Item name="theme" label="主题" extra="跟随系统将随操作系统明暗自动切换">
+        <Form.Item name="theme" label="主题" extra="自动：每天 7:00-18:00 为白天，其余时间为黑夜；也可在右上角随时切换">
           <Select
             options={[
-              { value: 'system', label: '跟随系统' },
-              { value: 'light', label: '浅色' },
-              { value: 'dark', label: '深色' }
+              { value: 'light', label: '白天（浅色）' },
+              { value: 'dark', label: '黑夜（深色）' },
+              { value: 'auto', label: '自动（按时间）' }
             ]}
           />
         </Form.Item>
