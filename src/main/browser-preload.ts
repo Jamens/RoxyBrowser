@@ -24,6 +24,9 @@
     devicePixelRatio?: number
   }
 
+  // ipcRenderer 提前到最前：起始页的 window.roxy.navigate 闭包要用它
+  const { ipcRenderer } = require('electron') as typeof import('electron')
+
   const fpArg = process.argv.find((a: string) => a.startsWith('--roxy-fp='))
   if (!fpArg) return
   const fp: Fingerprint = JSON.parse(Buffer.from(fpArg.slice('--roxy-fp='.length), 'base64').toString('utf8'))
@@ -60,7 +63,17 @@
       location.hostname === '127.0.0.1'
     ) {
       def(window, 'roxy', {
-        apiBase: process.env.ROXY_API_BASE || 'http://127.0.0.1:39100'
+        apiBase: process.env.ROXY_API_BASE || 'http://127.0.0.1:39100',
+        // 起始页导航交给主进程执行：环境窗口没有地址栏/进度条，页面自己改
+        // location.href 时一旦加载失败（多为代理不通）就只是停住不动，
+        // 用户看到的就是「点了没反应」。走主进程才能拿到失败原因并回传。
+        navigate: (url: string) => {
+          try {
+            ipcRenderer.send('env-navigate', url)
+          } catch {
+            window.location.href = url
+          }
+        }
       })
     }
   } catch {
@@ -245,8 +258,6 @@
   // 1) 定位不靠裸坐标（各窗口尺寸/布局可能不同），而是「稳定 selector + 元素内相对坐标」
   // 2) 应用端不是一次性 .click()，而是按缓动插值逐点派发真实 Pointer/Mouse 事件，产生拟人移动轨迹
   // 3) 回环抑制用时间窗（不是布尔量），否则动画派发期间会被自己的监听器二次采集
-
-  const { ipcRenderer } = require('electron') as typeof import('electron')
 
   let suppressUntil = 0
   const suppress = (ms: number) => {

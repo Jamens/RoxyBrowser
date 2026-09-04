@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Input, Tag, Typography, Space, Card } from 'antd'
+import { Input, Tag, Typography, Space, Card, Alert, Spin } from 'antd'
 import { GlobalOutlined, ArrowRightOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useSearchParams } from 'react-router-dom'
 import { osLabel, searchUrlFor, SEARCH_ENGINES, type SearchEngine } from '@shared/types'
 import type { MessageKey } from '../i18n/messages'
-import { useI18n } from '../i18n'
+import { useI18n, type TranslateFn } from '../i18n'
 
 interface ProfileInfo {
   id: number
@@ -37,12 +37,45 @@ const QUICK_LINKS: { name: string; url: string; key?: MessageKey }[] = [
   { name: '', url: 'https://browserleaks.com/canvas', key: 'browser.fpCheck' }
 ]
 
+/** Chromium 网络错误码 → 人话。绝大多数打开失败其实都是代理不通 */
+function navErrorReason(code: string, t: TranslateFn): string {
+  if (code.startsWith('ERR_CERT')) return t('browser.err.cert')
+  if (code === 'ERR_INTERNET_DISCONNECTED' || code === 'ERR_NETWORK_CHANGED') return t('browser.err.offline')
+  if (code === 'ERR_NAME_NOT_RESOLVED' || code === 'ERR_NAME_RESOLUTION_FAILED') return t('browser.err.dns')
+  if (code === 'ERR_PROXY_AUTH_UNSUPPORTED' || code === 'ERR_PROXY_AUTH_REQUESTED') return t('browser.err.proxyAuth')
+  if (code === 'ERR_CONNECTION_TIMED_OUT' || code === 'ERR_TIMED_OUT') return t('browser.err.timeout')
+  if (
+    code.startsWith('ERR_PROXY') ||
+    code === 'ERR_TUNNEL_CONNECTION_FAILED' ||
+    code === 'ERR_NO_SUPPORTED_PROXIES' ||
+    code === 'ERR_MANDATORY_PROXY_CONFIGURATION_FAILED'
+  ) {
+    return t('browser.err.proxy')
+  }
+  if (
+    code === 'ERR_CONNECTION_RESET' ||
+    code === 'ERR_CONNECTION_REFUSED' ||
+    code === 'ERR_CONNECTION_CLOSED' ||
+    code === 'ERR_CONNECTION_ABORTED' ||
+    code === 'ERR_EMPTY_RESPONSE'
+  ) {
+    return t('browser.err.reset')
+  }
+  return t('browser.err.unknown', { code })
+}
+
 export default function BrowserTab() {
   const [params] = useSearchParams()
   const profileId = params.get('profileId')
   const { t } = useI18n()
   const [info, setInfo] = useState<ProfileInfo | null>(null)
   const [url, setUrl] = useState('')
+  const [pending, setPending] = useState('')
+  const [hint, setHint] = useState('')
+
+  // 主进程在导航失败后回到起始页时带上的错误码与目标地址
+  const navError = params.get('navError') || ''
+  const navUrl = params.get('navUrl') || ''
 
   // window.roxy 由 browser-preload 仅在应用自身页面（file:// 或 localhost）上注入，
   // 端口递增时也是真实值；取不到时回落默认端口
@@ -69,14 +102,27 @@ export default function BrowserTab() {
   const engine: SearchEngine = info?.searchEngine || 'bing'
   const engineLabel = SEARCH_ENGINES.find((e) => e.value === engine)?.label || 'Bing'
 
-  const navigate = (target?: string) => {
-    let u = (target ?? url).trim()
-    if (!u) return
-    if (!/^https?:\/\//i.test(u)) {
-      // 形如域名的输入直接补协议访问，否则按设置的搜索引擎搜索
-      u = u.includes('.') && !u.includes(' ') ? `https://${u}` : searchUrlFor(engine, u)
+  const go = (target?: string) => {
+    const raw = (target ?? url).trim()
+    if (!raw) {
+      // 空输入时给出提示，而不是静默什么都不做（这是「点了没反应」的来源之一）
+      setHint(t('browser.emptyInput'))
+      return
     }
-    window.location.href = u
+    setHint('')
+    // 形如域名的输入直接补协议访问，否则按设置的搜索引擎搜索
+    const u =
+      /^https?:\/\//i.test(raw)
+        ? raw
+        : raw.includes('.') && !raw.includes(' ')
+          ? `https://${raw}`
+          : searchUrlFor(engine, raw)
+    // 先渲染出「正在打开…」再发起导航：环境窗口没有进度条，
+    // 少了这一步，打不开的站点看起来就像点击没生效
+    setPending(u)
+    const navigate = window.roxy?.navigate
+    if (typeof navigate === 'function') navigate(u)
+    else window.location.href = u
   }
 
   return (
@@ -114,14 +160,52 @@ export default function BrowserTab() {
           enterButton={<ArrowRightOutlined />}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          onSearch={() => navigate()}
+          onSearch={() => go()}
           style={{ marginBottom: 8 }}
         />
-        <Typography.Text
-          style={{ display: 'block', textAlign: 'center', marginBottom: 32, fontSize: 12, color: 'rgba(255,255,255,0.58)' }}
-        >
-          {t('browser.engineHint', { engine: engineLabel })}
-        </Typography.Text>
+        {hint ? (
+          <Typography.Text
+            style={{ display: 'block', textAlign: 'center', marginBottom: 24, fontSize: 12, color: '#ffc53d' }}
+          >
+            {hint}
+          </Typography.Text>
+        ) : (
+          <Typography.Text
+            style={{ display: 'block', textAlign: 'center', marginBottom: 24, fontSize: 12, color: 'rgba(255,255,255,0.58)' }}
+          >
+            {t('browser.engineHint', { engine: engineLabel })}
+          </Typography.Text>
+        )}
+
+        {pending && (
+          <div style={{ textAlign: 'center', color: 'rgba(255,255,255,0.85)', marginBottom: 24 }}>
+            <Space size={8}>
+              <Spin size="small" />
+              <span style={{ fontSize: 13 }}>{t('browser.opening', { url: pending })}</span>
+            </Space>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 6 }}>
+              {t('browser.openingTip')}
+            </div>
+          </div>
+        )}
+
+        {navError && !pending && (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            style={{ marginBottom: 24, textAlign: 'left' }}
+            message={t('browser.navFailed')}
+            description={
+              <>
+                <div style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                  {t('browser.navFailedDesc', { url: navUrl, reason: navErrorReason(navError, t) })}
+                </div>
+                <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{navError}</div>
+              </>
+            }
+          />
+        )}
 
         <div style={{ textAlign: 'center', marginBottom: 12 }}>
           <Typography.Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 13 }}>
@@ -141,7 +225,7 @@ export default function BrowserTab() {
                 key={l.url}
                 size="small"
                 hoverable
-                onClick={() => navigate(l.url)}
+                onClick={() => go(l.url)}
                 style={{ minWidth: 130, textAlign: 'center', borderRadius: 8 }}
               >
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{l.key ? t(l.key) : l.name}</div>

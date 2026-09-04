@@ -259,6 +259,54 @@ export async function closeWindow(profileId: number): Promise<void> {
   if (win && !win.isDestroyed()) win.close()
 }
 
+// ===== 起始页导航 =====
+// 以前起始页直接改 window.location.href。但环境窗口没有地址栏、没有加载进度条，
+// 一旦目标打不开（代理不通、站点被墙、域名错），Chromium 在收到首个响应前会保持
+// 原页面不变 —— 用户看到的就是「点了完全没反应」，无法判断是点错还是网络问题。
+// 改走主进程后：加载由我们发起，失败时能在 did-fail-load 拿到 Chromium 的错误码
+// （多为 ERR_PROXY_CONNECTION_FAILED 一类），带着错误码回到起始页明确告知原因。
+ipcMain.on('env-navigate', (event, rawUrl: unknown) => {
+  const url = typeof rawUrl === 'string' ? rawUrl.trim() : ''
+  // 只接受 http(s)，避免 file:// / javascript: 之类被拼进地址栏带进来
+  if (!/^https?:\/\//i.test(url)) return
+
+  let profileId = 0
+  for (const [id, win] of windows) {
+    if (win.webContents === event.sender) {
+      profileId = id
+      break
+    }
+  }
+  const win = profileId ? windows.get(profileId) : undefined
+  if (!win || win.isDestroyed()) return
+
+  const onFail = (
+    _e: Electron.Event,
+    _errorCode: number,
+    errorDescription: string,
+    _validatedURL: string,
+    isMainFrame: boolean
+  ) => {
+    if (!isMainFrame) return
+    win.webContents.off('did-fail-load', onFail)
+    win.webContents.off('did-finish-load', onDone)
+    const entry = rendererEntry()
+    const hash = `#/browser?profileId=${profileId}&navError=${encodeURIComponent(
+      errorDescription || 'ERR_UNKNOWN'
+    )}&navUrl=${encodeURIComponent(url)}`
+    if (entry.url) void win.webContents.loadURL(`${entry.url}${hash}`)
+    else if (entry.file) void win.webContents.loadFile(entry.file, { hash: hash.slice(1) })
+  }
+  // 加载成功（或后续任何一次成功加载）后摘掉监听，避免越积越多
+  const onDone = () => {
+    win.webContents.off('did-fail-load', onFail)
+    win.webContents.off('did-finish-load', onDone)
+  }
+  win.webContents.on('did-fail-load', onFail)
+  win.webContents.on('did-finish-load', onDone)
+  void win.webContents.loadURL(url)
+})
+
 // ===== 多窗口同步（键鼠轨迹级） =====
 // 事件量很大（mousemove 约 20/s），这里只做转发，不做序列化排队：
 // 丢弃过期事件比堆积延迟更重要，否则鼠标轨迹会明显滞后。
