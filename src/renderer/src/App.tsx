@@ -16,9 +16,23 @@ import BrowserTab from './pages/BrowserTab'
 export default function App() {
   const isDark = useIsDark()
   const algorithm = isDark ? theme.darkAlgorithm : undefined
+  // 主色随明暗微调：浅色用标准蓝 #1677ff，暗色用更亮的 #4096ff 提升对比
+  const colorPrimary = isDark ? '#4096ff' : '#1677ff'
 
   return (
-    <ConfigProvider theme={{ algorithm }}>
+    <ConfigProvider
+      theme={{
+        algorithm,
+        token: { colorPrimary },
+        components: {
+          Menu: {
+            // 选中项高亮跟随主色：背景为主色淡染，文字/左侧 accent 为主色
+            itemSelectedBg: isDark ? 'rgba(64,150,255,0.18)' : 'rgba(22,119,255,0.10)',
+            itemSelectedColor: colorPrimary
+          }
+        }
+      }}
+    >
       <HashRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
