@@ -115,7 +115,14 @@ export function getTimezoneOffsetMinutes(timeZone: string): number {
     get('minute'),
     get('second')
   )
-  return Math.round((asUTC - Math.floor(now.getTime() / 1000) * 1000) / 60000) - now.getTimezoneOffset()
+  // (asUTC - now) 即目标时区的「东向偏移」分钟数（东为正，如上海 +480、纽约 -240）。
+  // Date.getTimezoneOffset() 的语义与之相反（UTC+8 返回 -480），因此要取负。
+  //
+  // 注意：这里绝不能减去 now.getTimezoneOffset()——那会把「宿主机自身」的偏移掺进来，
+  // 既让结果偏离正确值，又导致同一 profile 在不同时区的机器上生成出不同的 tzOffset。
+  // 旧实现正是这么写的：宿主机 UTC+8 时，上海会被算成 960（相当于 UTC-16，根本不存在），
+  // 只有偏移恰为 UTC-4 的时区（夏季纽约）才「碰巧」正确。
+  return -Math.round((asUTC - Math.floor(now.getTime() / 1000) * 1000) / 60000)
 }
 
 export function randomFingerprint(os?: OSKind): Fingerprint {
