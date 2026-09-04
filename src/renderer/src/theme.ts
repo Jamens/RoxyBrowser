@@ -2,12 +2,25 @@ import { useEffect, useState } from 'react'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 
-// 自动模式时段：7:00（含）至 18:00（不含）为白天，其余为黑夜
+// 读取自动模式的起止小时（与设置页同步到 localStorage 的值保持一致）
+function readAutoHours(): { dayStart: number; nightStart: number } {
+  const parse = (k: string, d: number) => {
+    const n = Number(localStorage.getItem(k))
+    return Number.isFinite(n) && n >= 0 && n <= 23 ? n : d
+  }
+  return {
+    dayStart: parse('roxy_auto_day_start', 7),
+    nightStart: parse('roxy_auto_night_start', 18)
+  }
+}
+
+// 自动模式时段：[dayStart, nightStart) 为白天，其余为黑夜（默认 7:00-18:00）
 export function resolveDark(mode: string): boolean {
   if (mode === 'dark') return true
   if (mode === 'light') return false
+  const { dayStart, nightStart } = readAutoHours()
   const h = new Date().getHours()
-  return !(h >= 7 && h < 18)
+  return !(h >= dayStart && h < nightStart)
 }
 
 // 模块级单一定时器 + 订阅者集合：无论多少个组件调用 useIsDark，

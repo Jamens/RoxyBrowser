@@ -127,8 +127,11 @@ export interface AppSettings {
   // 新建环境窗口默认尺寸
   defaultWindowWidth: number
   defaultWindowHeight: number
-  // 界面主题：浅色 / 深色 / 自动（7:00-18:00 白天，其余黑夜）
+  // 界面主题：浅色 / 深色 / 自动（自动时段见 autoDayStart / autoNightStart）
   theme: 'light' | 'dark' | 'auto'
+  // 自动模式时段：白天起始小时（含）/ 黑夜起始小时（含），区间 [dayStart, nightStart) 为白天
+  autoDayStart: number
+  autoNightStart: number
   // 代理检测超时（秒）
   proxyCheckTimeout: number
   // 代理定时巡检间隔（分钟），0 表示关闭
@@ -142,6 +145,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultWindowWidth: 1280,
   defaultWindowHeight: 800,
   theme: 'auto',
+  autoDayStart: 7,
+  autoNightStart: 18,
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
   logRetentionDays: 90

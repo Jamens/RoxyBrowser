@@ -4,6 +4,13 @@ import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { DEFAULT_SETTINGS, type AppSettings } from '@shared/types'
 
+// 主题与自动时段同步进 localStorage，供渲染层 resolveDark 同步读取（与主题逻辑一致）
+function persistThemeLocals(s: AppSettings) {
+  localStorage.setItem('roxy_theme', s.theme)
+  localStorage.setItem('roxy_auto_day_start', String(s.autoDayStart))
+  localStorage.setItem('roxy_auto_night_start', String(s.autoNightStart))
+}
+
 export default function Settings() {
   const [form] = Form.useForm<AppSettings>()
   const [loading, setLoading] = useState(false)
@@ -14,8 +21,10 @@ export default function Settings() {
     try {
       const s = await api.get<AppSettings>('/api/settings')
       form.setFieldsValue(s)
+      persistThemeLocals(s)
     } catch (e) {
       form.setFieldsValue(DEFAULT_SETTINGS)
+      persistThemeLocals(DEFAULT_SETTINGS)
       message.error((e as Error).message)
     } finally {
       setLoading(false)
@@ -32,7 +41,7 @@ export default function Settings() {
     try {
       const res = await api.put<{ ok: boolean; settings: AppSettings }>('/api/settings', values)
       // 主题即时生效：写入 localStorage 并通知 App 层重读
-      localStorage.setItem('roxy_theme', res.settings.theme)
+      persistThemeLocals(res.settings)
       window.dispatchEvent(new Event('roxy-theme-change'))
       message.success('设置已保存')
     } catch (e) {
@@ -72,7 +81,11 @@ export default function Settings() {
         </Space>
 
         <Divider>界面</Divider>
-        <Form.Item name="theme" label="主题" extra="自动：每天 7:00-18:00 为白天，其余时间为黑夜；也可在右上角随时切换">
+        <Form.Item
+          name="theme"
+          label="主题"
+          extra="自动：按下方设定的时段在白天/黑夜间自动切换；也可在右上角随时手动切换"
+        >
           <Select
             options={[
               { value: 'light', label: '白天（浅色）' },
@@ -80,6 +93,39 @@ export default function Settings() {
               { value: 'auto', label: '自动（按时间）' }
             ]}
           />
+        </Form.Item>
+        <Form.Item noStyle shouldUpdate={(prev, cur) => prev.theme !== cur.theme}>
+          {({ getFieldValue }) =>
+            getFieldValue('theme') === 'auto' ? (
+              <Space size="large" style={{ display: 'flex' }}>
+                <Form.Item
+                  name="autoDayStart"
+                  label="自动·白天起始"
+                  rules={[{ required: true }, { type: 'number', min: 0, max: 23, message: '0-23' }]}
+                  extra="含该小时起进入白天"
+                >
+                  <InputNumber min={0} max={23} addonAfter="时" style={{ width: 140 }} />
+                </Form.Item>
+                <Form.Item
+                  name="autoNightStart"
+                  label="自动·黑夜起始"
+                  rules={[
+                    { required: true },
+                    { type: 'number', min: 0, max: 23, message: '0-23' },
+                    {
+                      validator: (_rule, value) =>
+                        value > getFieldValue('autoDayStart')
+                          ? Promise.resolve()
+                          : Promise.reject(new Error('黑夜起始须晚于白天起始'))
+                    }
+                  ]}
+                  extra="含该小时起进入黑夜"
+                >
+                  <InputNumber min={0} max={23} addonAfter="时" style={{ width: 140 }} />
+                </Form.Item>
+              </Space>
+            ) : null
+          }
         </Form.Item>
 
         <Divider>代理</Divider>
