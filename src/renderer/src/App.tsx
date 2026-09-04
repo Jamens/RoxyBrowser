@@ -28,7 +28,9 @@ export default function App() {
           Menu: {
             // 选中项高亮跟随主色：背景为主色淡染，文字/左侧 accent 为主色
             itemSelectedBg: isDark ? 'rgba(64,150,255,0.18)' : 'rgba(22,119,255,0.10)',
-            itemSelectedColor: colorPrimary
+            itemSelectedColor: colorPrimary,
+            // 菜单项统一圆角，视觉更柔和
+            itemBorderRadius: 8
           }
         }
       }}

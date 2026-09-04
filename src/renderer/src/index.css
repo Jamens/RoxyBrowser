@@ -3,3 +3,9 @@ html, body, #root {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
+
+/* 卡片统一圆角 + 轻阴影，明暗主题下都更精致（阴影用半透明黑，深浅背景均协调） */
+.ant-card {
+  border-radius: 10px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+}
