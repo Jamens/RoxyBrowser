@@ -30,7 +30,7 @@ import {
   AppSettingsEntity,
   ExtensionEntity
 } from './entities'
-import { randomFingerprint, defaultFingerprint } from '../shared/fingerprint'
+import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
 import type { Fingerprint, AppSettings, OSKind } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
@@ -787,6 +787,11 @@ function buildApiRouter(): express.Router {
     const os = (req.body || {}).os
     const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
     res.json(randomFingerprint(valid as OSKind | undefined))
+  })
+
+  // 指纹预设库（内置验证过的指纹组合）
+  router.get('/fingerprint/presets', authMiddleware, (_req: Request, res: Response) => {
+    res.json(listFingerprintPresets())
   })
 
   // ===== 代理 =====

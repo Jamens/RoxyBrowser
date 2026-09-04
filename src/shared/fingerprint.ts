@@ -1,4 +1,4 @@
-import type { Fingerprint, OSKind } from './types'
+import type { Fingerprint, FingerprintPresetDTO, OSKind } from './types'
 
 // ============ 随机指纹生成器 ============
 
@@ -213,4 +213,267 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
 
 export function defaultFingerprint(): Fingerprint {
   return randomFingerprint('windows')
+}
+
+// ============ 指纹预设库 ============
+// 内置的「经过验证的指纹组合」：各字段之间保持一致性（UA ↔ platform ↔ UA-CH ↔ GPU ↔ 屏幕 ↔ 时区语言），
+// 用户一键套用，避免手工拼出互相矛盾的指纹被检测站点识破。
+
+function presetFingerprint(
+  core: Pick<Fingerprint, 'os' | 'userAgent' | 'uaFullVersion' | 'platform' | 'languages' | 'timezone' | 'screenWidth' | 'screenHeight' | 'hardwareConcurrency' | 'deviceMemory' | 'webglVendor' | 'webglRenderer'> &
+    Partial<Pick<Fingerprint, 'touch' | 'devicePixelRatio'>>
+): Fingerprint {
+  return {
+    canvasNoise: true,
+    audioNoise: true,
+    webrtc: 'disable',
+    doNotTrack: 'unspecified',
+    tzOffset: getTimezoneOffsetMinutes(core.timezone),
+    ...core
+  }
+}
+
+interface FingerprintPreset {
+  id: string
+  name: string
+  description: string
+  build: () => Fingerprint
+}
+
+export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
+  {
+    id: 'win10-chrome-us',
+    name: 'Windows 10 · Chrome 130 · 美东',
+    description: 'GTX 1650 / 8 核 16G / 1920×1080 / en-US（纽约）',
+    build: () =>
+      presetFingerprint({
+        os: 'windows',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Safari/537.36',
+        uaFullVersion: '130.0.6723.92',
+        platform: 'Win32',
+        languages: ['en-US', 'en'],
+        timezone: 'America/New_York',
+        screenWidth: 1920,
+        screenHeight: 1080,
+        hardwareConcurrency: 8,
+        deviceMemory: 16,
+        webglVendor: 'Google Inc. (NVIDIA)',
+        webglRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 (0x00001F82) Direct3D11 vs_5_0 ps_5_0, D3D11)'
+      })
+  },
+  {
+    id: 'win11-chrome-de',
+    name: 'Windows 11 · Chrome 129 · 德国',
+    description: 'RTX 3060 / 12 核 16G / 1920×1080 / de-DE（柏林）',
+    build: () =>
+      presetFingerprint({
+        os: 'windows',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Safari/537.36',
+        uaFullVersion: '129.0.6668.100',
+        platform: 'Win32',
+        languages: ['de-DE', 'de', 'en-US', 'en'],
+        timezone: 'Europe/Berlin',
+        screenWidth: 1920,
+        screenHeight: 1080,
+        hardwareConcurrency: 12,
+        deviceMemory: 16,
+        webglVendor: 'Google Inc. (NVIDIA)',
+        webglRenderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)'
+      })
+  },
+  {
+    id: 'win10-chrome-uk',
+    name: 'Windows 10 · Chrome 131 · 英国',
+    description: 'UHD 630 / 4 核 8G / 1920×1080 / en-GB（伦敦）',
+    build: () =>
+      presetFingerprint({
+        os: 'windows',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36',
+        uaFullVersion: '131.0.6778.86',
+        platform: 'Win32',
+        languages: ['en-GB', 'en'],
+        timezone: 'Europe/London',
+        screenWidth: 1920,
+        screenHeight: 1080,
+        hardwareConcurrency: 4,
+        deviceMemory: 8,
+        webglVendor: 'Google Inc. (Intel)',
+        webglRenderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E92) Direct3D11 vs_5_0 ps_5_0, D3D11)'
+      })
+  },
+  {
+    id: 'mac-m1-chrome-us',
+    name: 'MacBook M1 · Chrome 130 · 美西',
+    description: 'Apple M1 / 8 核 16G / 2560×1440 / en-US（洛杉矶）',
+    build: () =>
+      presetFingerprint({
+        os: 'mac',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Safari/537.36',
+        uaFullVersion: '130.0.6723.92',
+        platform: 'MacIntel',
+        languages: ['en-US', 'en'],
+        timezone: 'America/Los_Angeles',
+        screenWidth: 2560,
+        screenHeight: 1440,
+        hardwareConcurrency: 8,
+        deviceMemory: 16,
+        webglVendor: 'Google Inc. (Apple)',
+        webglRenderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)'
+      })
+  },
+  {
+    id: 'mac-m2-chrome-sg',
+    name: 'MacBook M2 · Chrome 132 · 新加坡',
+    description: 'Apple M2 / 8 核 8G / 1920×1080 / en-SG（新加坡）',
+    build: () =>
+      presetFingerprint({
+        os: 'mac',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.110 Safari/537.36',
+        uaFullVersion: '132.0.6834.110',
+        platform: 'MacIntel',
+        languages: ['en-SG', 'en', 'zh-CN', 'zh'],
+        timezone: 'Asia/Singapore',
+        screenWidth: 1920,
+        screenHeight: 1080,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        webglVendor: 'Google Inc. (Apple)',
+        webglRenderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)'
+      })
+  },
+  {
+    id: 'mac-intel-chrome-jp',
+    name: 'MacBook Intel · Chrome 129 · 日本',
+    description: 'Iris Plus 655 / 4 核 8G / 1920×1080 / ja-JP（东京）',
+    build: () =>
+      presetFingerprint({
+        os: 'mac',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Safari/537.36',
+        uaFullVersion: '129.0.6668.100',
+        platform: 'MacIntel',
+        languages: ['ja-JP', 'ja', 'en-US', 'en'],
+        timezone: 'Asia/Tokyo',
+        screenWidth: 1920,
+        screenHeight: 1080,
+        hardwareConcurrency: 4,
+        deviceMemory: 8,
+        webglVendor: 'Google Inc. (Intel)',
+        webglRenderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 655, OpenGL 4.1)'
+      })
+  },
+  {
+    id: 'android-pixel8-us',
+    name: 'Pixel 8 · Android 14 · 美东',
+    description: 'Adreno 730 / 412×915 @2.625 / en-US（纽约）',
+    build: () =>
+      presetFingerprint({
+        os: 'android',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Mobile Safari/537.36',
+        uaFullVersion: '130.0.6723.92',
+        platform: 'Linux armv8l',
+        languages: ['en-US', 'en'],
+        timezone: 'America/New_York',
+        screenWidth: 412,
+        screenHeight: 915,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        webglVendor: 'Qualcomm',
+        webglRenderer: 'Adreno (TM) 730',
+        touch: true,
+        devicePixelRatio: 2.625
+      })
+  },
+  {
+    id: 'android-s24-de',
+    name: 'Galaxy S24 Ultra · Android 14 · 德国',
+    description: 'Adreno 740 / 384×832 @3 / de-DE（柏林）',
+    build: () =>
+      presetFingerprint({
+        os: 'android',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Mobile Safari/537.36',
+        uaFullVersion: '131.0.6778.86',
+        platform: 'Linux armv8l',
+        languages: ['de-DE', 'de', 'en-US', 'en'],
+        timezone: 'Europe/Berlin',
+        screenWidth: 384,
+        screenHeight: 832,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        webglVendor: 'Qualcomm',
+        webglRenderer: 'Adreno (TM) 740',
+        touch: true,
+        devicePixelRatio: 3
+      })
+  },
+  {
+    id: 'android-xiaomi-cn',
+    name: 'Xiaomi · Android 14 · 中国',
+    description: 'Adreno 710 / 393×873 @2.75 / zh-CN（上海）',
+    build: () =>
+      presetFingerprint({
+        os: 'android',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; 2210132C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Mobile Safari/537.36',
+        uaFullVersion: '129.0.6668.100',
+        platform: 'Linux armv8l',
+        languages: ['zh-CN', 'zh', 'en-US', 'en'],
+        timezone: 'Asia/Shanghai',
+        screenWidth: 393,
+        screenHeight: 873,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        webglVendor: 'Qualcomm',
+        webglRenderer: 'Adreno (TM) 710',
+        touch: true,
+        devicePixelRatio: 2.75
+      })
+  },
+  {
+    id: 'ios-iphone15-us',
+    name: 'iPhone 15 Pro · iOS 17.5 · 美西',
+    description: 'Apple GPU / 393×852 @3 / en-US（洛杉矶）',
+    build: () =>
+      presetFingerprint({
+        os: 'ios',
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+        uaFullVersion: '17.5',
+        platform: 'iPhone',
+        languages: ['en-US', 'en'],
+        timezone: 'America/Los_Angeles',
+        screenWidth: 393,
+        screenHeight: 852,
+        hardwareConcurrency: 4,
+        deviceMemory: 8,
+        webglVendor: 'Apple Inc.',
+        webglRenderer: 'Apple GPU',
+        touch: true,
+        devicePixelRatio: 3
+      })
+  },
+  {
+    id: 'ios-iphone14-jp',
+    name: 'iPhone 14 · iOS 17.4 · 日本',
+    description: 'Apple GPU / 390×844 @3 / ja-JP（东京）',
+    build: () =>
+      presetFingerprint({
+        os: 'ios',
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+        uaFullVersion: '17.4',
+        platform: 'iPhone',
+        languages: ['ja-JP', 'ja', 'en-US', 'en'],
+        timezone: 'Asia/Tokyo',
+        screenWidth: 390,
+        screenHeight: 844,
+        hardwareConcurrency: 4,
+        deviceMemory: 8,
+        webglVendor: 'Apple Inc.',
+        webglRenderer: 'Apple GPU',
+        touch: true,
+        devicePixelRatio: 3
+      })
+  }
+]
+
+/** 预设的对外形态（build 展开成完整 Fingerprint，随调用实时计算 tzOffset） */
+export function listFingerprintPresets(): FingerprintPresetDTO[] {
+  return FINGERPRINT_PRESETS.map(({ build, ...rest }) => ({ ...rest, fingerprint: build() }))
 }

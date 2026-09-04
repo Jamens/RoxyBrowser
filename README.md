@@ -50,18 +50,24 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：
 
+- **桌面 + 移动端**：支持 Windows / macOS / Android / iOS 四种形态。移动端注入触摸能力（`maxTouchPoints`、`ontouchstart`）、`devicePixelRatio`；Android 的 UA-CH 带 `mobile=true` 与 `platform="Android"`；iOS 按 Safari 形态（移除 `userAgentData`），环境窗口按手机尺寸打开。
+- **指纹预设库**：内置十余套「验证过的指纹组合」（如 `Windows 11 · Chrome 129 · 德国`、`Pixel 8 · Android 14 · 美东`、`iPhone 15 Pro · iOS 17.5 · 美西`），各字段之间保证一致（UA ↔ 平台 ↔ GPU ↔ 屏幕 ↔ 时区语言），一键套用，避免手工拼出互相矛盾的指纹。
+
 | 维度       | 实现方式                                                                                |
 | ---------- | --------------------------------------------------------------------------------------- |
 | User Agent | 请求头 + `navigator.userAgent` + `navigator.userAgentData`（含 `getHighEntropyValues`） |
 | 平台       | `navigator.platform`、UA 品牌与平台版本                                                 |
 | 语言       | `navigator.language` / `navigator.languages`                                            |
 | 时区       | `Date.prototype.getTimezoneOffset` + `Intl.DateTimeFormat.resolvedOptions()`            |
-| 屏幕       | `screen.width/height/availWidth/availHeight`                                            |
+| 屏幕       | `screen.width/height/availWidth/availHeight`（移动端含 `devicePixelRatio`）             |
 | 硬件       | `hardwareConcurrency`、`deviceMemory`                                                   |
+| 触摸       | 移动端 `maxTouchPoints=5`、`'ontouchstart' in window`                                   |
 | Canvas     | `toDataURL` / `getImageData` 注入**确定性噪声**（同环境稳定、异环境不同）               |
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 可禁用 `RTCPeerConnection`，防止真实 IP 泄漏                                            |
+
+相关接口：`POST /api/fingerprint/random`（body `os` 可选 `windows|mac|android|ios`）、`GET /api/fingerprint/presets`。
 
 ### 3. 代理 IP
 

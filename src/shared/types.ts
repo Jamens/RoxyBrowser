@@ -158,6 +158,14 @@ export interface ExtensionDTO {
   createdAt: string
 }
 
+// 指纹预设（内置「验证过的指纹组合」，一键套用）
+export interface FingerprintPresetDTO {
+  id: string
+  name: string
+  description: string
+  fingerprint: Fingerprint
+}
+
 // 浏览器环境默认起始页
 export const DEFAULT_START_URL = 'https://www.baidu.com'
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind } from '@shared/types'
+import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 import { getTimezoneOffsetMinutes } from '@shared/fingerprint'
 
@@ -33,6 +33,15 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   const [form] = Form.useForm()
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)
+  const [presets, setPresets] = useState<FingerprintPresetDTO[]>([])
+
+  useEffect(() => {
+    if (open && !presets.length) {
+      api.get<FingerprintPresetDTO[]>('/api/fingerprint/presets').then(setPresets).catch(() => {
+        /* 预设加载失败不影响手工配置 */
+      })
+    }
+  }, [open, presets.length])
 
   useEffect(() => {
     if (open) {
@@ -177,11 +186,30 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
             label: '指纹配置',
             children: (
               <div>
-                <Space style={{ marginBottom: 16 }}>
+                <Space style={{ marginBottom: 16 }} wrap>
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="选择指纹预设"
+                    style={{ minWidth: 260 }}
+                    value={null}
+                    onChange={(id: string) => {
+                      const p = presets.find((x) => x.id === id)
+                      if (p) {
+                        setFp(p.fingerprint)
+                        message.success(`已套用预设「${p.name}」`)
+                      }
+                    }}
+                    options={presets.map((p) => ({
+                      value: p.id,
+                      label: p.name,
+                      description: p.description
+                    }))}
+                  />
                   <Button type="primary" icon={<ThunderboltOutlined />} onClick={randomize}>
                     一键随机指纹
                   </Button>
-                  <Typography.Text type="secondary">按操作系统生成一整套真实、一致的指纹参数</Typography.Text>
+                  <Typography.Text type="secondary">预设 = 各字段一致的成品组合；随机 = 按设备池整套生成</Typography.Text>
                 </Space>
                 <Form layout="vertical">
                   <Form.Item label="操作系统">
