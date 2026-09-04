@@ -213,3 +213,17 @@ CREATE TABLE IF NOT EXISTS `app_settings` (
   `updatedAt` DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 13) RPA 脚本表（steps 为 RpaStep[] JSON：navigate/click/input/change/scroll/wait）
+CREATE TABLE IF NOT EXISTS `rpa_scripts` (
+  `id`        INT            NOT NULL AUTO_INCREMENT,
+  `teamId`    INT            NOT NULL,
+  `ownerId`   INT            NULL,     -- 创建者用户 ID，账户级隔离
+  `name`      VARCHAR(128)   NOT NULL,
+  `remark`    VARCHAR(512)   NOT NULL DEFAULT '',
+  `steps`     JSON           NOT NULL,
+  `createdAt` DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updatedAt` DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_rpa_team` (`teamId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

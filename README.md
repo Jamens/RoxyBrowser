@@ -147,6 +147,20 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 后端接口：`GET/POST /api/extensions`、`GET /api/extensions/:id/icon`、`DELETE /api/extensions/:id`；环境绑定通过 `PUT /api/profiles/:id` 的 `extensions` 字段（扩展 ID 数组）。
 
+### 7.3 RPA 脚本（录制与回放）
+
+把重复操作固化成脚本，在任意环境窗口一键重放（如每日签到、批量上架流程）：
+
+- **录制**：在「RPA 脚本」页选择一个**已打开**的环境 → 点「开始录制」→ 在环境窗口正常操作 → 点「停止录制」→ 命名保存。
+  - 记录内容：点击（元素内相对坐标，与多窗口同步同一套「稳定 selector + 相对坐标」编码）、文本输入（连续输入只保留最终值）、下拉选择、滚动（合并为最终位置）、页面跳转。
+  - 录制期间多窗口同步产生的重放事件会被抑制窗过滤，不会录进脚本。
+- **回放**：选脚本 + 环境 → 后台逐步执行（每步间隔约 1 秒，`navigate`/`wait` 在主进程执行，其余经多窗口同步通道拟人化重放）；结果写入操作日志。
+- **隔离**：脚本按账户隔离（同其他业务数据一致）。
+
+后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`。
+
+> 提示：回放的是合成事件（`isTrusted=false`），对校验该属性的反爬站点无效；脚本在不同页面结构（selector 失效）时对应步骤会被跳过。
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。

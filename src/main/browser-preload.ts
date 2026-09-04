@@ -741,4 +741,64 @@
       /* 单条事件失败不影响后续同步 */
     }
   }
+
+  // ===== RPA 脚本录制 =====
+  // 主进程通过 rpa-recording 通道开关采集；步骤用与窗口同步相同的「稳定 selector +
+  // 元素内相对坐标」编码，回放时直接走 sync-apply 通道，两套体系共用一套解码。
+  // 注意：同步重放 / 回放产生的事件带抑制窗（suppressUntil），期间不采集，避免录到回声。
+  let rpaOn = false
+  ipcRenderer.on('rpa-recording', (_e, state: { enabled?: boolean }) => {
+    rpaOn = !!state?.enabled
+  })
+
+  const sendRpa = (step: Record<string, unknown>) => {
+    if (!rpaOn || isSuppressed()) return
+    try {
+      ipcRenderer.send('rpa-event', step)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  document.addEventListener(
+    'click',
+    (e: Event) => {
+      const me = e as MouseEvent
+      const p = encodePoint(me.clientX, me.clientY)
+      sendRpa({ type: 'click', sel: p.sel, rx: p.rx, ry: p.ry })
+    },
+    true
+  )
+
+  document.addEventListener(
+    'input',
+    (e: Event) => {
+      const t = e.target as HTMLElement | null
+      if (!t || !EDITABLE.includes(t.tagName)) return
+      const sel = selectorOf(t)
+      if (!sel) return
+      sendRpa({ type: 'input', sel, value: (t as HTMLInputElement).value })
+    },
+    true
+  )
+
+  document.addEventListener(
+    'change',
+    (e: Event) => {
+      const t = e.target as HTMLElement | null
+      if (!t || t.tagName !== 'SELECT') return
+      const sel = selectorOf(t)
+      if (!sel) return
+      sendRpa({ type: 'change', sel, value: (t as HTMLSelectElement).value })
+    },
+    true
+  )
+
+  window.addEventListener(
+    'scroll',
+    throttle(() => {
+      sendRpa({ type: 'scroll', x: window.scrollX, y: window.scrollY })
+    }, 400),
+    true
+  )
 })()

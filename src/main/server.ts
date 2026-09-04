@@ -28,10 +28,11 @@ import {
   OperationLogEntity,
   ApiTokenEntity,
   AppSettingsEntity,
-  ExtensionEntity
+  ExtensionEntity,
+  RpaScriptEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
-import type { Fingerprint, AppSettings, OSKind } from '../shared/types'
+import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
 // ---------- 配置 ----------
@@ -2027,11 +2028,140 @@ function buildApiRouter(): express.Router {
     const ext = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!ext) return res.status(404).json({ message: '扩展不存在' })
     const dest = join(extUserDir(), String(ext.id))
-    const name = ext.name
+    // remove 后实体主键会被清空，先取出来写日志
+    const { id: extId, name } = ext
     await repo.remove(ext)
     rmSync(dest, { recursive: true, force: true })
-    await writeLog(req, 'delete_extension', `删除扩展「${name}」(#${ext.id})`)
+    await writeLog(req, 'delete_extension', `删除扩展「${name}」(#${extId})`)
     res.json({ ok: true })
+  })
+
+  // ===== RPA 脚本录制 / 回放 =====
+  // 注意路由顺序：/rpa/record/* 等静态路径必须排在 /rpa/:id 之前（项目既有约定）
+  const rpaRepo = () => AppDataSource.getRepository(RpaScriptEntity)
+
+  router.get('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const list = await rpaRepo().find({ where: ownerScope(req), order: { id: 'DESC' } })
+    res.json(
+      list.map((s) => ({
+        id: s.id,
+        name: s.name,
+        remark: s.remark,
+        steps: s.steps as unknown as RpaStep[],
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt
+      }))
+    )
+  })
+
+  router.post('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const b = req.body || {}
+    if (!b.name || !Array.isArray(b.steps)) return res.status(400).json({ message: '名称和步骤不能为空' })
+    const saved = await rpaRepo().save(
+      rpaRepo().create({
+        teamId: req.tid!,
+        ownerId: req.uid!,
+        name: String(b.name).slice(0, 128),
+        remark: String(b.remark || '').slice(0, 512),
+        steps: b.steps
+      })
+    )
+    await writeLog(req, 'create_rpa_script', `创建 RPA 脚本「${saved.name}」(#${saved.id})，${b.steps.length} 步`)
+    res.json({ id: saved.id })
+  })
+
+  router.put('/rpa/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = rpaRepo()
+    const s = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!s) return res.status(404).json({ message: '脚本不存在' })
+    const b = req.body || {}
+    if (b.name !== undefined) s.name = String(b.name).slice(0, 128)
+    if (b.remark !== undefined) s.remark = String(b.remark).slice(0, 512)
+    if (Array.isArray(b.steps)) s.steps = b.steps
+    await repo.save(s)
+    await writeLog(req, 'update_rpa_script', `更新 RPA 脚本「${s.name}」(#${s.id})`)
+    res.json({ ok: true })
+  })
+
+  router.delete('/rpa/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = rpaRepo()
+    const s = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!s) return res.status(404).json({ message: '脚本不存在' })
+    // remove 后实体主键会被清空，先取出来写日志
+    const { id, name } = s
+    await repo.remove(s)
+    await writeLog(req, 'delete_rpa_script', `删除 RPA 脚本「${name}」(#${id})`)
+    res.json({ ok: true })
+  })
+
+  // 开始录制（环境需处于运行态）
+  router.post('/rpa/record/start', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number((req.body || {}).profileId)
+    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
+    // 归属校验（普通用户只能录制自己的环境）
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({
+      where: { id: profileId, ...ownerScope(req) }
+    })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    try {
+      ;(await import('./browserManager')).startRpaRecording(profileId)
+    } catch (e) {
+      return res.status(400).json({ message: (e as Error).message })
+    }
+    await writeLog(req, 'rpa_record_start', `开始录制 RPA 脚本（环境「${profile.name}」#${profileId}）`)
+    res.json({ ok: true })
+  })
+
+  // 停止录制：返回采集到的步骤，由前端命名后调 POST /rpa 保存
+  router.post('/rpa/record/stop', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number((req.body || {}).profileId)
+    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
+    const steps = (await import('./browserManager')).stopRpaRecording(profileId)
+    res.json({ steps })
+  })
+
+  // 录制状态（轮询用）
+  router.get('/rpa/record/status', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number((req.query || {}).profileId)
+    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
+    const recording = (await import('./browserManager')).isRpaRecording(profileId)
+    res.json({ recording })
+  })
+
+  // 回放：在指定环境窗口执行脚本（后台异步执行，结果写操作日志）
+  router.post('/rpa/:id/run', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profileId = Number((req.body || {}).profileId)
+    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
+    const s = await rpaRepo().findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!s) return res.status(404).json({ message: '脚本不存在' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({
+      where: { id: profileId, ...ownerScope(req) }
+    })
+    if (!profile) return res.status(404).json({ message: '环境不存在' })
+    const steps = s.steps as unknown as RpaStep[]
+    // 前置校验环境必须处于运行态（否则后台任务会静默失败，用户无从得知）
+    const runningIds = (await import('./browserManager')).getRunningWindowIds()
+    if (!runningIds.includes(profileId)) {
+      return res.status(400).json({ message: '环境未运行，请先打开环境再回放' })
+    }
+    // 回放可能持续数分钟，不阻塞请求；完成 / 中止写操作日志
+    ;(async () => {
+      let executed = 0
+      let err = ''
+      try {
+        executed = await (await import('./browserManager')).replayRpaScript(profileId, steps)
+      } catch (e) {
+        err = (e as Error).message
+      }
+      await writeLog(
+        req,
+        'rpa_run',
+        err
+          ? `回放脚本「${s.name}」失败：${err}`
+          : `回放脚本「${s.name}」完成（环境「${profile.name}」#${profileId}，执行 ${executed}/${steps.length} 步）`
+      )
+    })()
+    res.json({ started: true, steps: steps.length })
   })
 
   router.use('/v1', wrapAsync(v1))
@@ -2072,7 +2202,8 @@ export async function bootstrap(): Promise<string> {
       OperationLogEntity,
       ApiTokenEntity,
       AppSettingsEntity,
-      ExtensionEntity
+      ExtensionEntity,
+      RpaScriptEntity
     ]
   })
   await AppDataSource.initialize()

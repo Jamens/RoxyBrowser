@@ -12,7 +12,8 @@ import {
   ChromeOutlined,
   SettingOutlined,
   SnippetsOutlined,
-  AppstoreAddOutlined
+  AppstoreAddOutlined,
+  VideoCameraOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
@@ -28,6 +29,7 @@ const MENUS = [
   { key: '/accounts', icon: <KeyOutlined />, label: '账号中心' },
   { key: '/cookies', icon: <SnippetsOutlined />, label: 'Cookie 管理' },
   { key: '/extensions', icon: <AppstoreAddOutlined />, label: '扩展管理' },
+  { key: '/rpa', icon: <VideoCameraOutlined />, label: 'RPA 脚本' },
   { key: '/team', icon: <TeamOutlined />, label: '团队空间' },
   { key: '/logs', icon: <FileTextOutlined />, label: '操作日志' },
   { key: '/settings', icon: <SettingOutlined />, label: '设置' },

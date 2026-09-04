@@ -376,6 +376,36 @@ export class ExtensionEntity {
   createdAt: Date
 }
 
+@Entity('rpa_scripts')
+@Index(['teamId'])
+export class RpaScriptEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  @Column({ type: 'varchar', length: 512, default: '' })
+  remark: string
+
+  // RpaStep[]：navigate / click / input / change / scroll / wait
+  @Column({ type: 'json' })
+  steps: Record<string, unknown>[]
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+
+  @UpdateDateColumn({ type: 'datetime' })
+  updatedAt: Date
+}
+
 @Entity('app_settings')
 export class AppSettingsEntity {
   @PrimaryGeneratedColumn()

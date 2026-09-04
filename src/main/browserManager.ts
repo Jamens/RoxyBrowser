@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { AppDataSource } from './server'
 import { ProfileEntity, ProxyEntity, CookieEntity, ExtensionEntity } from './entities'
-import type { Fingerprint } from '../shared/types'
+import type { Fingerprint, RpaStep } from '../shared/types'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
 async function setElectronCookie(ses: Electron.Session, c: CookieEntity) {
@@ -230,9 +230,18 @@ export async function openWindow(profileId: number): Promise<void> {
   win.on('closed', () => {
     windows.delete(profileId)
     windowTitles.delete(profileId)
+    // 录制中的环境被关闭：丢弃录制缓冲，避免脏数据
+    rpaRecording.delete(profileId)
     markClosed(profileId)
   })
   win.once('ready-to-show', () => win.show())
+
+  // 录制期间记录页面跳转（包括首次导航，回放时会重新走一遍 URL 序列）
+  win.webContents.on('did-navigate', (_e, url) => {
+    if (rpaRecording.has(profileId) && /^https?:\/\//i.test(url)) {
+      pushRpaStep(rpaRecording.get(profileId)!, { type: 'navigate', url })
+    }
+  })
 
   const entry = rendererEntry()
   const hash = `#/browser?profileId=${profileId}`
@@ -279,3 +288,99 @@ ipcMain.on('sync-event', (event, payload: Record<string, unknown>) => {
     }
   }
 })
+
+// ===== RPA 脚本录制 / 回放 =====
+// 录制：preload 在收到 rpa-recording 后采集 click/input/change/scroll，经 rpa-event 上报；
+//      页面跳转由主进程 did-navigate 记录（preload 看不到跨页的导航意图）。
+// 回放：复用多窗口同步的 sync-apply 通道把步骤重放进窗口（同一套 selector 解码与拟人化输入）。
+
+const rpaRecording = new Map<number, RpaStep[]>()
+
+/** 步骤合并：input 连续输入只保留最终值；scroll 只保留最终位置 */
+function pushRpaStep(steps: RpaStep[], step: RpaStep) {
+  const last = steps[steps.length - 1]
+  if (step.type === 'input' && last && last.type === 'input' && last.sel === step.sel) {
+    last.value = step.value
+    return
+  }
+  if (step.type === 'scroll' && last && last.type === 'scroll') {
+    last.x = step.x
+    last.y = step.y
+    return
+  }
+  steps.push(step)
+}
+
+ipcMain.on('rpa-event', (event, step: RpaStep) => {
+  if (!step || typeof step !== 'object' || typeof step.type !== 'string') return
+  for (const [id, win] of windows) {
+    if (win.webContents === event.sender) {
+      const steps = rpaRecording.get(id)
+      if (steps) pushRpaStep(steps, step)
+      return
+    }
+  }
+})
+
+export function startRpaRecording(profileId: number): void {
+  const win = windows.get(profileId)
+  if (!win || win.isDestroyed()) throw new Error('环境未运行，请先打开环境再开始录制')
+  rpaRecording.set(profileId, [])
+  win.webContents.send('rpa-recording', { enabled: true })
+}
+
+export function stopRpaRecording(profileId: number): RpaStep[] {
+  const win = windows.get(profileId)
+  if (win && !win.isDestroyed()) {
+    try {
+      win.webContents.send('rpa-recording', { enabled: false })
+    } catch {
+      /* ignore */
+    }
+  }
+  const steps = rpaRecording.get(profileId) || []
+  rpaRecording.delete(profileId)
+  return steps
+}
+
+export function isRpaRecording(profileId: number): boolean {
+  return rpaRecording.has(profileId)
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 在指定环境窗口回放脚本。navigate/wait 在主进程执行；
+ * click/input/change/scroll 经 sync-apply 通道重放（preload 里是同一套解码逻辑）。
+ */
+export async function replayRpaScript(profileId: number, steps: RpaStep[]): Promise<number> {
+  const win = windows.get(profileId)
+  if (!win || win.isDestroyed()) throw new Error('环境未运行，请先打开环境再回放')
+  let executed = 0
+  for (const s of steps) {
+    switch (s.type) {
+      case 'navigate':
+        if (/^https?:\/\//i.test(s.url)) await win.webContents.loadURL(s.url)
+        break
+      case 'wait':
+        await sleep(Math.min(60000, Math.max(0, s.ms)))
+        break
+      case 'click':
+      case 'input':
+      case 'change':
+      case 'scroll':
+        try {
+          win.webContents.send('sync-apply', { ...s, __rpa: true })
+        } catch {
+          /* 窗口关闭则中止 */
+          return executed
+        }
+        await sleep(900)
+        break
+      default:
+        break
+    }
+    executed++
+  }
+  return executed
+}

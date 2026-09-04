@@ -158,6 +158,25 @@ export interface ExtensionDTO {
   createdAt: string
 }
 
+// ===== RPA 脚本 =====
+// 步骤在环境窗口内按「稳定 selector + 元素内相对坐标」定位（与多窗口同步同一套编码）
+export type RpaStep =
+  | { type: 'navigate'; url: string }
+  | { type: 'click'; sel: string; rx: number; ry: number }
+  | { type: 'input'; sel: string; value: string }
+  | { type: 'change'; sel: string; value: string }
+  | { type: 'scroll'; x: number; y: number }
+  | { type: 'wait'; ms: number }
+
+export interface RpaScriptDTO {
+  id: number
+  name: string
+  remark: string
+  steps: RpaStep[]
+  createdAt: string
+  updatedAt: string
+}
+
 // 指纹预设（内置「验证过的指纹组合」，一键套用）
 export interface FingerprintPresetDTO {
   id: string
