@@ -24,6 +24,8 @@ pnpm app          # 以生产构建启动客户端
 
 首次启动会自动建库、建表，并创建默认账号：**`admin` / `123456`**。
 
+**运行行为**：关闭主窗口不会退出程序，而是最小化到系统托盘，本地 API 与自动化接口继续提供服务；彻底退出请右键托盘图标 → 「退出」。托盘图标由 `node scripts/gen-tray-icon.mjs` 生成到 `resources/tray.png`（纯 Node 实现，无第三方依赖）。
+
 数据库配置可用环境变量覆盖：`DB_HOST` `DB_PORT` `DB_USER` `DB_PASS` `DB_NAME`。
 
 ## 已实现功能（对标官网）
