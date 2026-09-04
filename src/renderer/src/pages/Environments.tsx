@@ -213,9 +213,15 @@ export default function Environments() {
     {
       title: '环境名称',
       dataIndex: 'name',
+      width: 180,
       render: (_, r) => (
         <Space>
-          <span style={{ fontWeight: 600 }}>{r.name}</span>
+          <span
+            style={{ fontWeight: 600, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={r.name}
+          >
+            {r.name}
+          </span>
           {r.platform && <Tag color="processing">{r.platform}</Tag>}
         </Space>
       )
@@ -262,7 +268,7 @@ export default function Environments() {
     {
       title: '最后打开',
       dataIndex: 'lastOpenedAt',
-      width: 150,
+      width: 160,
       render: (v) => (v ? dayjs(v).format('YYYY-MM-DD HH:mm') : '-')
     },
     {
@@ -402,6 +408,7 @@ export default function Environments() {
           dataSource={list}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
           pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 个环境` }}
+          scroll={{ x: 1170 }}
         />
       </Card>
 
