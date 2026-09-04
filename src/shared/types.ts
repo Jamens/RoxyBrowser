@@ -119,3 +119,30 @@ export interface TokenDTO {
 
 // 浏览器环境默认起始页
 export const DEFAULT_START_URL = 'https://www.baidu.com'
+
+// 全局设置（设置页持久化到 app_settings 表）
+export interface AppSettings {
+  // 新建环境随机指纹时的默认操作系统
+  defaultFingerprintOs: 'windows' | 'macos' | 'linux'
+  // 新建环境窗口默认尺寸
+  defaultWindowWidth: number
+  defaultWindowHeight: number
+  // 界面主题：跟随系统 / 浅色 / 深色
+  theme: 'system' | 'light' | 'dark'
+  // 代理检测超时（秒）
+  proxyCheckTimeout: number
+  // 代理定时巡检间隔（分钟），0 表示关闭
+  proxyCheckInterval: number
+  // 操作日志保留天数
+  logRetentionDays: number
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  defaultFingerprintOs: 'windows',
+  defaultWindowWidth: 1280,
+  defaultWindowHeight: 800,
+  theme: 'system',
+  proxyCheckTimeout: 10,
+  proxyCheckInterval: 30,
+  logRetentionDays: 90
+}

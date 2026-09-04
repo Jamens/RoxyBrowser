@@ -9,7 +9,8 @@ import {
   FileTextOutlined,
   ApiOutlined,
   LogoutOutlined,
-  ChromeOutlined
+  ChromeOutlined,
+  SettingOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
@@ -23,6 +24,7 @@ const MENUS = [
   { key: '/accounts', icon: <KeyOutlined />, label: '账号中心' },
   { key: '/team', icon: <TeamOutlined />, label: '团队空间' },
   { key: '/logs', icon: <FileTextOutlined />, label: '操作日志' },
+  { key: '/settings', icon: <SettingOutlined />, label: '设置' },
   { key: '/api', icon: <ApiOutlined />, label: '自动化 API' }
 ]
 

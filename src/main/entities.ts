@@ -264,3 +264,19 @@ export class ApiTokenEntity {
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }
+
+@Entity('app_settings')
+export class AppSettingsEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  // 单例键，固定为 'global'
+  @Column({ type: 'varchar', length: 32, default: 'global' })
+  key: string
+
+  @Column({ type: 'json' })
+  settings: Record<string, unknown>
+
+  @UpdateDateColumn({ type: 'datetime' })
+  updatedAt: Date
+}

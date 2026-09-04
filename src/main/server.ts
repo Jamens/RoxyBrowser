@@ -24,11 +24,12 @@ import {
   ProfileEntity,
   AccountEntity,
   OperationLogEntity,
-  ApiTokenEntity
+  ApiTokenEntity,
+  AppSettingsEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint } from '../shared/fingerprint'
 import type { Fingerprint } from '../shared/types'
-import { DEFAULT_START_URL } from '../shared/types'
+import { DEFAULT_START_URL, DEFAULT_SETTINGS } from '../shared/types'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -957,6 +958,23 @@ function buildApiRouter(): express.Router {
     res.json({ ok: true })
   })
 
+  // 全局设置（单例，key='global'）
+  router.get('/settings', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(AppSettingsEntity)
+    const row = await repo.findOne({ where: { key: 'global' } })
+    res.json(row?.settings ? { ...DEFAULT_SETTINGS, ...row.settings } : DEFAULT_SETTINGS)
+  })
+
+  router.put('/settings', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(AppSettingsEntity)
+    const merged = { ...DEFAULT_SETTINGS, ...(req.body || {}) } as Record<string, unknown>
+    let row = await repo.findOne({ where: { key: 'global' } })
+    if (!row) row = repo.create({ key: 'global', settings: merged })
+    else row.settings = merged
+    await repo.save(row)
+    res.json({ ok: true, settings: merged })
+  })
+
   // ===== 自动化 API (v1，令牌鉴权，供脚本调用) =====
   const v1 = express.Router()
   v1.use(tokenAuthMiddleware)
@@ -1267,7 +1285,8 @@ export async function bootstrap(): Promise<string> {
       ProfileEntity,
       AccountEntity,
       OperationLogEntity,
-      ApiTokenEntity
+      ApiTokenEntity,
+      AppSettingsEntity
     ]
   })
   await AppDataSource.initialize()
