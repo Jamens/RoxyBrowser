@@ -44,6 +44,7 @@ const zhCN = {
   // ---- 顶栏 ----
   'layout.logout': '退出登录',
   'layout.logoutSuccess': '已退出登录',
+  'layout.memory': '内存',
 
   // ---- 设置页 ----
   'settings.title': '系统设置',
@@ -183,6 +184,7 @@ const enUS: MessageDict = {
 
   'layout.logout': 'Sign out',
   'layout.logoutSuccess': 'Signed out',
+  'layout.memory': 'Memory',
 
   'settings.title': 'Settings',
   'settings.desc':
@@ -322,6 +324,7 @@ const jaJP: MessageDict = {
 
   'layout.logout': 'ログアウト',
   'layout.logoutSuccess': 'ログアウトしました',
+  'layout.memory': 'メモリ',
 
   'settings.title': 'システム設定',
   'settings.desc':
@@ -461,6 +464,7 @@ const deDE: MessageDict = {
 
   'layout.logout': 'Abmelden',
   'layout.logoutSuccess': 'Abgemeldet',
+  'layout.memory': 'Speicher',
 
   'settings.title': 'Einstellungen',
   'settings.desc':

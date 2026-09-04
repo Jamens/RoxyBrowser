@@ -18,6 +18,7 @@ import {
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
+import SystemStats from '../components/SystemStats'
 import { useIsDark } from '../theme'
 import { useI18n, type TranslateFn } from '../i18n'
 
@@ -98,6 +99,7 @@ export default function AppLayout() {
             padding: '0 24px'
           }}
         >
+          <SystemStats isDark={isDark} />
           <ThemeSwitch />
           <Dropdown
             menu={{

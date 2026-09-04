@@ -36,6 +36,7 @@ import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
+import { getSystemStats } from './systemStats'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -530,6 +531,11 @@ function buildApiRouter(): express.Router {
   // ===== 已打开的环境窗口（用于选择同步对象） =====
   router.get('/windows', authMiddleware, (_req: Request, res: Response) => {
     res.json(windowsProvider ? windowsProvider() : [])
+  })
+
+  // ===== 系统资源占用（主窗口顶栏展示） =====
+  router.get('/system/stats', authMiddleware, async (_req: Request, res: Response) => {
+    res.json(await getSystemStats())
   })
 
   // ===== 浏览器环境（环境内新标签页信息，无需登录态） =====
