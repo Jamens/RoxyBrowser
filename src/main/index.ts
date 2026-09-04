@@ -25,7 +25,8 @@ function createTray(apiBase: string) {
     const image = nativeImage.createFromPath(trayIconPath())
     tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image)
     tray.setToolTip(`RoxyBrowser Clone — API ${apiBase}`)
-    tray.on('double-click', () => showMainWindow())
+    // 单击托盘图标即打开主窗口（Windows 下 left-click 触发 click，右键仍弹出上下文菜单）
+    tray.on('click', () => showMainWindow())
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: '打开主窗口', click: () => showMainWindow() },
