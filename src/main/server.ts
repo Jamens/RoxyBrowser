@@ -9,7 +9,7 @@ import { join } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import mysql from 'mysql2/promise'
-import { DataSource } from 'typeorm'
+import { DataSource, In } from 'typeorm'
 import { HttpProxyAgent } from 'http-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { SocksProxyAgent } from 'socks-proxy-agent'
@@ -858,6 +858,86 @@ function buildApiRouter(): express.Router {
     if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
     await repo.remove(a)
     res.json({ ok: true })
+  })
+
+  // 账号批量导入：每行支持两种格式
+  //   格式A（带环境，可还原归属）：`#环境序号|环境名,平台,账号,密码,备注`
+  //   格式B（单一环境）：`平台,账号,密码[,备注]`，需配合请求体 profileId 指定归属环境
+  router.post('/accounts/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const text: string = req.body?.text || ''
+    const defaultProfileId: number | null = req.body?.profileId ? Number(req.body.profileId) : null
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    if (lines.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
+
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profiles = await profileRepo.find({ where: { teamId: req.tid! } })
+    const profileByName = new Map(profiles.map((p) => [p.name, p]))
+    const profileBySeq = new Map(profiles.map((p) => [`#${p.seq}`, p]))
+
+    let ok = 0
+    const failed: string[] = []
+    for (const line of lines) {
+      const parts = line.split(',').map((s) => s.trim())
+      let profileId = defaultProfileId
+      let platform = ''
+      let username = ''
+      let password = ''
+      let remark = ''
+      if (parts.length >= 5) {
+        const envPart = parts[0]
+        const envName = envPart.includes('|') ? envPart.split('|')[1] : envPart
+        const matched = profileByName.get(envName) || profileBySeq.get(envPart)
+        if (matched) profileId = matched.id
+        platform = parts[1]
+        username = parts[2]
+        password = parts[3]
+        remark = parts[4] || ''
+      } else if (parts.length >= 3) {
+        platform = parts[0]
+        username = parts[1]
+        password = parts[2]
+        remark = parts[3] || ''
+      } else if (parts.length === 2) {
+        username = parts[0]
+        password = parts[1]
+      } else {
+        failed.push(line)
+        continue
+      }
+      if (!profileId) {
+        failed.push(`${line} (缺少归属环境)`)
+        continue
+      }
+      if (!username) {
+        failed.push(line)
+        continue
+      }
+      await repo.save(repo.create({ profileId, platform: platform || '其他', username, password, remark }))
+      ok += 1
+    }
+    await writeLog(req, 'import_accounts', `批量导入账号 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
+    res.json({ imported: ok, failed })
+  })
+
+  // 账号导出（文本，含环境归属，便于还原）：`#环境序号|环境名,平台,账号,密码,备注`
+  router.get('/accounts/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profiles = await profileRepo.find({ where: { teamId: req.tid! } })
+    const map = new Map(profiles.map((p) => [p.id, p]))
+    const list = await repo.find({ where: { profileId: In(profiles.map((p) => p.id)) }, order: { id: 'ASC' } })
+    const text = list
+      .map((a) => {
+        const p = map.get(a.profileId)
+        const env = p ? `#${p.seq}|${p.name}` : ''
+        return [env, a.platform, a.username, a.password, a.remark].join(',')
+      })
+      .join('\n')
+    res.json({ text, count: list.length })
   })
 
   // ===== 团队 =====

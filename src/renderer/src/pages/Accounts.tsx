@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, Typography } from 'antd'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, Typography, Upload } from 'antd'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
+import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { AccountDTO, ProfileDTO } from '@shared/types'
 
 const PLATFORMS = ['Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee', 'Google', '其他']
@@ -15,6 +16,9 @@ export default function Accounts() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
   const [form] = Form.useForm()
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importProfile, setImportProfile] = useState<number | undefined>()
 
   const load = useCallback(async () => {
     try {
@@ -38,6 +42,50 @@ export default function Accounts() {
       message.success('已保存')
       setOpen(false)
       load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const doImport = async () => {
+    if (!importProfile) {
+      message.warning('请选择导入目标环境')
+      return
+    }
+    if (!importText.trim()) {
+      message.warning('请粘贴账号列表')
+      return
+    }
+    try {
+      const res = await api.post<{ imported: number; failed: string[] }>('/api/accounts/import', {
+        text: importText,
+        profileId: importProfile
+      })
+      if (res.imported) message.success(`成功导入 ${res.imported} 条账号`)
+      if (res.failed.length) message.warning(`${res.failed.length} 行格式无法识别：${res.failed.slice(0, 3).join(' / ')}`)
+      setImportOpen(false)
+      setImportText('')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const pickFile = async (file: File) => {
+    try {
+      setImportText(await readTextFile(file))
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+    return false
+  }
+
+  const exportAccounts = async () => {
+    try {
+      const res = await api.get<{ text: string; count: number }>('/api/accounts/export')
+      if (!res.count) return message.warning('暂无账号可导出')
+      downloadText(res.text, `roxy-accounts-${nowStamp()}.csv`, 'text/plain;charset=utf-8')
+      message.success(`已导出 ${res.count} 条账号`)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -80,6 +128,12 @@ export default function Accounts() {
       title="账号中心"
       extra={
         <Space>
+          <Button icon={<ImportOutlined />} onClick={() => { setImportProfile(undefined); setImportText(''); setImportOpen(true) }}>
+            批量导入
+          </Button>
+          <Button icon={<ExportOutlined />} onClick={exportAccounts}>
+            导出
+          </Button>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -121,6 +175,42 @@ export default function Accounts() {
           <Form.Item name="remark" label="备注">
             <Input />
           </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="批量导入账号"
+        open={importOpen}
+        onOk={doImport}
+        onCancel={() => setImportOpen(false)}
+        destroyOnClose
+      >
+        <Form layout="vertical">
+          <Form.Item label="导入目标环境" required extra="格式 B（仅「平台,账号,密码[,备注]」）的账号将归属到此环境">
+            <Select
+              placeholder="选择浏览器环境"
+              value={importProfile}
+              onChange={(v) => setImportProfile(v)}
+              showSearch
+              optionFilterProp="label"
+              options={profiles.map((p) => ({ value: p.id, label: `#${p.seq} ${p.name}` }))}
+            />
+          </Form.Item>
+          <Form.Item
+            label="账号列表"
+            required
+            extra="每行一条。格式 A：#序号|环境名,平台,账号,密码,备注（自动匹配环境）。格式 B：平台,账号,密码[,备注]"
+          >
+            <Input.TextArea
+              rows={8}
+              placeholder={'Amazon,amazon01,pass123,主账号\n#1001|Amazon US Store 01,Amazon,amazon02,pass456,备用'}
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+            />
+          </Form.Item>
+          <Upload beforeUpload={pickFile} showUploadList={false} accept=".txt,.csv">
+            <Button icon={<ImportOutlined />}>从文件选择</Button>
+          </Upload>
         </Form>
       </Modal>
     </Card>
