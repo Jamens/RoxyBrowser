@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag } from 'antd'
+import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag, Spin } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
-import { getTimezoneOffsetMinutes } from '@shared/fingerprint'
+import { getTimezoneOffsetMinutes, defaultFingerprint } from '@shared/fingerprint'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -58,9 +58,25 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         form.setFieldValue('extensions', initial.extensions ?? [])
         setFp(initial.fingerprint)
       } else {
+        // 新建：必须先生成一套指纹。否则 fp 为 null 时抽屉内没有任何内容可渲染，
+        // 而「一键随机指纹」与预设选择器都在抽屉内部——等于用户永远无法创建环境。
         setFp(null)
+        let cancelled = false
+        api
+          .post<Fingerprint>('/api/fingerprint/random', {})
+          .then((f) => {
+            if (!cancelled) setFp(f)
+          })
+          .catch(() => {
+            // 接口异常时退回本地生成，保证表单仍能打开
+            if (!cancelled) setFp(defaultFingerprint())
+          })
+        return () => {
+          cancelled = true
+        }
       }
     }
+    return undefined
   }, [open, initial, form])
 
   const randomize = async () => {
@@ -127,8 +143,6 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
     }
   }
 
-  if (!fp) return null
-
   return (
     <Drawer
       title={initial ? (isTemplate ? '编辑模板' : '编辑环境') : isTemplate ? '新建窗口模板' : '新建浏览器环境'}
@@ -138,13 +152,31 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
       extra={
         <Space>
           <Button onClick={onClose}>取消</Button>
-          <Button type="primary" loading={saving} onClick={save}>
+          <Button type="primary" loading={saving} disabled={!fp} onClick={save}>
             保存
           </Button>
         </Space>
       }
     >
-      <Tabs
+      {/* 指纹生成中（或生成失败）时给个加载态，避免抽屉一片空白被当成「没反应」。
+          注意：antd 的 Spin tip 仅在「包裹子元素」时才会渲染，裸 Spin 不显示文字，
+          所以这里把提示文字单独写出来。 */}
+      {!fp ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minHeight: 260,
+            gap: 12
+          }}
+        >
+          <Spin size="large" />
+          <Typography.Text type="secondary">正在生成指纹…</Typography.Text>
+        </div>
+      ) : (
+        <Tabs
         items={[
           {
             key: 'base',
@@ -337,7 +369,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
             )
           }
         ]}
-      />
+        />
+      )}
     </Drawer>
   )
 }
