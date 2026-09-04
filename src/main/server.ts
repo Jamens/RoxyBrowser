@@ -67,6 +67,20 @@ export function setWindowsProvider(fn: () => { id: number; title: string }[]) {
   windowsProvider = fn
 }
 
+// 账户级隔离：普通用户（member）只看到自己 ownerId 的数据；owner/admin 看全部（管理员视角）。
+// 团队管理类接口（成员/团队信息/操作日志/设置）保持团队维度，不套用此隔离。
+function isAdminRole(role?: string): boolean {
+  return role === 'owner' || role === 'admin'
+}
+function ownerScope(req: AuthedRequest, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  if (isAdminRole(req.role)) return { ...extra }
+  return { ownerId: req.uid, ...extra }
+}
+// 给 QueryBuilder 追加账户隔离条件（admin 不加）
+function ownerAndWhere(qb: { andWhere: (sql: string, params?: Record<string, unknown>) => unknown }, req: AuthedRequest, alias = 'p') {
+  if (!isAdminRole(req.role)) qb.andWhere(`${alias}.ownerId = :oid`, { oid: req.uid })
+}
+
 // ---------- 工具 ----------
 type AuthedRequest = Request & { uid?: number; tid?: number; username?: string; role?: string }
 
@@ -520,23 +534,23 @@ function buildApiRouter(): express.Router {
   // ===== 分组 =====
   router.get('/groups', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(GroupEntity)
-    const list = await repo.find({ where: { teamId: req.tid }, order: { sort: 'ASC' } })
+    const list = await repo.find({ where: ownerScope(req), order: { sort: 'ASC' } })
     res.json(list)
   })
 
   router.post('/groups', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(GroupEntity)
-    const g = await repo.save(repo.create({ teamId: req.tid, name: req.body.name, sort: req.body.sort || 0 }))
+    const g = await repo.save(repo.create({ teamId: req.tid, ownerId: req.uid!, name: req.body.name, sort: req.body.sort || 0 }))
     res.json(g)
   })
 
   router.delete('/groups/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(GroupEntity)
-    const g = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const g = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (g) await repo.remove(g)
     if (g) {
       const profileRepo = AppDataSource.getRepository(ProfileEntity)
-      await profileRepo.update({ teamId: req.tid, groupId: g.id }, { groupId: null })
+      await profileRepo.update({ ...ownerScope(req), groupId: g.id }, { groupId: null })
     }
     res.json({ ok: true })
   })
@@ -552,12 +566,13 @@ function buildApiRouter(): express.Router {
       .orderBy('p.seq', 'ASC')
     if (req.query.groupId) qb.andWhere('p.groupId = :gid', { gid: Number(req.query.groupId) })
     if (req.query.keyword) qb.andWhere('(p.name LIKE :kw OR p.remark LIKE :kw OR p.platform LIKE :kw)', { kw: `%${req.query.keyword}%` })
+    ownerAndWhere(qb, req)
     const list = await qb.getMany()
 
     const groupRepo = AppDataSource.getRepository(GroupEntity)
     const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const groups = await groupRepo.find({ where: { teamId: req.tid } })
-    const proxies = await proxyRepo.find({ where: { teamId: req.tid } })
+    const groups = await groupRepo.find({ where: ownerScope(req) })
+    const proxies = await proxyRepo.find({ where: ownerScope(req) })
     const groupMap = new Map(groups.map((g) => [g.id, g.name]))
     const proxyMap = new Map(proxies.map((p) => [p.id, p]))
     res.json(list.map((p) => mapProfile(p, p.groupId ? groupMap.get(p.groupId) : null, p.proxyId ? proxyMap.get(p.proxyId) ?? null : null)))
@@ -577,10 +592,11 @@ function buildApiRouter(): express.Router {
       .filter((n) => Number.isFinite(n) && n > 0)
     const qb = repo.createQueryBuilder('p').where('p.teamId = :tid', { tid }).andWhere('p.isTemplate = 0')
     if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
+    ownerAndWhere(qb, req)
     const list = await qb.orderBy('p.seq', 'ASC').getMany()
 
-    const groups = await groupRepo.find({ where: { teamId: tid } })
-    const proxies = await proxyRepo.find({ where: { teamId: tid } })
+    const groups = await groupRepo.find({ where: ownerScope(req) })
+    const proxies = await proxyRepo.find({ where: ownerScope(req) })
     const accounts = await accountRepo.find()
     const groupMap = new Map(groups.map((g) => [g.id, g.name]))
     const proxyMap = new Map(proxies.map((x) => [x.id, x]))
@@ -615,7 +631,7 @@ function buildApiRouter(): express.Router {
 
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     res.json(mapProfile(p))
   })
@@ -623,16 +639,18 @@ function buildApiRouter(): express.Router {
   router.post('/profiles', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const body = req.body || {}
-    const max = await repo
+    const qbMax = repo
       .createQueryBuilder('p')
       .select('MAX(p.seq)', 'm')
       .where('p.teamId = :tid', { tid: req.tid })
-      .getRawOne<{ m: number | null }>()
+    ownerAndWhere(qbMax, req)
+    const max = await qbMax.getRawOne<{ m: number | null }>()
     const seq = (max?.m || 1000) + 1
     const fingerprint = (body.fingerprint || defaultFingerprint()) as Fingerprint
     const p = await repo.save(
       repo.create({
         teamId: req.tid!,
+        ownerId: req.uid!,
         groupId: body.groupId || null,
         name: body.name || `环境 ${seq}`,
         seq,
@@ -651,7 +669,7 @@ function buildApiRouter(): express.Router {
 
   router.put('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     const body = req.body || {}
     const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId'] as const
@@ -666,7 +684,7 @@ function buildApiRouter(): express.Router {
 
   router.delete('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口' })
     await repo.remove(p)
@@ -678,7 +696,7 @@ function buildApiRouter(): express.Router {
 
   router.post('/profiles/:id/open', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     if (p.status === 'running') return res.status(400).json({ message: '窗口已在运行中' })
     if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
@@ -696,7 +714,7 @@ function buildApiRouter(): express.Router {
 
   router.post('/profiles/:id/close', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     if (browserBridge) await browserBridge.closeWindow(p.id)
     p.status = 'idle'
@@ -708,17 +726,19 @@ function buildApiRouter(): express.Router {
   // 从模板创建环境
   router.post('/profiles/:id/clone', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const tpl = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const tpl = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!tpl) return res.status(404).json({ message: '模板不存在' })
-    const max = await repo
+    const qbMax2 = repo
       .createQueryBuilder('p')
       .select('MAX(p.seq)', 'm')
       .where('p.teamId = :tid', { tid: req.tid })
-      .getRawOne<{ m: number | null }>()
+    ownerAndWhere(qbMax2, req)
+    const max = await qbMax2.getRawOne<{ m: number | null }>()
     const seq = (max?.m || 1000) + 1
     const p = await repo.save(
       repo.create({
         teamId: req.tid!,
+        ownerId: req.uid!,
         groupId: tpl.groupId,
         name: (req.body?.name as string) || `${tpl.name} 副本`,
         seq,
@@ -744,7 +764,7 @@ function buildApiRouter(): express.Router {
   // ===== 代理 =====
   router.get('/proxies', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: { teamId: req.tid }, order: { id: 'DESC' } })
+    const list = await repo.find({ where: ownerScope(req), order: { id: 'DESC' } })
     const usage = await computeProxyUsage(req.tid!)
     const now = Date.now()
     res.json(
@@ -762,6 +782,7 @@ function buildApiRouter(): express.Router {
     const p = await repo.save(
       repo.create({
         teamId: req.tid!,
+        ownerId: req.uid!,
         name: b.name || `${b.host}:${b.port}`,
         type: b.type || 'http',
         host: b.host,
@@ -777,7 +798,7 @@ function buildApiRouter(): express.Router {
 
   router.put('/proxies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '代理不存在' })
     const b = req.body || {}
     for (const f of ['name', 'type', 'host', 'username', 'password', 'remark', 'expiresAt'] as const) {
@@ -791,18 +812,18 @@ function buildApiRouter(): express.Router {
 
   router.delete('/proxies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '代理不存在' })
     await repo.remove(p)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    await profileRepo.update({ teamId: req.tid, proxyId: p.id }, { proxyId: null })
+    await profileRepo.update({ ...ownerScope(req), proxyId: p.id }, { proxyId: null })
     await writeLog(req, 'delete_proxy', `删除代理「${p.name}」(#${p.id})`)
     res.json({ ok: true })
   })
 
   router.post('/proxies/:id/check', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '代理不存在' })
     const settings = await getSettings()
     const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
@@ -829,7 +850,7 @@ function buildApiRouter(): express.Router {
       })
       const usage = await computeProxyUsage(req.tid!)
       if (profileId) {
-        const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: req.tid } })
+        const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, ...ownerScope(req) } })
         await writeLog(req, 'allocate_proxy', `为环境「${profile?.name}」从 IP 池分配代理「${proxy.name}」(#${proxy.id})`)
       } else {
         await writeLog(
@@ -852,7 +873,7 @@ function buildApiRouter(): express.Router {
   // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布
   router.get('/proxies/pool-stats', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: { teamId: req.tid } })
+    const list = await repo.find({ where: ownerScope(req) })
     const usage = await computeProxyUsage(req.tid!)
     const now = Date.now()
     let available = 0
@@ -893,7 +914,7 @@ function buildApiRouter(): express.Router {
   router.get('/accounts', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: req.tid, isTemplate: false } })
+    const profiles = await profileRepo.find({ where: { ...ownerScope(req), isTemplate: false } })
     const profileIds = new Set(profiles.map((p) => p.id))
     const all = await repo.find({ order: { id: 'DESC' } })
     const list = all.filter((a) => profileIds.has(a.profileId))
@@ -904,11 +925,12 @@ function buildApiRouter(): express.Router {
   router.post('/accounts', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), teamId: req.tid } })
+    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), ...ownerScope(req) } })
     if (!profile) return res.status(400).json({ message: '环境不存在' })
     const a = await repo.save(
       repo.create({
         profileId: profile.id,
+        ownerId: req.uid!,
         platform: req.body.platform || '',
         username: req.body.username || '',
         password: req.body.password || '',
@@ -922,9 +944,9 @@ function buildApiRouter(): express.Router {
   router.put('/accounts/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: req.tid } })
+    const profiles = await profileRepo.find({ where: ownerScope(req) })
     const ids = new Set(profiles.map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
+    const a = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
     for (const f of ['platform', 'username', 'password', 'remark'] as const) {
       if (f in req.body) (a as any)[f] = req.body[f]
@@ -936,9 +958,9 @@ function buildApiRouter(): express.Router {
   router.delete('/accounts/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: req.tid } })
+    const profiles = await profileRepo.find({ where: ownerScope(req) })
     const ids = new Set(profiles.map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
+    const a = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
     await repo.remove(a)
     res.json({ ok: true })
@@ -958,7 +980,7 @@ function buildApiRouter(): express.Router {
 
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: req.tid! } })
+    const profiles = await profileRepo.find({ where: ownerScope(req) })
     const profileByName = new Map(profiles.map((p) => [p.name, p]))
     const profileBySeq = new Map(profiles.map((p) => [`#${p.seq}`, p]))
 
@@ -1000,7 +1022,7 @@ function buildApiRouter(): express.Router {
         failed.push(line)
         continue
       }
-      await repo.save(repo.create({ profileId, platform: platform || '其他', username, password, remark }))
+      await repo.save(repo.create({ profileId, ownerId: req.uid!, platform: platform || '其他', username, password, remark }))
       ok += 1
     }
     await writeLog(req, 'import_accounts', `批量导入账号 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
@@ -1011,7 +1033,7 @@ function buildApiRouter(): express.Router {
   router.get('/accounts/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: req.tid! } })
+    const profiles = await profileRepo.find({ where: ownerScope(req) })
     const map = new Map(profiles.map((p) => [p.id, p]))
     const list = await repo.find({ where: { profileId: In(profiles.map((p) => p.id)) }, order: { id: 'ASC' } })
     const text = list
@@ -1163,22 +1185,23 @@ function buildApiRouter(): express.Router {
     const profileId = Number(req.query.profileId)
     if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     const repo = AppDataSource.getRepository(CookieEntity)
-    const list = await repo.find({ where: { profileId, teamId: req.tid! }, order: { domain: 'ASC', name: 'ASC' } })
+    const list = await repo.find({ where: { profileId, ...ownerScope(req) }, order: { domain: 'ASC', name: 'ASC' } })
     res.json(list.map(mapCookie))
   })
 
   // 新增 Cookie
   router.post('/cookies', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), ...ownerScope(req) } })
     if (!profile) return res.status(400).json({ message: '环境不存在' })
     const repo = AppDataSource.getRepository(CookieEntity)
     const c = await repo.save(
       repo.create({
         teamId: req.tid!,
+        ownerId: req.uid!,
         profileId: profile.id,
         domain: (req.body.domain || '').trim(),
         name: (req.body.name || '').trim(),
@@ -1200,10 +1223,10 @@ function buildApiRouter(): express.Router {
     const profileId = Number(req.query.profileId)
     if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     const repo = AppDataSource.getRepository(CookieEntity)
-    const r = await repo.delete({ profileId, teamId: req.tid! })
+    const r = await repo.delete({ profileId, ...ownerScope(req) })
     await writeLog(req, 'clear_cookies', `清空环境「${profile.name}」的 Cookie（${r.affected || 0} 条）`)
     res.json({ ok: true, deleted: r.affected || 0 })
   })
@@ -1214,7 +1237,7 @@ function buildApiRouter(): express.Router {
     const text: string = req.body?.text || ''
     if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     if (!text.trim()) return res.status(400).json({ message: '请粘贴 Cookie 文本' })
     const { cookies, failed } = parseCookieText(text)
@@ -1224,6 +1247,7 @@ function buildApiRouter(): express.Router {
       cookies.map((c) =>
         repo.create({
           teamId: req.tid!,
+          ownerId: req.uid!,
           profileId,
           domain: (c.domain || '').trim(),
           name: (c.name || '').trim(),
@@ -1246,10 +1270,10 @@ function buildApiRouter(): express.Router {
     const profileId = Number(req.query.profileId)
     if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     const repo = AppDataSource.getRepository(CookieEntity)
-    const list = await repo.find({ where: { profileId, teamId: req.tid! }, order: { domain: 'ASC', name: 'ASC' } })
+    const list = await repo.find({ where: { profileId, ...ownerScope(req) }, order: { domain: 'ASC', name: 'ASC' } })
     const text = list
       .map((c) => {
         const flag = c.hostOnly ? 'FALSE' : 'TRUE'
@@ -1265,7 +1289,7 @@ function buildApiRouter(): express.Router {
     const profileId = Number(req.query.profileId || req.body.profileId)
     if (!profileId) return res.status(400).json({ message: '请指定 profileId' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     try {
       const { applyCookies } = await import('./browserManager')
@@ -1279,10 +1303,10 @@ function buildApiRouter(): express.Router {
 
   router.put('/cookies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(CookieEntity)
-    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid! } })
+    const c = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!c) return res.status(404).json({ message: 'Cookie 不存在' })
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: c.profileId, teamId: req.tid! } })
+    const profile = await profileRepo.findOne({ where: { id: c.profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     for (const f of ['domain', 'name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'expirationDate', 'hostOnly'] as const) {
       if (f in req.body) {
@@ -1297,7 +1321,7 @@ function buildApiRouter(): express.Router {
 
   router.delete('/cookies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(CookieEntity)
-    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid! } })
+    const c = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!c) return res.status(404).json({ message: 'Cookie 不存在' })
     await repo.remove(c)
     res.json({ ok: true })
@@ -1383,20 +1407,20 @@ function buildApiRouter(): express.Router {
   // ===== API 令牌 =====
   router.get('/tokens', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ApiTokenEntity)
-    res.json(await repo.find({ where: { teamId: req.tid } }))
+    res.json(await repo.find({ where: ownerScope(req) }))
   })
 
   router.post('/tokens', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ApiTokenEntity)
     const token = 'rb_' + crypto.randomBytes(24).toString('hex')
-    const t = await repo.save(repo.create({ teamId: req.tid!, name: req.body?.name || '默认令牌', token }))
+    const t = await repo.save(repo.create({ teamId: req.tid!, ownerId: req.uid!, name: req.body?.name || '默认令牌', token }))
     await writeLog(req, 'create_token', `创建 API 令牌「${t.name}」`)
     res.json(t)
   })
 
   router.delete('/tokens/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ApiTokenEntity)
-    const t = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const t = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (t) await repo.remove(t)
     res.json({ ok: true })
   })
@@ -1687,18 +1711,15 @@ function buildApiRouter(): express.Router {
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
 
     // 分组 / 代理按名称复用，缺失则新建
-    const groupIdByName = new Map((await groupRepo.find({ where: { teamId: req.tid } })).map((g) => [g.name, g.id]))
-    const proxyIdByName = new Map((await proxyRepo.find({ where: { teamId: req.tid } })).map((x) => [x.name, x.id]))
+    const groupIdByName = new Map((await groupRepo.find({ where: ownerScope(req) })).map((g) => [g.name, g.id]))
+    const proxyIdByName = new Map((await proxyRepo.find({ where: ownerScope(req) })).map((x) => [x.name, x.id]))
 
-    let seq = Number(
-      (
-        await repo
-          .createQueryBuilder('p')
-          .select('MAX(p.seq)', 'm')
-          .where('p.teamId = :tid', { tid: req.tid })
-          .getRawOne<{ m: number | null }>()
-      )?.m || 1000
-    )
+    const qbImp = repo
+      .createQueryBuilder('p')
+      .select('MAX(p.seq)', 'm')
+      .where('p.teamId = :tid', { tid: req.tid })
+    ownerAndWhere(qbImp, req)
+    let seq = Number((await qbImp.getRawOne<{ m: number | null }>())?.m || 1000)
 
     const created: Array<{ id: number; name: string }> = []
     let groupsCreated = 0
@@ -1711,7 +1732,7 @@ function buildApiRouter(): express.Router {
       const groupName = item.group ? String(item.group) : ''
       if (groupName) {
         if (!groupIdByName.has(groupName)) {
-          const g = await groupRepo.save(groupRepo.create({ teamId: req.tid!, name: groupName, sort: 0 }))
+          const g = await groupRepo.save(groupRepo.create({ teamId: req.tid!, ownerId: req.uid!, name: groupName, sort: 0 }))
           groupIdByName.set(groupName, g.id)
           groupsCreated++
         }
@@ -1730,6 +1751,7 @@ function buildApiRouter(): express.Router {
             const x = await proxyRepo.save(
               proxyRepo.create({
                 teamId: req.tid!,
+                ownerId: req.uid!,
                 name: proxyName,
                 type: String(detail.type || 'http'),
                 host: String(detail.host),
@@ -1750,6 +1772,7 @@ function buildApiRouter(): express.Router {
       const p = await repo.save(
         repo.create({
           teamId: req.tid!,
+          ownerId: req.uid!,
           groupId,
           proxyId,
           name: (item.name as string) || `导入环境 ${seq}`,
@@ -1771,6 +1794,7 @@ function buildApiRouter(): express.Router {
         await accountRepo.save(
           accountRepo.create({
             profileId: p.id,
+            ownerId: req.uid!,
             platform: String(acc.platform || ''),
             username: String(acc.username),
             password: String(acc.password || ''),
@@ -1793,17 +1817,19 @@ function buildApiRouter(): express.Router {
   // 复制环境（连同账号一起复制，用于资料迁移）
   router.post('/profiles/:id/duplicate', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const src = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    const src = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!src) return res.status(404).json({ message: '环境不存在' })
-    const max = await repo
+    const qbDup = repo
       .createQueryBuilder('p')
       .select('MAX(p.seq)', 'm')
       .where('p.teamId = :tid', { tid: req.tid })
-      .getRawOne<{ m: number | null }>()
+    ownerAndWhere(qbDup, req)
+    const max = await qbDup.getRawOne<{ m: number | null }>()
     const seq = (max?.m || 1000) + 1
     const copy = await repo.save(
       repo.create({
         teamId: req.tid!,
+        ownerId: req.uid!,
         groupId: src.groupId,
         name: `${src.name} 副本`,
         seq,
@@ -1823,6 +1849,7 @@ function buildApiRouter(): express.Router {
       await accRepo.save(
         accRepo.create({
           profileId: copy.id,
+          ownerId: req.uid!,
           platform: a.platform,
           username: a.username,
           password: a.password,
@@ -1841,7 +1868,7 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProfileEntity)
     let count = 0
     for (const id of ids) {
-      const p = await repo.findOne({ where: { id: Number(id), teamId: req.tid } })
+      const p = await repo.findOne({ where: { id: Number(id), ...ownerScope(req) } })
       if (!p) continue
       if (p.status === 'running') continue // 运行中的环境不改动
       p.fingerprint = randomFingerprint() as unknown as Record<string, unknown>
@@ -1870,7 +1897,7 @@ function buildApiRouter(): express.Router {
         failed.push(line)
         continue
       }
-      await repo.save(repo.create({ teamId: req.tid!, name: `${parsed.host}:${parsed.port}`, ...parsed }))
+      await repo.save(repo.create({ teamId: req.tid!, ownerId: req.uid!, name: `${parsed.host}:${parsed.port}`, ...parsed }))
       ok += 1
     }
     await writeLog(req, 'import_proxies', `批量导入代理 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
@@ -1880,7 +1907,7 @@ function buildApiRouter(): express.Router {
   // 代理导出（文本，便于备份与迁移）
   router.get('/proxies/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: { teamId: req.tid }, order: { id: 'ASC' } })
+    const list = await repo.find({ where: ownerScope(req), order: { id: 'ASC' } })
     const text = list
       .map((p) => [p.type, p.host, p.port, p.username, p.password].join(':'))
       .join('\n')

@@ -68,6 +68,10 @@ export class GroupEntity {
   @Column({ type: 'int' })
   teamId: number
 
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
   @Column({ type: 'varchar', length: 64 })
   name: string
 
@@ -86,6 +90,10 @@ export class ProxyEntity {
 
   @Column({ type: 'int' })
   teamId: number
+
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
 
   @Column({ type: 'varchar', length: 128, default: '' })
   name: string
@@ -151,6 +159,10 @@ export class ProfileEntity {
   @Column({ type: 'int' })
   teamId: number
 
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
   @Column({ type: 'int', nullable: true })
   groupId: number | null
 
@@ -206,6 +218,10 @@ export class CookieEntity {
   @Column({ type: 'int' })
   teamId: number
 
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
   @Column({ type: 'int' })
   profileId: number
 
@@ -253,6 +269,10 @@ export class AccountEntity {
 
   @Column({ type: 'int' })
   profileId: number
+
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
 
   @Column({ type: 'varchar', length: 64, default: '' })
   platform: string
@@ -303,6 +323,10 @@ export class ApiTokenEntity {
 
   @Column({ type: 'int' })
   teamId: number
+
+  // 创建者用户 ID，用于账户级隔离（可为空：历史数据归管理员视角）
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
 
   @Column({ type: 'varchar', length: 128 })
   name: string
