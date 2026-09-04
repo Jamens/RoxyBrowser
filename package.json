@@ -10,13 +10,11 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "app": "electron-vite build && electron out/main/index.js",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild"
-    ]
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "icon": "node scripts/gen-tray-icon.mjs && node scripts/gen-app-icon.mjs",
+    "dist:dir": "electron-vite build && electron-builder --win --dir",
+    "dist": "electron-vite build && electron-builder --win --x64",
+    "dist:fresh": "electron-vite build && electron-builder --win --x64 -c.directories.output=release-nsis"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -43,6 +41,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "antd": "^5.22.2",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

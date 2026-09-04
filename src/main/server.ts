@@ -3,6 +3,9 @@ import express, { type Request, type Response, type NextFunction, type Express }
 import cors from 'cors'
 import http from 'http'
 import crypto from 'crypto'
+import { homedir } from 'os'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import mysql from 'mysql2/promise'
@@ -195,6 +198,58 @@ async function checkProxy(proxy: ProxyEntity): Promise<{ ok: boolean; country: s
   } catch {
     return { ok: false, country: '', exitIp: '', latency: 0 }
   }
+}
+
+/**
+ * 解析一行代理配置，支持：
+ *   socks5://user:pass@1.2.3.4:1080
+ *   http://1.2.3.4:8080
+ *   1.2.3.4:8080:user:pass
+ *   1.2.3.4:8080
+ *   1.2.3.4,8080,user,pass        (CSV)
+ *   1.2.3.4,8080,user,pass,socks5 (CSV 带协议)
+ */
+function parseProxyLine(line: string): { type: string; host: string; port: number; username: string; password: string } | null {
+  const raw = line.trim()
+  if (!raw) return null
+
+  // http://user:pass@host:port
+  if (/^[a-z]+:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw)
+      const type = (u.protocol.replace(':', '') || 'http').toLowerCase()
+      return {
+        type: type === 'socks' ? 'socks5' : type === 'http' ? 'http' : type === 'https' ? 'https' : 'http',
+        host: u.hostname,
+        port: Number(u.port) || (type === 'https' ? 443 : type === 'socks5' ? 1080 : 80),
+        username: decodeURIComponent(u.username || ''),
+        password: decodeURIComponent(u.password || '')
+      }
+    } catch {
+      return null
+    }
+  }
+
+  // CSV：host,port,user,pass[,type]
+  if (raw.includes(',')) {
+    const parts = raw.split(',').map((s) => s.trim())
+    const [host, port, username = '', password = '', type = 'http'] = parts
+    if (!host || !Number(port)) return null
+    return { type: type.toLowerCase() === 'socks5' ? 'socks5' : type.toLowerCase() === 'https' ? 'https' : 'http', host, port: Number(port), username, password }
+  }
+
+  // 冒号分隔：host:port[:user[:pass]]
+  const parts = raw.split(':').map((s) => s.trim())
+  if (parts.length >= 2 && parts[0] && Number(parts[1])) {
+    return {
+      type: 'http',
+      host: parts[0],
+      port: Number(parts[1]),
+      username: parts[2] || '',
+      password: parts[3] || ''
+    }
+  }
+  return null
 }
 
 // ---------- API 路由 ----------
@@ -735,15 +790,167 @@ function buildApiRouter(): express.Router {
     res.json({ code: 0, data: { id: p.id, status: 'idle' } })
   })
 
-  v1.get('/proxxies', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid } })
-    res.json({ code: 0, data: list })
-  })
   v1.get('/proxies', async (req: Request, res: Response) => {
     const repo = AppDataSource.getRepository(ProxyEntity)
     const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid } })
     res.json({ code: 0, data: list })
+  })
+
+  // ===== 批量能力：导入 / 导出 / 复制 / 批量随机指纹 =====
+
+  // 导入环境（JSON）
+  router.post('/profiles/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const items: Array<{ name?: string; platform?: string; startUrl?: string; remark?: string; fingerprint?: unknown }> =
+      req.body?.items || []
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
+
+    let seq = Number(
+      (
+        await repo
+          .createQueryBuilder('p')
+          .select('MAX(p.seq)', 'm')
+          .where('p.teamId = :tid', { tid: req.tid })
+          .getRawOne<{ m: number | null }>()
+      )?.m || 1000
+    )
+    const created: Array<{ id: number; name: string }> = []
+    for (const item of items) {
+      seq += 1
+      const p = await repo.save(
+        repo.create({
+          teamId: req.tid!,
+          name: item.name || `导入环境 ${seq}`,
+          seq,
+          platform: item.platform || '',
+          startUrl: item.startUrl || DEFAULT_START_URL,
+          remark: item.remark || '',
+          fingerprint: (item.fingerprint as Record<string, unknown>) || (randomFingerprint() as unknown as Record<string, unknown>),
+          createdBy: req.uid!
+        })
+      )
+      created.push({ id: p.id, name: p.name })
+    }
+    await writeLog(req, 'import_profiles', `导入 ${created.length} 个环境`)
+    res.json({ created: created.length, items: created })
+  })
+
+  // 导出环境（JSON，含完整指纹）
+  router.get('/profiles/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+    const qb = repo.createQueryBuilder('p').where('p.teamId = :tid', { tid: req.tid }).andWhere('p.isTemplate = 0')
+    if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
+    const list = await qb.getMany()
+    res.json(
+      list.map((p) => ({
+        name: p.name,
+        platform: p.platform,
+        startUrl: p.startUrl,
+        remark: p.remark,
+        fingerprint: p.fingerprint
+      }))
+    )
+  })
+
+  // 复制环境（连同账号一起复制，用于资料迁移）
+  router.post('/profiles/:id/duplicate', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const src = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid } })
+    if (!src) return res.status(404).json({ message: '环境不存在' })
+    const max = await repo
+      .createQueryBuilder('p')
+      .select('MAX(p.seq)', 'm')
+      .where('p.teamId = :tid', { tid: req.tid })
+      .getRawOne<{ m: number | null }>()
+    const seq = (max?.m || 1000) + 1
+    const copy = await repo.save(
+      repo.create({
+        teamId: req.tid!,
+        groupId: src.groupId,
+        name: `${src.name} 副本`,
+        seq,
+        remark: src.remark,
+        platform: src.platform,
+        startUrl: src.startUrl,
+        proxyId: null,
+        fingerprint: src.fingerprint,
+        isTemplate: src.isTemplate,
+        createdBy: req.uid!
+      })
+    )
+    // 连同账号资料一起迁移
+    const accRepo = AppDataSource.getRepository(AccountEntity)
+    const accounts = await accRepo.find({ where: { profileId: src.id } })
+    for (const a of accounts) {
+      await accRepo.save(
+        accRepo.create({
+          profileId: copy.id,
+          platform: a.platform,
+          username: a.username,
+          password: a.password,
+          remark: a.remark
+        })
+      )
+    }
+    await writeLog(req, 'duplicate_profile', `复制环境「${src.name}」→「${copy.name}」，迁移 ${accounts.length} 个账号`)
+    res.json({ id: copy.id, name: copy.name, migratedAccounts: accounts.length })
+  })
+
+  // 批量重新生成指纹
+  router.post('/profiles/batch-randomize', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const ids: number[] = req.body?.ids || []
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: '请先选择环境' })
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    let count = 0
+    for (const id of ids) {
+      const p = await repo.findOne({ where: { id: Number(id), teamId: req.tid } })
+      if (!p) continue
+      if (p.status === 'running') continue // 运行中的环境不改动
+      p.fingerprint = randomFingerprint() as unknown as Record<string, unknown>
+      await repo.save(p)
+      count += 1
+    }
+    await writeLog(req, 'batch_randomize', `批量重随机 ${count} 个环境的指纹`)
+    res.json({ updated: count })
+  })
+
+  // 代理批量导入：支持 host:port:user:pass / url 形式 / CSV
+  router.post('/proxies/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const text: string = req.body?.text || ''
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+    if (lines.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
+
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    let ok = 0
+    const failed: string[] = []
+    for (const line of lines) {
+      const parsed = parseProxyLine(line)
+      if (!parsed) {
+        failed.push(line)
+        continue
+      }
+      await repo.save(repo.create({ teamId: req.tid!, name: `${parsed.host}:${parsed.port}`, ...parsed }))
+      ok += 1
+    }
+    await writeLog(req, 'import_proxies', `批量导入代理 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
+    res.json({ imported: ok, failed })
+  })
+
+  // 代理导出（文本，便于备份与迁移）
+  router.get('/proxies/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProxyEntity)
+    const list = await repo.find({ where: { teamId: req.tid }, order: { id: 'ASC' } })
+    const text = list
+      .map((p) => [p.type, p.host, p.port, p.username, p.password].join(':'))
+      .join('\n')
+    res.json({ text, count: list.length })
   })
 
   router.use('/v1', wrapAsync(v1))
@@ -828,7 +1035,22 @@ export async function bootstrap(): Promise<string> {
     }
     tryListen()
   })
-  apiBase = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  const realPort = (server.address() as AddressInfo).port
+  apiBase = `http://127.0.0.1:${realPort}`
+
+  // 端口可能被占用而自动递增，把真实地址落盘，方便外部脚本 / 自动化工具发现
+  try {
+    const dir = join(homedir(), '.roxy-clone')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, 'api-base.json'),
+      JSON.stringify({ apiBase, port: realPort, pid: process.pid, startedAt: new Date().toISOString() }, null, 2),
+      'utf8'
+    )
+  } catch (e) {
+    console.warn('[roxy] 写入 API 地址文件失败:', (e as Error).message)
+  }
+
   console.log(`[roxy] API 服务已启动: ${apiBase}`)
   return apiBase
 }

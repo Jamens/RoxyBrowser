@@ -9,6 +9,8 @@ export default defineConfig({
       tsconfigRaw: '{"compilerOptions":{"experimentalDecorators":true,"emitDecoratorMetadata":true,"target":"ES2022"}}'
     },
     build: {
+      // 不清空输出目录：避免批量删除（CI / 受限环境下可能无删除权限）
+      emptyOutDir: false,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
@@ -18,7 +20,8 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: { emptyOutDir: false }
   },
   renderer: {
     plugins: [react()],
@@ -27,6 +30,9 @@ export default defineConfig({
         '@': resolve(__dirname, 'src/renderer/src'),
         '@shared': resolve(__dirname, 'src/shared')
       }
+    },
+    build: {
+      emptyOutDir: false
     }
   }
 })

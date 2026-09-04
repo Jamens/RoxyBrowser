@@ -1,0 +1,38 @@
+appId: com.roxyclone.desktop
+productName: RoxyBrowser Clone
+copyright: Copyright © 2026 RoxyBrowser Clone
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - out/**
+  - resources/**
+  - package.json
+
+# 托盘图标需要在真实文件系统上可读，因此从 asar 中解包
+asarUnpack:
+  - resources/**
+
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
+
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: RoxyBrowser Clone
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  language: '2052'
+  deleteAppDataOnUninstall: false
+
+compression: maximum

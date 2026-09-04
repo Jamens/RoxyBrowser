@@ -4,8 +4,10 @@ import {
 } from 'antd'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
-  EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined
+  EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
+  ImportOutlined, ExportOutlined, ThunderboltOutlined
 } from '@ant-design/icons'
+import { downloadText } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
@@ -22,6 +24,8 @@ export default function Environments() {
   const [selected, setSelected] = useState<React.Key[]>([])
   const [syncMode, setSyncMode] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
   const [editing, setEditing] = useState<ProfileDTO | null>(null)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [groupForm] = Form.useForm()
@@ -99,6 +103,65 @@ export default function Environments() {
     setSyncMode(localStorage.getItem('roxy_sync') === '1')
   }, [])
 
+  // ===== 批量能力 =====
+  const exportProfiles = async () => {
+    try {
+      const data = await api.get<unknown[]>('/api/profiles/export')
+      downloadText(JSON.stringify(data, null, 2), `roxy-profiles-${nowStamp()}.json`)
+      message.success(`已导出 ${data.length} 个环境（含完整指纹配置）`)
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const doImport = async () => {
+    if (!importText.trim()) {
+      message.warning('请粘贴 JSON 内容')
+      return
+    }
+    try {
+      const parsed = JSON.parse(importText)
+      const items = Array.isArray(parsed) ? parsed : parsed.items
+      const res = await api.post<{ created: number }>('/api/profiles/import', { items })
+      message.success(`成功导入 ${res.created} 个环境`)
+      setImportOpen(false)
+      setImportText('')
+      load()
+    } catch (e) {
+      message.error(`导入失败：${(e as Error).message}`)
+    }
+  }
+
+  const pickImportFile = async (file: File) => {
+    try {
+      setImportText(await readTextFile(file))
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+    return false
+  }
+
+  const randomizeSelected = async () => {
+    try {
+      const res = await api.post<{ updated: number }>('/api/profiles/batch-randomize', { ids: selected.map(Number) })
+      message.success(`已为 ${res.updated} 个环境重新生成指纹（运行中的环境已跳过）`)
+      setSelected([])
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const duplicate = async (id: number) => {
+    try {
+      const res = await api.post<{ migratedAccounts: number }>(`/api/profiles/${id}/duplicate`)
+      message.success(`已复制环境，迁移 ${res.migratedAccounts} 个账号资料`)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   const columns: ColumnsType<ProfileDTO> = [
     { title: '序号', dataIndex: 'seq', width: 70 },
     {
@@ -171,6 +234,9 @@ export default function Environments() {
             </Button>
           )}
           <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); setFormOpen(true) }} />
+          <Tooltip title="复制环境（含账号资料迁移）">
+            <Button size="small" icon={<CopyOutlined />} onClick={() => duplicate(r.id)} />
+          </Tooltip>
           <Popconfirm title="确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
@@ -232,8 +298,20 @@ export default function Environments() {
           <Button icon={<ReloadOutlined />} onClick={() => load()}>
             刷新
           </Button>
+          <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
+            导入
+          </Button>
+          <Button icon={<ExportOutlined />} onClick={exportProfiles}>
+            导出
+          </Button>
           {selected.length > 0 && (
             <>
+              <Button
+                icon={<ThunderboltOutlined />}
+                onClick={randomizeSelected}
+              >
+                批量重随机指纹 ({selected.length})
+              </Button>
               <Button
                 icon={<PlayCircleOutlined />}
                 onClick={() => {

@@ -20,11 +20,20 @@ pnpm install      # 安装依赖（首次需放行 electron 构建脚本，见�
 pnpm dev          # 开发模式（vite HMR + 自动重启 Electron）
 pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
+pnpm dist         # 打包 Windows 安装包（输出到 release/）
 ```
 
 首次启动会自动建库、建表，并创建默认账号：**`admin` / `123456`**。
 
 **运行行为**：关闭主窗口不会退出程序，而是最小化到系统托盘，本地 API 与自动化接口继续提供服务；彻底退出请右键托盘图标 → 「退出」。托盘图标由 `node scripts/gen-tray-icon.mjs` 生成到 `resources/tray.png`（纯 Node 实现，无第三方依赖）。
+
+> **端口说明**：默认监听 `39100`，若被占用会自动递增。外部脚本不要硬编码端口，启动后读取 `~/.roxy-clone/api-base.json` 获取真实地址：
+>
+> ```bash
+> # 读取真实 API 地址（端口可能不是 39100）
+> API=$(grep -o '"apiBase":"[^"]*"' ~/.roxy-clone/api-base.json | cut -d'"' -f4)
+> curl "$API/api/v1/profiles" -H "Authorization: Bearer <令牌>"
+> ```
 
 数据库配置可用环境变量覆盖：`DB_HOST` `DB_PORT` `DB_USER` `DB_PASS` `DB_NAME`。
 
@@ -128,7 +137,26 @@ src/
 2. **TypeORM + esbuild**：esbuild 不支持 `emitDecoratorMetadata`，因此所有 `@Column` 均**显式声明 `type`**（如 `type: 'varchar'`）。新增实体字段时请沿用该写法，否则会报 `Column type is not defined`。
 3. **列名**：未启用 snake_case 命名策略，数据库列名与属性名一致（如 `teamId`），QueryBuilder 里不可写 `team_id`。
 4. **`ELECTRON_RUN_AS_NODE`**：若当前终端设置了该环境变量，Electron 会以纯 Node 模式启动导致 `ipcMain` 等 API 不可用，启动前请 `unset ELECTRON_RUN_AS_NODE`（Windows PowerShell：`$env:ELECTRON_RUN_AS_NODE=$null`）。
-5. 生产打包可继续接入 `electron-builder`，当前 `pnpm app` 直接运行 `out/` 构建产物。
+5. **`pnpm add` 中断会弄脏 node_modules**：pnpm 依赖安装被中断（如 electron postinstall 失败）后，可能留下断裂的 symlink，表现为 `Cannot find package 'electron-vite'`。此时执行 `node scripts/fix-pnpm-links.mjs` 可就地重建链接（junction 方式，不删除任何文件）；彻底解决请删掉 `node_modules` 后重装。
+6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可。
+
+## 打包分发
+
+```bash
+pnpm icon        # 生成托盘图标 resources/tray.png 与应用图标 resources/icon.ico（纯 Node，无依赖）
+pnpm dist        # 构建 + 打包 Windows NSIS 安装包 → release/RoxyBrowser Clone Setup 1.0.0.exe
+pnpm dist:dir    # 仅打包免安装目录 → release/win-unpacked/（调试分发更快）
+pnpm dist:fresh  # 输出到 release-nsis/（当 release/ 目录被占用无法清理时使用）
+```
+
+打包配置见 `electron-builder.yml`：
+
+- `appId: com.roxyclone.desktop`，产品名 `RoxyBrowser Clone`，简体中文安装向导（`nsis.language: 2052`）
+- 支持自定义安装路径、创建桌面与开始菜单快捷方式
+- `asarUnpack: resources/**` —— 托盘图标需真实文件系统可读，故从 asar 中解包
+- 国内镜像已在 `.npmrc` 配置（`electron_mirror` / `electron-builder-binaries_mirror`），避免下载超时
+
+> 打包产物未做代码签名，Windows SmartScreen 会提示「未知发布者」，选择「仍要运行」即可；正式分发请接入代码签名证书。
 
 ## 与商业产品的差异说明
 
