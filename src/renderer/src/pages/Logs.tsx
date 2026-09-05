@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Input, Tag, Typography } from 'antd'
+import { Card, Table, Input, Tag, Typography, Space } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { api } from '../api'
 import type { LogDTO } from '@shared/types'
+import { countryTimezone } from '@shared/countries'
+import { formatDateTimeInZone } from '@shared/timezone'
 
 const ACTION_COLORS: Record<string, string> = {
   create_profile: 'green',
@@ -56,7 +57,24 @@ export default function Logs() {
   }, [load])
 
   const columns: ColumnsType<LogDTO> = [
-    { title: '时间', dataIndex: 'createdAt', width: 170, render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm:ss') },
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      width: 200,
+      // 数据库存的是 UTC，这里按用户所选国家（设置页）的本地时区展示，
+      // 避免「我明明 19:42 操作，日志却显示 11:39」的错位。
+      render: (v: string) => {
+        const tz = countryTimezone(localStorage.getItem('roxy_country'))
+        return (
+          <Space direction="vertical" size={0}>
+            <span>{formatDateTimeInZone(v, tz)}</span>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {tz}
+            </Typography.Text>
+          </Space>
+        )
+      }
+    },
     { title: '操作人', dataIndex: 'username', width: 120 },
     {
       title: '操作',

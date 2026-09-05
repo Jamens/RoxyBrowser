@@ -88,6 +88,25 @@ export function formatTimeInZone(timeZone: string, date: Date = new Date()): str
   }
 }
 
+/**
+ * 把一个 UTC（或任意时区）时间字符串，按指定 IANA 时区格式化为 'YYYY-MM-DD HH:mm[:ss]'。
+ * 用途：操作日志 / RPA 更新时间等需要「按用户所选地区」展示，而不是按数据库存储的 UTC。
+ * 全程用 Intl.DateTimeFormat 在目标时区逐字段换算，冬夏令时由运行时处理。
+ */
+export function formatDateTimeInZone(iso: string, timeZone: string, withSeconds = true): string {
+  const date = new Date(iso)
+  if (isNaN(date.getTime())) return String(iso ?? '')
+  try {
+    const p = partsInZone(timeZone, date)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const d = `${p.year}-${pad(p.month)}-${pad(p.day)}`
+    const t = `${pad(p.hour % 24)}:${pad(p.minute)}` + (withSeconds ? `:${pad(p.second)}` : '')
+    return `${d} ${t}`
+  } catch {
+    return String(iso)
+  }
+}
+
 /** 一次性给出展示所需的全部时区信息（设置页的国家选择器用） */
 export function describeTimeZone(timeZone: string, date: Date = new Date()) {
   const offset = timeZoneUtcOffsetMinutes(timeZone, date)
