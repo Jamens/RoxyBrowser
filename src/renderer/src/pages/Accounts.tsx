@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
@@ -10,6 +10,28 @@ import type { AccountDTO, ProfileDTO } from '@shared/types'
 const PLATFORMS = ['Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee', 'Google', '其他']
 
 interface Row extends AccountDTO {}
+
+// 行内一键复制按钮：复制凭据到剪贴板，不落日志、不影响数据
+function CopyBtn({ text, label }: { text?: string; label: string }) {
+  const { message } = useAppCtx()
+  return (
+    <Button
+      type="text"
+      size="small"
+      icon={<CopyOutlined />}
+      title={`复制${label}`}
+      onClick={(e) => {
+        e.stopPropagation()
+        const v = text ?? ''
+        if (!v) return message.warning(`没有可复制的${label}`)
+        navigator.clipboard
+          .writeText(v)
+          .then(() => message.success(`${label}已复制`))
+          .catch(() => message.error('复制失败，请检查浏览器剪贴板权限'))
+      }}
+    />
+  )
+}
 
 export default function Accounts() {
   const { message } = useAppCtx()
@@ -96,11 +118,25 @@ export default function Accounts() {
   const columns: ColumnsType<Row> = [
     { title: '所属环境', dataIndex: 'profileName', render: (v) => v || '-' },
     { title: '平台', dataIndex: 'platform', width: 110, render: (v) => (v ? <Tag color="processing">{v}</Tag> : '-') },
-    { title: '账号', dataIndex: 'username' },
+    {
+      title: '账号',
+      dataIndex: 'username',
+      render: (v) => (
+        <Space size={4}>
+          <span>{v || '-'}</span>
+          <CopyBtn text={v} label="账号" />
+        </Space>
+      )
+    },
     {
       title: '密码',
       dataIndex: 'password',
-      render: (v) => <Input.Password value={v} size="small" bordered={false as never} style={{ width: 140 }} readOnly />
+      render: (v) => (
+        <Space size={4}>
+          <Input.Password value={v} size="small" bordered={false as never} style={{ width: 140 }} readOnly />
+          <CopyBtn text={v} label="密码" />
+        </Space>
+      )
     },
     { title: '备注', dataIndex: 'remark', ellipsis: true, render: (v) => v || '-' },
     {

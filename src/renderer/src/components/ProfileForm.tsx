@@ -3,7 +3,7 @@ import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, 
 import { useAppCtx } from '../hooks/useApp'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
-import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
+import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts } from '@shared/fingerprint'
 
@@ -11,6 +11,23 @@ const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
   'AliExpress', 'Google', 'Twitter/X', 'LinkedIn', 'Pinterest', '其他'
 ]
+
+// 平台 → 站点首页，用于「从已有账号带入」时回填起始页 URL（仅作便捷默认值，可改）
+const PLATFORM_HOMEPAGES: Record<string, string> = {
+  Amazon: 'https://www.amazon.com',
+  Facebook: 'https://www.facebook.com',
+  Instagram: 'https://www.instagram.com',
+  TikTok: 'https://www.tiktok.com',
+  eBay: 'https://www.ebay.com',
+  Etsy: 'https://www.etsy.com',
+  Walmart: 'https://www.walmart.com',
+  Shopee: 'https://shopee.com',
+  AliExpress: 'https://www.aliexpress.com',
+  Google: 'https://www.google.com',
+  'Twitter/X': 'https://x.com',
+  LinkedIn: 'https://www.linkedin.com',
+  Pinterest: 'https://www.pinterest.com'
+}
 
 const TIMEZONES = [
   'America/New_York', 'America/Los_Angeles', 'America/Chicago', 'America/Denver', 'America/Sao_paulo',
@@ -36,6 +53,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)
   const [presets, setPresets] = useState<FingerprintPresetDTO[]>([])
+  // 「从已有账号带入」：拉取账号列表，供新建环境时回填平台 / 起始页
+  const [accounts, setAccounts] = useState<AccountDTO[]>([])
   // 当前激活的 Tab（保存校验失败时回切到「基本信息」让必填项红框可见）
   const [tabKey, setTabKey] = useState<string>('base')
   // 当前选中的预设 id。之前这里写死 value={null}，等于把 Select 钉成空值——
@@ -53,6 +72,23 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
       })
     }
   }, [open, presets.length])
+
+  // 新建环境时拉取账号列表，供「从已有账号带入」回填平台 / 起始页
+  useEffect(() => {
+    if (!open || initial) return
+    let cancelled = false
+    api
+      .get<AccountDTO[]>('/api/accounts')
+      .then((a) => {
+        if (!cancelled) setAccounts(a)
+      })
+      .catch(() => {
+        /* 账号列表加载失败不影响建环境 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, initial])
 
   useEffect(() => {
     if (open) {
@@ -233,6 +269,31 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
             label: '基本信息',
             children: (
               <Form form={form} layout="vertical" initialValues={{ startUrl: 'https://www.baidu.com' }}>
+                {accounts.length > 0 && (
+                  <Form.Item
+                    label="从已有账号带入"
+                    extra="选中账号后自动回填「运营平台」与「起始页 URL」；账号名 / 密码仍在「账号中心」管理（列表内点复制按钮可取）。"
+                  >
+                    <Select
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="选择账号以带入平台 / 起始页"
+                      onChange={(id?: number) => {
+                        const acc = accounts.find((a) => a.id === id)
+                        if (!acc) return
+                        if (acc.platform) form.setFieldValue('platform', acc.platform)
+                        const home = PLATFORM_HOMEPAGES[acc.platform]
+                        if (home) form.setFieldValue('startUrl', home)
+                        message.success(`已带入「${acc.username}」的平台信息`)
+                      }}
+                      options={accounts.map((a) => ({
+                        value: a.id,
+                        label: `#${a.profileName || '未绑定环境'} · ${a.platform || '未设平台'} · @${a.username}`
+                      }))}
+                    />
+                  </Form.Item>
+                )}
                 <Form.Item name="name" label="环境名称" rules={[{ required: true, message: '请输入名称' }]}>
                   <Input placeholder="例如：Amazon 美国店 01" />
                 </Form.Item>
