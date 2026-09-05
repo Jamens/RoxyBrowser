@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Tabs, Form, Input, Button } from 'antd'
+import { ConfigProvider, theme, Card, Tabs, Form, Input, Button } from 'antd'
 import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { useAppCtx } from '../hooks/useApp'
 import { useNavigate } from 'react-router-dom'
@@ -46,6 +46,9 @@ export default function Login() {
     <div className="login-wrap">
       <LoginVisual />
       <div className="login-main">
+        {/* 登录卡片强制浅色主题：卡片是白色底，若跟随全局暗色算法，输入框会变成黑底 + 浅灰字（看不见），
+            与白卡严重冲突。此处用独立 light ConfigProvider 让表单控件始终浅色，与白卡自洽。 */}
+        <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: '#2b5cff', borderRadius: 8 } }}>
         <Card className="login-card" style={{ width: 400 }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
             <div style={{ fontSize: 26, fontWeight: 700, color: '#1f2b4d' }}>
@@ -98,6 +101,7 @@ export default function Login() {
             ]}
           />
         </Card>
+        </ConfigProvider>
       </div>
     </div>
   )
