@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Card, Tabs, Form, Input, Button, message } from 'antd'
+import { Card, Tabs, Form, Input, Button } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { UserOutlined, LockOutlined, GlobalOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api, setToken } from '../api'
 import { useT } from '../i18n'
 
 export default function Login() {
+  const { message } = useAppCtx()
   const [form] = Form.useForm()
   const [regForm] = Form.useForm()
   const [loading, setLoading] = useState(false)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, Typography, Descriptions } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Descriptions } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { UserAddOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -20,6 +21,7 @@ interface TeamInfo {
 }
 
 export default function Team() {
+  const { message } = useAppCtx()
   const [info, setInfo] = useState<TeamInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()

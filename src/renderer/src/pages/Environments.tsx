@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, message, Upload
+  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload
 } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -16,6 +17,7 @@ import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types
 import { osLabel } from '@shared/types'
 
 export default function Environments() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<ProfileDTO[]>([])
   const [groups, setGroups] = useState<GroupDTO[]>([])
   const [proxies, setProxies] = useState<ProxyDTO[]>([])

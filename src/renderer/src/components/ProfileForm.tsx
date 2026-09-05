@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, message, Tag, Spin } from 'antd'
+import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export default function ProfileForm({ open, onClose, onSaved, initial, isTemplate, groups, proxies, extensions }: Props) {
+  const { message } = useAppCtx()
   const [form] = Form.useForm()
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Typography, Alert } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Typography, Alert } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined, CopyOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -7,6 +8,7 @@ import { api, API_BASE } from '../api'
 import type { TokenDTO } from '@shared/types'
 
 export default function ApiDocs() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<TokenDTO[]>([])
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()

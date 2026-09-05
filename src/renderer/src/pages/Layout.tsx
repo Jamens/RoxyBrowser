@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Layout, Menu, Dropdown, Space, Typography, message, theme } from 'antd'
+import { Layout, Menu, Dropdown, Space, Typography, theme } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import {
   GlobalOutlined,
   AppstoreOutlined,
@@ -40,6 +41,7 @@ const buildMenus = (t: TranslateFn) => [
 ]
 
 export default function AppLayout() {
+  const { message } = useAppCtx()
   const navigate = useNavigate()
   const location = useLocation()
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)

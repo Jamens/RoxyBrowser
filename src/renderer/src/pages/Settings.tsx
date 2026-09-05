@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Form, Select, InputNumber, Button, Space, Typography, Tag, message, Divider } from 'antd'
+import { Card, Form, Select, InputNumber, Button, Space, Typography, Tag, Divider } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings } from '@shared/types'
@@ -20,6 +21,7 @@ function persistThemeLocals(s: AppSettings) {
 }
 
 export default function Settings() {
+  const { message } = useAppCtx()
   const [form] = Form.useForm<AppSettings>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)

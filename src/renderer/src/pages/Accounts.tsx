@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, Typography, Upload } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
@@ -11,6 +12,7 @@ const PLATFORMS = ['Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 
 interface Row extends AccountDTO {}
 
 export default function Accounts() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<Row[]>([])
   const [profiles, setProfiles] = useState<ProfileDTO[]>([])
   const [open, setOpen] = useState(false)

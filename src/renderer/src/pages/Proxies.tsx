@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  Card, Table, Button, Space, Tag, Popconfirm, message, Modal, Form, Input, Select, InputNumber, Typography, Upload,
+  Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, InputNumber, Typography, Upload,
   Row, Col, Statistic, DatePicker
 } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined,
   ImportOutlined, ExportOutlined, ApiOutlined
@@ -33,6 +34,7 @@ interface ProfileBrief {
 }
 
 export default function Proxies() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<ProxyDTO[]>([])
   const [stats, setStats] = useState<PoolStats | null>(null)
   const [open, setOpen] = useState(false)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Typography, Popconfirm, message } from 'antd'
+import { Card, Table, Button, Space, Tag, Typography, Popconfirm } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, CopyOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
@@ -8,6 +9,7 @@ import type { ProfileDTO, GroupDTO, ProxyDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 
 export default function Templates() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<ProfileDTO[]>([])
   const [groups, setGroups] = useState<GroupDTO[]>([])
   const [proxies, setProxies] = useState<ProxyDTO[]>([])

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Card, Table, Button, Modal, Tabs, Input, Space, Typography, Popconfirm, message, Spin } from 'antd'
+import { Card, Table, Button, Modal, Tabs, Input, Space, Typography, Popconfirm, Spin } from 'antd'
+import { useAppCtx } from '../hooks/useApp'
 import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api, API_BASE } from '../api'
@@ -16,6 +17,7 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 }
 
 export default function Extensions() {
+  const { message } = useAppCtx()
   const [list, setList] = useState<ExtensionDTO[]>([])
   const [loading, setLoading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
