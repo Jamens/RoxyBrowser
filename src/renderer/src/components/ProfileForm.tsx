@@ -5,7 +5,7 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
-import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts } from '@shared/fingerprint'
+import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint } from '@shared/fingerprint'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -105,7 +105,9 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
           proxyId: initial.proxyId ?? undefined
         })
         form.setFieldValue('extensions', initial.extensions ?? [])
-        setFp(initial.fingerprint)
+        // 规整指纹：旧导出 / 历史数据可能缺 languages、fonts 等新字段，
+        // 缺失字段用自洽默认值补齐，避免渲染层 fp.languages.join / fp.fonts.length 抛错导致抽屉空白
+        setFp(normalizeFingerprint(initial.fingerprint))
       } else {
         // 新建：必须先生成一套指纹。否则 fp 为 null 时抽屉内没有任何内容可渲染，
         // 而「一键随机指纹」与预设选择器都在抽屉内部——等于用户永远无法创建环境。

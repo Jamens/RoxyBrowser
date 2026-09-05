@@ -278,6 +278,27 @@ export function defaultFingerprint(): Fingerprint {
   return randomFingerprint('windows')
 }
 
+/**
+ * 把任意（可能不完整 / 旧版 / 缺字段）的指纹数据规整成完整且自洽的 Fingerprint。
+ * - 空 / 非对象 / 缺 os：直接返回一套随机完整指纹，绝不抛错。
+ * - 有 os 但缺部分字段：先按该 os 生成一套自洽基准，再用传入值覆盖；fonts 缺失时
+ *   按该 os 取确定字体集，保证渲染层 `fp.languages.join` / `fp.fonts.length` 不会因
+ *   undefined 而崩溃（旧导出文件 / 历史数据常缺 fonts 等新字段）。
+ * 设计要点：纯函数、零异常，用于导入落库前与编辑表单加载时，杜绝「点击编辑一片空白」。
+ */
+export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerprint {
+  if (!fp || typeof fp !== 'object' || typeof fp.os !== 'string' || (fp.os !== 'windows' && fp.os !== 'mac' && fp.os !== 'android' && fp.os !== 'ios')) {
+    return defaultFingerprint()
+  }
+  const os = fp.os
+  const base = randomFingerprint(os as OSKind)
+  return {
+    ...base,
+    ...fp,
+    fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind)
+  } as Fingerprint
+}
+
 // ============ 指纹预设库 ============
 // 内置的「经过验证的指纹组合」：各字段之间保持一致性（UA ↔ platform ↔ UA-CH ↔ GPU ↔ 屏幕 ↔ 时区语言），
 // 用户一键套用，避免手工拼出互相矛盾的指纹被检测站点识破。

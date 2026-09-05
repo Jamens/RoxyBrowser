@@ -31,7 +31,7 @@ import {
   ExtensionEntity,
   RpaScriptEntity
 } from './entities'
-import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
+import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint } from '../shared/fingerprint'
 import { substituteSteps } from '../shared/rpa'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
@@ -2284,9 +2284,7 @@ function buildApiRouter(): express.Router {
           platform: (item.platform as string) || '',
           startUrl: (item.startUrl as string) || DEFAULT_START_URL,
           remark: (item.remark as string) || '',
-          fingerprint:
-            (item.fingerprint as Record<string, unknown>) ||
-            (randomFingerprint() as unknown as Record<string, unknown>),
+          fingerprint: normalizeFingerprint(item.fingerprint as Partial<Fingerprint> | null) as unknown as Record<string, unknown>,
           createdBy: req.uid!
         })
       )
