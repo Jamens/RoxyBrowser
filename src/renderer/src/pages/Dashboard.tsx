@@ -43,6 +43,7 @@ export default function Dashboard() {
   const [data, setData] = useState<DashData>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
+  const [now, setNow] = useState<Date>(() => new Date())
 
   const fill = token.colorFillSecondary || token.colorBorderSecondary
   const grid = token.colorBorderSecondary
@@ -79,6 +80,12 @@ export default function Dashboard() {
     const ti = setInterval(load, 30000)
     return () => clearInterval(ti)
   }, [load])
+
+  // 实时时钟：每秒刷新一次，让顶部「当前时间」真正走起来（数据刷新时间戳仍由 updatedAt 单独记录）
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   // 近 30 天操作趋势
   const trend = useMemo(() => {
@@ -162,9 +169,12 @@ export default function Dashboard() {
           <Typography.Text type="secondary">{t('dashboard.subtitle')}</Typography.Text>
         </div>
         <Space size={12}>
+          <Typography.Text type="secondary" style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+            {t('dashboard.currentTime')}: {now.toLocaleTimeString()}
+          </Typography.Text>
           {updatedAt && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {updatedAt.toLocaleTimeString()}
+            <Typography.Text type="secondary" style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+              {t('dashboard.lastUpdated')}: {updatedAt.toLocaleTimeString()}
             </Typography.Text>
           )}
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
