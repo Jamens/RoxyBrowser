@@ -36,6 +36,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   const [fp, setFp] = useState<Fingerprint | null>(null)
   const [saving, setSaving] = useState(false)
   const [presets, setPresets] = useState<FingerprintPresetDTO[]>([])
+  // 当前激活的 Tab（保存校验失败时回切到「基本信息」让必填项红框可见）
+  const [tabKey, setTabKey] = useState<string>('base')
   // 当前选中的预设 id。之前这里写死 value={null}，等于把 Select 钉成空值——
   // onChange 照样触发（指纹会写到下面各字段），但框自己永远显示 placeholder，
   // 用户看到的就是「选了没填进去」。
@@ -139,7 +141,23 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   }
 
   const save = async () => {
-    const values = await form.validateFields()
+    let values: Awaited<ReturnType<typeof form.validateFields>>
+    try {
+      values = await form.validateFields()
+    } catch (err) {
+      // antd 校验失败：err.errorFields 携带各未通过字段的中文报错（如「请输入名称」）。
+      // 用户可能在「指纹配置」页直接保存而漏填「基本信息」的必填项——这里给出友好提示并
+      // 回切到基本信息页，让红框可见，而不是把 rejection 漏成「点了没反应、也没提示」。
+      const ve = err as { errorFields?: Array<{ errors?: string[] }> }
+      if (ve.errorFields && ve.errorFields.length) {
+        setTabKey('base')
+        const tips = ve.errorFields.map((f) => (f.errors && f.errors[0]) || '').filter(Boolean)
+        message.error(tips.length ? `请先完善必填信息：${tips.join('；')}` : '请先完善必填信息')
+      } else {
+        message.error((err as Error)?.message || '表单校验未通过')
+      }
+      return
+    }
     if (!fp) {
       message.warning('指纹信息未就绪')
       return
@@ -207,6 +225,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         </div>
       ) : (
         <Tabs
+          activeKey={tabKey}
+          onChange={(k) => setTabKey(k)}
         items={[
           {
             key: 'base',
