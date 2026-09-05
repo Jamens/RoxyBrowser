@@ -4,11 +4,13 @@ import {
 } from 'antd'
 import {
   ReloadOutlined, VideoCameraOutlined, StopOutlined, CaretRightOutlined,
-  EditOutlined, DeleteOutlined, EyeOutlined
+  EditOutlined, DeleteOutlined, EyeOutlined, MinusCircleOutlined, PlusOutlined,
+  UploadOutlined, DownloadOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { api } from '../api'
+import { api, API_BASE, getToken } from '../api'
 import type { ProfileDTO, RpaScriptDTO, RpaStep } from '@shared/types'
+import { varsToArray, arrayToVars } from '@shared/rpa'
 import { useAppCtx } from '../hooks/useApp'
 import { countryTimezone } from '@shared/countries'
 import { formatDateTimeInZone } from '@shared/timezone'
@@ -50,6 +52,10 @@ export default function Rpa() {
   // 回放
   const [runScript, setRunScript] = useState<RpaScriptDTO | null>(null)
   const [runProfileId, setRunProfileId] = useState<number | undefined>()
+  // 回放时传入的变量覆盖值（编辑弹窗里配的默认值可在这里改）
+  const [runVars, setRunVars] = useState<Record<string, string>>({})
+  // 导入文件用的隐藏 input
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   // 查看
   const [viewScript, setViewScript] = useState<RpaScriptDTO | null>(null)
@@ -144,13 +150,53 @@ export default function Rpa() {
   const run = async () => {
     if (!runScript || !runProfileId) return message.warning('请选择回放的环境')
     try {
-      const res = await api.post<{ started: boolean; steps: number }>(`/api/rpa/${runScript.id}/run`, {
-        profileId: runProfileId
-      })
+      const payload: Record<string, unknown> = { profileId: runProfileId }
+      if (Object.keys(runVars).length) payload.variables = runVars
+      const res = await api.post<{ started: boolean; steps: number }>(`/api/rpa/${runScript.id}/run`, payload)
       message.success(`开始回放「${runScript.name}」（${res.steps} 步），执行结果见操作日志`)
       setRunScript(null)
     } catch (e) {
       message.error((e as Error).message)
+    }
+  }
+
+  // 导出单个脚本为 JSON 文件（走 blob 下载，绕过 api 的 JSON 解析）
+  const exportScript = async (r: RpaScriptDTO) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/rpa/export/${r.id}`, {
+        headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        return message.error((d as { message?: string }).message || '导出失败')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `rpa-${r.id}-${r.name}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success(`已导出「${r.name}」`)
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 从文件导入脚本（读取 JSON 后 POST /api/rpa/import）
+  const importScript = async (file: File) => {
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const res = await api.post<{ ok: boolean; created: number[] }>('/api/rpa/import', parsed)
+      if (res.created?.length) {
+        message.success(`已导入 ${res.created.length} 个脚本`)
+        load()
+      } else {
+        message.warning('文件中没有可导入的脚本')
+      }
+    } catch (e) {
+      message.error((e as Error).message || '导入失败：文件格式不正确')
     }
   }
 
@@ -171,6 +217,7 @@ export default function Rpa() {
       await api.put(`/api/rpa/${editScript.id}`, {
         name: values.name,
         remark: values.remark || '',
+        variables: arrayToVars(values.variables),
         scheduleEnabled: !!values.scheduleEnabled,
         scheduleIntervalMin: values.scheduleIntervalMin ?? 30,
         scheduleProfileId: values.scheduleProfileId ?? null
@@ -227,13 +274,16 @@ export default function Rpa() {
       width: 240,
       render: (_, r) => (
         <Space size={4}>
-          <Button size="small" type="primary" ghost icon={<CaretRightOutlined />} onClick={() => { setRunScript(r); setRunProfileId(undefined) }}>
+          <Button size="small" type="primary" ghost icon={<CaretRightOutlined />} onClick={() => { setRunScript(r); setRunProfileId(undefined); setRunVars(r.variables || {}) }}>
             回放
           </Button>
           <Tooltip title="查看步骤明细">
             <Button size="small" icon={<EyeOutlined />} onClick={() => setViewScript(r)} />
           </Tooltip>
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditScript(r); editForm.setFieldsValue({ name: r.name, remark: r.remark, scheduleEnabled: !!r.scheduleEnabled, scheduleIntervalMin: r.scheduleIntervalMin ?? 30, scheduleProfileId: r.scheduleProfileId ?? undefined }) }} />
+          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditScript(r); editForm.setFieldsValue({ name: r.name, remark: r.remark, scheduleEnabled: !!r.scheduleEnabled, scheduleIntervalMin: r.scheduleIntervalMin ?? 30, scheduleProfileId: r.scheduleProfileId ?? undefined, variables: varsToArray(r.variables || {}) }) }} />
+          <Tooltip title="导出脚本 JSON">
+            <Button size="small" icon={<DownloadOutlined />} onClick={() => exportScript(r)} />
+          </Tooltip>
           <Popconfirm title="确定删除该脚本？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
@@ -242,9 +292,36 @@ export default function Rpa() {
     }
   ]
 
+  // 回放弹窗变量覆盖：提取为 const 避免 TS 在 .map 闭包里丢失 null 收窄
+  const runScriptVars = runScript?.variables || {}
+  const runScriptVarKeys = Object.keys(runScriptVars)
+
   return (
     <div>
-      <Card title="RPA 脚本 — 录制与回放" extra={<Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>}>
+      <input
+        ref={importInputRef}
+        type="file"
+        accept="application/json,.json"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) importScript(f)
+          e.target.value = ''
+        }}
+      />
+      <Card
+        title="RPA 脚本 — 录制与回放"
+        extra={
+          <Space>
+            <Button icon={<UploadOutlined />} onClick={() => importInputRef.current?.click()}>
+              导入
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>
+              刷新
+            </Button>
+          </Space>
+        }
+      >
         <Space style={{ marginBottom: 16 }} wrap>
           <Select
             showSearch
@@ -335,6 +412,26 @@ export default function Rpa() {
             label: `${p.name}${p.status === 'running' ? '（运行中）' : ''}`
           }))}
         />
+        {runScriptVarKeys.length ? (
+          <div style={{ marginTop: 12 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              变量覆盖（留空则用脚本默认值）
+            </Typography.Text>
+            {runScriptVarKeys.map((k) => (
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                <Typography.Text style={{ width: 120, fontSize: 12 }} ellipsis>
+                  {`{{${k}}}`}
+                </Typography.Text>
+                <Input
+                  style={{ flex: 1 }}
+                  placeholder={runScriptVars[k]}
+                  value={runVars[k] ?? ''}
+                  onChange={(e) => setRunVars((v) => ({ ...v, [k]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        ) : null}
         <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12 }}>
           回放在后台执行（每步间隔约 1 秒），结果会写入操作日志；回放期间请勿操作该窗口。
         </Typography.Paragraph>
@@ -371,6 +468,29 @@ export default function Rpa() {
           <Form.Item name="remark" label="备注">
             <Input />
           </Form.Item>
+          <Form.List name="variables">
+            {(_fields, { add, remove }) => (
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  变量：步骤里用 <Typography.Text code>{'{{变量名}}'}</Typography.Text> 引用，回放时替换为对应值（账号密码等可参数化复用）
+                </Typography.Text>
+                {_fields.map(({ key, name, ...rest }) => (
+                  <Space key={key} align="baseline" style={{ display: 'flex', marginTop: 8 }}>
+                    <Form.Item {...rest} name={[name, 'key']} rules={[{ required: true, message: '变量名' }]} style={{ marginBottom: 0 }}>
+                      <Input placeholder="变量名" />
+                    </Form.Item>
+                    <Form.Item {...rest} name={[name, 'value']} style={{ marginBottom: 0 }}>
+                      <Input placeholder="值" />
+                    </Form.Item>
+                    <MinusCircleOutlined onClick={() => remove(name)} />
+                  </Space>
+                ))}
+                <Button type="dashed" block icon={<PlusOutlined />} onClick={() => add()} style={{ marginTop: 8 }}>
+                  添加变量
+                </Button>
+              </div>
+            )}
+          </Form.List>
           <Form.Item
             name="scheduleEnabled"
             label="定时执行"

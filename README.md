@@ -157,9 +157,22 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
   - 记录内容：点击（元素内相对坐标，与多窗口同步同一套「稳定 selector + 相对坐标」编码）、文本输入（连续输入只保留最终值）、下拉选择、滚动（合并为最终位置）、页面跳转。
   - 录制期间多窗口同步产生的重放事件会被抑制窗过滤，不会录进脚本。
 - **回放**：选脚本 + 环境 → 后台逐步执行（每步间隔约 1 秒，`navigate`/`wait` 在主进程执行，其余经多窗口同步通道拟人化重放）；结果写入操作日志。
+- **变量**：脚本可定义变量（如 `token`、`keyword`），步骤里的 `navigate.url` / `input.value` / `change.value` 用 `{{变量名}}` 引用。回放弹窗可逐变量覆盖（留空则用脚本默认值），便于同一脚本在不同环境复用时切换账号、搜索词等。
+  - 未定义的占位符**保留原样**（方便排查「漏配变量」），不会抛错。
+- **导入 / 导出**：每个脚本支持单独导出为 JSON（含步骤与变量，浏览器以附件下载）；「导入」按钮支持单对象、`{ "items": [...] }` 或数组，可一次导入多个脚本（定时配置重置为关闭）。导入导出格式成对，往返测试通过。
 - **隔离**：脚本按账户隔离（同其他业务数据一致）。
 
-后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`。
+后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`GET /api/rpa/export/:id`（导出）、`POST /api/rpa/import`（导入）、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`（回放，body 可带 `profileId` 与覆盖 `variables`）。
+
+```bash
+# 导出脚本（保存为 rpa-<id>-<name>.json）
+curl http://127.0.0.1:39100/api/rpa/export/1 -H "Authorization: Bearer <会话令牌>" -o rpa.json
+
+# 导入脚本（支持单对象 / {items:[...]} / 数组）
+curl -X POST http://127.0.0.1:39100/api/rpa/import \
+  -H "Authorization: Bearer <会话令牌>" -H "Content-Type: application/json" \
+  -d @rpa.json
+```
 
 > 提示：回放的是合成事件（`isTrusted=false`），对校验该属性的反爬站点无效；脚本在不同页面结构（selector 失效）时对应步骤会被跳过。
 
@@ -262,6 +275,18 @@ curl -X PUT http://127.0.0.1:39100/api/v1/accounts/5 \
 
 # 删除账号
 curl -X DELETE http://127.0.0.1:39100/api/v1/accounts/5 -H "Authorization: Bearer <令牌>"
+```
+
+**RPA 脚本**
+
+```bash
+# 脚本列表（id / name / 步骤数 / 是否含变量）
+curl http://127.0.0.1:39100/api/v1/rpa -H "Authorization: Bearer <令牌>"
+
+# 触发回放（profileId 必填；variables 可选，覆盖脚本自带变量）
+curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"profileId":1,"variables":{"token":"abc123","keyword":"shoes"}}'
 ```
 
 令牌可在客户端「自动化 API」页面生成，页面内含完整接口文档与 curl 示例。

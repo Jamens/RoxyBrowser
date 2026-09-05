@@ -178,6 +178,8 @@ export interface RpaScriptDTO {
   name: string
   remark: string
   steps: RpaStep[]
+  // 脚本级变量：键 → 值。回放时把步骤里的 {{键}} 替换成对应值（凭据等参数化复用）。
+  variables?: Record<string, string> | null
   // 定时执行（到点仅在目标环境运行态时执行，未运行则跳过并写日志）
   scheduleEnabled?: boolean
   scheduleIntervalMin?: number

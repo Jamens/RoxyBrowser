@@ -32,6 +32,7 @@ import {
   RpaScriptEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
+import { substituteSteps } from '../shared/rpa'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
@@ -302,6 +303,23 @@ function normalizeScheduleInterval(v: unknown): number {
   return Math.max(1, Math.min(525600, Math.round(n)))
 }
 
+// RPA 变量：接受对象或 [key,value] 数组，统一规整成 {k: string}；空 / 非法 → {}
+function normalizeVariables(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== 'object') return null
+  const out: Record<string, string> = {}
+  if (Array.isArray(v)) {
+    for (const item of v as Array<{ key?: unknown; value?: unknown }>) {
+      const k = String(item?.key ?? '').trim()
+      if (k) out[k] = String(item?.value ?? '')
+    }
+  } else {
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      if (k) out[k] = String(val ?? '')
+    }
+  }
+  return Object.keys(out).length ? out : null
+}
+
 // ===== RPA 定时执行调度器（对标「定时任务到点自动开工」）=====
 // 每 30s 扫一次开启了定时的脚本；到点且目标环境处于运行态才执行。
 // 环境未运行 → 跳过本轮（写日志），绝不自动开窗——自动拉起窗口会绕过
@@ -337,7 +355,10 @@ async function runRpaScheduler(): Promise<void> {
       let executed = 0
       let err = ''
       try {
-        executed = await (await import('./browserManager')).replayRpaScript(s.scheduleProfileId!, s.steps as unknown as RpaStep[])
+        executed = await (await import('./browserManager')).replayRpaScript(
+          s.scheduleProfileId!,
+          substituteSteps(s.steps as unknown as RpaStep[], s.variables || {})
+        )
       } catch (e) {
         err = (e as Error).message
       } finally {
@@ -1885,6 +1906,61 @@ function buildApiRouter(): express.Router {
     res.json({ code: 0, data: { id: a.id } })
   })
 
+  // ===== RPA 脚本（v1 自动化触发）=====
+  // 列出当前团队的脚本（用于外部自动化查找 id / 步数 / 是否含变量）
+  v1.get('/rpa', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(RpaScriptEntity)
+    const list = await repo.find({ where: { teamId: tid }, order: { id: 'DESC' } })
+    res.json({
+      code: 0,
+      data: list.map((s) => ({
+        id: s.id,
+        name: s.name,
+        steps: (s.steps as unknown as RpaStep[]).length,
+        hasVariables: !!(s.variables && Object.keys(s.variables).length)
+      }))
+    })
+  })
+
+  // 触发回放（Bearer 鉴权，供外部自动化调用）。body: { profileId, variables? }
+  v1.post('/rpa/:id/run', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const profileId = Number((req.body || {}).profileId)
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const repo = AppDataSource.getRepository(RpaScriptEntity)
+    const s = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!s) return res.status(404).json({ code: 404, message: 'script not found' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    const reqVars = (req.body || {}).variables
+    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
+      ? normalizeVariables(reqVars) || {}
+      : s.variables || {}
+    const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
+    const runningIds = (await import('./browserManager')).getRunningWindowIds()
+    if (!runningIds.includes(profileId)) {
+      return res.status(400).json({ code: 400, message: 'profile not running' })
+    }
+    ;(async () => {
+      let executed = 0
+      let err = ''
+      try {
+        executed = await (await import('./browserManager')).replayRpaScript(profileId, steps)
+      } catch (e) {
+        err = (e as Error).message
+      }
+      await writeLog(
+        req as AuthedRequest,
+        'rpa_run',
+        err
+          ? `v1 回放脚本「${s.name}」失败：${err}`
+          : `v1 回放脚本「${s.name}」完成（环境「${profile.name}」#${profileId}，执行 ${executed}/${steps.length} 步）`
+      )
+    })()
+    res.json({ code: 0, data: { started: true, steps: steps.length } })
+  })
+
   // ===== 批量能力：导入 / 导出 / 复制 / 批量随机指纹 =====
 
   // 导入环境（JSON）：兼容纯环境数组，也支持带分组 / 代理 / 账号的完整迁移文件
@@ -2196,6 +2272,54 @@ function buildApiRouter(): express.Router {
   // 注意路由顺序：/rpa/record/* 等静态路径必须排在 /rpa/:id 之前（项目既有约定）
   const rpaRepo = () => AppDataSource.getRepository(RpaScriptEntity)
 
+  // 导出单个脚本为 JSON 文件（按 :id 路由在下方，但 export 是两段式，必须放在 /rpa/:id 之前）
+  router.get('/rpa/export/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const s = await rpaRepo().findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!s) return res.status(404).json({ message: '脚本不存在' })
+    const data = {
+      id: s.id,
+      name: s.name,
+      remark: s.remark,
+      steps: s.steps,
+      variables: s.variables || {}
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="rpa-${s.id}-${encodeURIComponent(s.name)}.json"`)
+    res.send(JSON.stringify(data, null, 2))
+  })
+
+  // 导入脚本（接受单个对象、{items:[...]} 或数组）。新建到当前团队，定时配置重置。
+  router.post('/rpa/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const payload = req.body || {}
+    const arr = Array.isArray(payload)
+      ? payload
+      : Array.isArray((payload as { items?: unknown }).items)
+        ? (payload as { items: unknown[] }).items
+        : [payload]
+    if (!Array.isArray(arr) || !arr.length) return res.status(400).json({ message: '没有可导入的数据' })
+    const created: number[] = []
+    for (const item of arr as Array<Record<string, unknown>>) {
+      if (!item || !item.name || !Array.isArray(item.steps)) continue
+      const saved = await rpaRepo().save(
+        rpaRepo().create({
+          teamId: req.tid!,
+          ownerId: req.uid!,
+          name: String(item.name).slice(0, 128),
+          remark: String(item.remark || '').slice(0, 512),
+          steps: item.steps,
+          variables: normalizeVariables(item.variables),
+          scheduleEnabled: false,
+          scheduleIntervalMin: 30,
+          scheduleProfileId: null
+        })
+      )
+      created.push(saved.id)
+    }
+    if (!created.length) return res.status(400).json({ message: '没有有效的脚本可导入（需含 name 与 steps）' })
+    await writeLog(req, 'import_rpa_script', `导入 RPA 脚本 ${created.length} 个`)
+    res.json({ ok: true, created })
+  })
+
   router.get('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const list = await rpaRepo().find({ where: ownerScope(req), order: { id: 'DESC' } })
     res.json(
@@ -2204,6 +2328,7 @@ function buildApiRouter(): express.Router {
         name: s.name,
         remark: s.remark,
         steps: s.steps as unknown as RpaStep[],
+        variables: s.variables || {},
         scheduleEnabled: s.scheduleEnabled,
         scheduleIntervalMin: s.scheduleIntervalMin,
         scheduleProfileId: s.scheduleProfileId,
@@ -2224,6 +2349,7 @@ function buildApiRouter(): express.Router {
         name: String(b.name).slice(0, 128),
         remark: String(b.remark || '').slice(0, 512),
         steps: b.steps,
+        variables: normalizeVariables(b.variables),
         scheduleEnabled: !!b.scheduleEnabled && !!b.scheduleProfileId,
         scheduleIntervalMin: normalizeScheduleInterval(b.scheduleIntervalMin),
         scheduleProfileId: b.scheduleProfileId || null
@@ -2241,6 +2367,7 @@ function buildApiRouter(): express.Router {
     if (b.name !== undefined) s.name = String(b.name).slice(0, 128)
     if (b.remark !== undefined) s.remark = String(b.remark).slice(0, 512)
     if (Array.isArray(b.steps)) s.steps = b.steps
+    if (b.variables !== undefined) s.variables = normalizeVariables(b.variables)
     if (b.scheduleIntervalMin !== undefined) s.scheduleIntervalMin = normalizeScheduleInterval(b.scheduleIntervalMin)
     if (b.scheduleProfileId !== undefined) s.scheduleProfileId = b.scheduleProfileId || null
     if (b.scheduleEnabled !== undefined) s.scheduleEnabled = !!b.scheduleEnabled && !!s.scheduleProfileId
@@ -2310,7 +2437,12 @@ function buildApiRouter(): express.Router {
       where: { id: profileId, ...ownerScope(req) }
     })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
-    const steps = s.steps as unknown as RpaStep[]
+    // 变量替换：回放时可传入覆盖变量；否则用脚本自带变量
+    const reqVars = (req.body || {}).variables
+    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
+      ? normalizeVariables(reqVars) || {}
+      : s.variables || {}
+    const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
     // 前置校验环境必须处于运行态（否则后台任务会静默失败，用户无从得知）
     const runningIds = (await import('./browserManager')).getRunningWindowIds()
     if (!runningIds.includes(profileId)) {

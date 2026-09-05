@@ -399,6 +399,11 @@ export class RpaScriptEntity {
   @Column({ type: 'json' })
   steps: Record<string, unknown>[]
 
+  // 脚本级变量：回放时把步骤里的 {{变量名}} 替换成对应值（凭据等可参数化，脚本可复用）。
+  // 可空：历史脚本与未配置变量的脚本均为 null。
+  @Column({ type: 'json', nullable: true })
+  variables: Record<string, string> | null
+
   // ===== 定时执行（对标 4.0.2「定时任务到点自动开工」）=====
   // 到点只在该环境处于运行态时执行；未运行则跳过本轮并写日志，
   // 不自动开窗——自动拉起窗口会绕过用户对环境的显式控制。
