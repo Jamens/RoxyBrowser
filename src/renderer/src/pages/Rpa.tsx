@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Space, Select, Input, InputNumber, Switch, Tag, Modal, Form, message, Popconfirm, Typography, Descriptions, Empty, Tooltip
+  Card, Table, Button, Space, Select, Input, InputNumber, Switch, Tag, Modal, Form, Popconfirm, Typography, Descriptions, Empty, Tooltip
 } from 'antd'
 import {
   ReloadOutlined, VideoCameraOutlined, StopOutlined, CaretRightOutlined,
   EditOutlined, DeleteOutlined, EyeOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import dayjs from 'dayjs'
 import { api } from '../api'
 import type { ProfileDTO, RpaScriptDTO, RpaStep } from '@shared/types'
+import { useAppCtx } from '../hooks/useApp'
+import { countryTimezone } from '@shared/countries'
+import { formatDateTimeInZone } from '@shared/timezone'
 
 /** 步骤可读化描述 */
 function stepText(s: RpaStep): string {
@@ -32,6 +34,7 @@ function stepText(s: RpaStep): string {
 }
 
 export default function Rpa() {
+  const { message } = useAppCtx()
   const [scripts, setScripts] = useState<RpaScriptDTO[]>([])
   const [profiles, setProfiles] = useState<ProfileDTO[]>([])
   const [loading, setLoading] = useState(false)
@@ -39,6 +42,7 @@ export default function Rpa() {
   // 录制
   const [recProfileId, setRecProfileId] = useState<number | undefined>()
   const [recording, setRecording] = useState(false)
+  const [recCount, setRecCount] = useState(0)
   const [saveOpen, setSaveOpen] = useState(false)
   const [pendingSteps, setPendingSteps] = useState<RpaStep[]>([])
   const [saveForm] = Form.useForm()
@@ -73,9 +77,11 @@ export default function Rpa() {
     load()
   }, [load])
 
-  // 录制期间轮询环境列表（了解运行状态），并定时刷新录制状态
+  // 录制期间轮询环境列表（了解运行状态），并实时拉取已录制步骤数，
+  // 让用户明确看到「操作正在被记录」，避免录完不知道脚本去哪了。
   useEffect(() => {
     if (!recording) return
+    setRecCount(0)
     const timer = setInterval(async () => {
       try {
         const p = await api.get<ProfileDTO[]>('/api/profiles')
@@ -83,9 +89,17 @@ export default function Rpa() {
       } catch {
         /* ignore */
       }
-    }, 5000)
+      try {
+        const st = await api.get<{ recording: boolean; count: number }>(
+          `/api/rpa/record/status?profileId=${recProfileId}`
+        )
+        setRecCount(st.count)
+      } catch {
+        /* ignore */
+      }
+    }, 1500)
     return () => clearInterval(timer)
-  }, [recording])
+  }, [recording, recProfileId])
 
   const startRecord = async () => {
     if (!recProfileId) return message.warning('请选择要录制的环境')
@@ -191,7 +205,7 @@ export default function Rpa() {
         )
       }
     },
-    { title: '更新时间', dataIndex: 'updatedAt', width: 160, render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+    { title: '更新时间', dataIndex: 'updatedAt', width: 160, render: (v) => formatDateTimeInZone(v, countryTimezone(localStorage.getItem('roxy_country')), false) },
     {
       title: '定时',
       width: 160,
@@ -254,6 +268,7 @@ export default function Rpa() {
             </Button>
           )}
           {recording && <Tag color="red" icon={<VideoCameraOutlined />}>录制中…（点击 / 输入 / 滚动 / 跳转均在记录）</Tag>}
+          {recording && <Tag color="gold">已录制 {recCount} 步</Tag>}
         </Space>
 
         <Table

@@ -428,6 +428,11 @@ export function isRpaRecording(profileId: number): boolean {
   return rpaRecording.has(profileId)
 }
 
+/** 当前已录制但未停止的步骤数（用于前端实时展示「已录制 N 步」） */
+export function rpaRecordCount(profileId: number): number {
+  return rpaRecording.get(profileId)?.length ?? 0
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /**

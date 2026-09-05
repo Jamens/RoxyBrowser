@@ -2294,8 +2294,10 @@ function buildApiRouter(): express.Router {
   router.get('/rpa/record/status', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const profileId = Number((req.query || {}).profileId)
     if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const recording = (await import('./browserManager')).isRpaRecording(profileId)
-    res.json({ recording })
+    const bm = await import('./browserManager')
+    const recording = bm.isRpaRecording(profileId)
+    const count = bm.rpaRecordCount(profileId)
+    res.json({ recording, count })
   })
 
   // 回放：在指定环境窗口执行脚本（后台异步执行，结果写操作日志）
