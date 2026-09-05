@@ -161,15 +161,22 @@ export function HBar({
 }) {
   const labelW = 116
   const W = 760
-  const rowH = 30
   const gap = 14
-  const H = Math.max(height, items.length * (rowH + gap))
+  const minRow = 26
+  const maxRow = 46
+  // 行高自适应：条目少时撑满卡片高度（避免大框里只显示一小条），条目多时受 minRow 约束并让卡片纵向撑开
+  const fit = (height - gap * Math.max(0, items.length - 1)) / Math.max(1, items.length)
+  const rowH = Math.min(maxRow, Math.max(minRow, fit))
+  const contentH = items.length * rowH + (items.length - 1) * gap
+  const H = Math.max(height, contentH)
+  // 内容不足卡片高度时垂直居中，让大框里不再有大片空白
+  const topPad = H > contentH ? 0 : (height - contentH) / 2
   const barArea = W - labelW - 56
   const max = Math.max(1, ...items.map((d) => d.value))
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="xMidYMid meet" role="img">
       {items.map((d, i) => {
-        const yy = i * (rowH + gap)
+        const yy = topPad + i * (rowH + gap)
         const bw = Math.max(2, (d.value / max) * barArea)
         return (
           <g key={i}>
