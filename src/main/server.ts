@@ -295,6 +295,86 @@ async function startProxyCheckScheduler(): Promise<void> {
   console.log(`[roxy] 代理定时巡检已启动，间隔 ${interval} 分钟`)
 }
 
+// 定时执行间隔归一化：非法 / 过小一律回到默认 30 分钟（>=1 才有意义）
+function normalizeScheduleInterval(v: unknown): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 30
+  return Math.max(1, Math.min(525600, Math.round(n)))
+}
+
+// ===== RPA 定时执行调度器（对标「定时任务到点自动开工」）=====
+// 每 30s 扫一次开启了定时的脚本；到点且目标环境处于运行态才执行。
+// 环境未运行 → 跳过本轮（写日志），绝不自动开窗——自动拉起窗口会绕过
+// 用户对环境的显式控制，也可能把带代理问题的环境悄悄暴露出来。
+const RPA_SCAN_MS = 30 * 1000
+const rpaRunningScheduled = new Set<number>() // 正在执行的脚本 id，防止长脚本被重复触发
+
+async function runRpaScheduler(): Promise<void> {
+  const repo = AppDataSource.getRepository(RpaScriptEntity)
+  const scripts = await repo.find({ where: { scheduleEnabled: true } })
+  if (scripts.length === 0) return
+  const runningIds = (await import('./browserManager')).getRunningWindowIds()
+  const now = Date.now()
+  for (const s of scripts) {
+    if (rpaRunningScheduled.has(s.id)) continue
+    if (!s.scheduleProfileId) continue
+    const last = s.lastScheduledRunAt ? new Date(s.lastScheduledRunAt).getTime() : 0
+    const due = now - last >= s.scheduleIntervalMin * 60 * 1000
+    if (!due) continue
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({
+      where: { id: s.scheduleProfileId }
+    })
+    if (!profile) continue
+    // 先落 lastScheduledRunAt，防止本轮执行期间被下一轮扫描再次判定为到期
+    s.lastScheduledRunAt = new Date()
+    await repo.save(s)
+    if (!runningIds.includes(s.scheduleProfileId)) {
+      await saveSchedulerLog(s.teamId, s.ownerId, 'rpa_schedule_skip', `定时执行「${s.name}」跳过：环境「${profile.name}」未运行`)
+      continue
+    }
+    rpaRunningScheduled.add(s.id)
+    ;(async () => {
+      let executed = 0
+      let err = ''
+      try {
+        executed = await (await import('./browserManager')).replayRpaScript(s.scheduleProfileId!, s.steps as unknown as RpaStep[])
+      } catch (e) {
+        err = (e as Error).message
+      } finally {
+        rpaRunningScheduled.delete(s.id)
+      }
+      await saveSchedulerLog(
+        s.teamId,
+        s.ownerId,
+        err ? 'rpa_schedule_fail' : 'rpa_schedule_run',
+        err
+          ? `定时执行「${s.name}」失败（环境「${profile.name}」）：${err}`
+          : `定时执行「${s.name}」完成（环境「${profile.name}」，${executed} 步）`
+      )
+    })()
+  }
+}
+
+// 调度器写日志：没有请求上下文，直接落库（口径与 writeLog 一致）
+async function saveSchedulerLog(teamId: number, userId: number | null, action: string, detail: string) {
+  try {
+    const repo = AppDataSource.getRepository(OperationLogEntity)
+    await repo.save(repo.create({ teamId, userId: userId ?? 0, username: 'scheduler', action, detail }))
+  } catch {
+    /* 日志失败不影响调度 */
+  }
+}
+
+let rpaScheduleTimer: ReturnType<typeof setInterval> | null = null
+function startRpaScheduleScheduler(): void {
+  if (rpaScheduleTimer) return
+  rpaScheduleTimer = setInterval(() => {
+    runRpaScheduler().catch((e) => console.error('[roxy] RPA 定时调度异常:', e))
+  }, RPA_SCAN_MS)
+  rpaScheduleTimer.unref?.()
+  console.log(`[roxy] RPA 定时执行调度器已启动（每 ${RPA_SCAN_MS / 1000}s 扫描一次）`)
+}
+
 // 统计每个代理被多少个环境绑定（proxyId 计数）
 async function computeProxyUsage(teamId: number): Promise<Map<number, number>> {
   const profileRepo = AppDataSource.getRepository(ProfileEntity)
@@ -2084,6 +2164,10 @@ function buildApiRouter(): express.Router {
         name: s.name,
         remark: s.remark,
         steps: s.steps as unknown as RpaStep[],
+        scheduleEnabled: s.scheduleEnabled,
+        scheduleIntervalMin: s.scheduleIntervalMin,
+        scheduleProfileId: s.scheduleProfileId,
+        lastScheduledRunAt: s.lastScheduledRunAt,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt
       }))
@@ -2099,7 +2183,10 @@ function buildApiRouter(): express.Router {
         ownerId: req.uid!,
         name: String(b.name).slice(0, 128),
         remark: String(b.remark || '').slice(0, 512),
-        steps: b.steps
+        steps: b.steps,
+        scheduleEnabled: !!b.scheduleEnabled && !!b.scheduleProfileId,
+        scheduleIntervalMin: normalizeScheduleInterval(b.scheduleIntervalMin),
+        scheduleProfileId: b.scheduleProfileId || null
       })
     )
     await writeLog(req, 'create_rpa_script', `创建 RPA 脚本「${saved.name}」(#${saved.id})，${b.steps.length} 步`)
@@ -2114,6 +2201,13 @@ function buildApiRouter(): express.Router {
     if (b.name !== undefined) s.name = String(b.name).slice(0, 128)
     if (b.remark !== undefined) s.remark = String(b.remark).slice(0, 512)
     if (Array.isArray(b.steps)) s.steps = b.steps
+    if (b.scheduleIntervalMin !== undefined) s.scheduleIntervalMin = normalizeScheduleInterval(b.scheduleIntervalMin)
+    if (b.scheduleProfileId !== undefined) s.scheduleProfileId = b.scheduleProfileId || null
+    if (b.scheduleEnabled !== undefined) s.scheduleEnabled = !!b.scheduleEnabled && !!s.scheduleProfileId
+    // 开启定时必须已绑定目标环境（save 前校验，避免落库一个永远不会执行的配置）
+    if (s.scheduleEnabled && !s.scheduleProfileId) {
+      return res.status(400).json({ message: '开启定时执行前请先选择目标环境' })
+    }
     await repo.save(s)
     await writeLog(req, 'update_rpa_script', `更新 RPA 脚本「${s.name}」(#${s.id})`)
     res.json({ ok: true })
@@ -2313,6 +2407,8 @@ export async function bootstrap(): Promise<string> {
 
   // 5. 启动代理定时巡检调度（间隔由设置决定，0 表示关闭）
   startProxyCheckScheduler().catch((e) => console.error('[roxy] 启动巡检调度失败:', e))
+  // 6. 启动 RPA 定时执行调度器（每 30s 扫描到点脚本；环境未运行则跳过并写日志）
+  startRpaScheduleScheduler()
 
   return apiBase
 }

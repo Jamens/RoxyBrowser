@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Space, Select, Input, Tag, Modal, Form, message, Popconfirm, Typography, Descriptions, Empty, Tooltip
+  Card, Table, Button, Space, Select, Input, InputNumber, Switch, Tag, Modal, Form, message, Popconfirm, Typography, Descriptions, Empty, Tooltip
 } from 'antd'
 import {
   ReloadOutlined, VideoCameraOutlined, StopOutlined, CaretRightOutlined,
@@ -154,7 +154,13 @@ export default function Rpa() {
     if (!editScript) return
     const values = await editForm.validateFields()
     try {
-      await api.put(`/api/rpa/${editScript.id}`, { name: values.name, remark: values.remark || '' })
+      await api.put(`/api/rpa/${editScript.id}`, {
+        name: values.name,
+        remark: values.remark || '',
+        scheduleEnabled: !!values.scheduleEnabled,
+        scheduleIntervalMin: values.scheduleIntervalMin ?? 30,
+        scheduleProfileId: values.scheduleProfileId ?? null
+      })
       message.success('已更新')
       setEditScript(null)
       load()
@@ -187,6 +193,21 @@ export default function Rpa() {
     },
     { title: '更新时间', dataIndex: 'updatedAt', width: 160, render: (v) => dayjs(v).format('YYYY-MM-DD HH:mm') },
     {
+      title: '定时',
+      width: 160,
+      render: (_, r) =>
+        r.scheduleEnabled ? (
+          <Space direction="vertical" size={0}>
+            <Tag color="green">已开启</Tag>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              每 {r.scheduleIntervalMin} 分钟 · {profiles.find((p) => p.id === r.scheduleProfileId)?.name ?? '-'}
+            </Typography.Text>
+          </Space>
+        ) : (
+          <Typography.Text type="secondary">-</Typography.Text>
+        )
+    },
+    {
       title: '操作',
       width: 240,
       render: (_, r) => (
@@ -197,7 +218,7 @@ export default function Rpa() {
           <Tooltip title="查看步骤明细">
             <Button size="small" icon={<EyeOutlined />} onClick={() => setViewScript(r)} />
           </Tooltip>
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditScript(r); editForm.setFieldsValue({ name: r.name, remark: r.remark }) }} />
+          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditScript(r); editForm.setFieldsValue({ name: r.name, remark: r.remark, scheduleEnabled: !!r.scheduleEnabled, scheduleIntervalMin: r.scheduleIntervalMin ?? 30, scheduleProfileId: r.scheduleProfileId ?? undefined }) }} />
           <Popconfirm title="确定删除该脚本？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
@@ -332,6 +353,34 @@ export default function Rpa() {
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input />
+          </Form.Item>
+          <Form.Item
+            name="scheduleEnabled"
+            label="定时执行"
+            valuePropName="checked"
+            tooltip="开启后，调度器每隔设定分钟，在目标环境处于运行态时自动回放本脚本；环境未运行则跳过本轮并写日志"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.scheduleEnabled !== cur.scheduleEnabled}>
+            {({ getFieldValue }) =>
+              getFieldValue('scheduleEnabled') ? (
+                <Space direction="vertical" style={{ display: 'flex' }}>
+                  <Form.Item name="scheduleIntervalMin" label="执行间隔（分钟）" rules={[{ required: true, message: '请输入执行间隔' }]}>
+                    <InputNumber min={1} max={525600} style={{ width: '100%' }} />
+                  </Form.Item>
+                  <Form.Item name="scheduleProfileId" label="目标环境" rules={[{ required: true, message: '请选择目标环境' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="选择执行环境（需处于运行态才会执行）"
+                      style={{ width: '100%' }}
+                      options={profiles.map((p) => ({ value: p.id, label: `${p.name}${p.status === 'running' ? '（运行中）' : ''}` }))}
+                    />
+                  </Form.Item>
+                </Space>
+              ) : null
+            }
           </Form.Item>
         </Form>
       </Modal>

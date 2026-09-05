@@ -174,6 +174,11 @@ export interface RpaScriptDTO {
   name: string
   remark: string
   steps: RpaStep[]
+  // 定时执行（到点仅在目标环境运行态时执行，未运行则跳过并写日志）
+  scheduleEnabled?: boolean
+  scheduleIntervalMin?: number
+  scheduleProfileId?: number | null
+  lastScheduledRunAt?: string | null
   createdAt: string
   updatedAt: string
 }

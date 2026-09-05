@@ -399,6 +399,24 @@ export class RpaScriptEntity {
   @Column({ type: 'json' })
   steps: Record<string, unknown>[]
 
+  // ===== 定时执行（对标 4.0.2「定时任务到点自动开工」）=====
+  // 到点只在该环境处于运行态时执行；未运行则跳过本轮并写日志，
+  // 不自动开窗——自动拉起窗口会绕过用户对环境的显式控制。
+  @Column({ type: 'boolean', default: false })
+  scheduleEnabled: boolean
+
+  // 执行间隔（分钟），>= 1
+  @Column({ type: 'int', default: 30 })
+  scheduleIntervalMin: number
+
+  // 定时执行的目标环境
+  @Column({ type: 'int', nullable: true })
+  scheduleProfileId: number | null
+
+  // 上次定时执行时间（调度器据此判断是否到点）
+  @Column({ type: 'datetime', nullable: true })
+  lastScheduledRunAt: Date | null
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 
