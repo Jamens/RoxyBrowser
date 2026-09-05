@@ -5,7 +5,7 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
-import { getTimezoneOffsetMinutes, defaultFingerprint } from '@shared/fingerprint'
+import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts } from '@shared/fingerprint'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -120,6 +120,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
       if (key === 'os') {
         // 切换 OS 时同步 platform / UA
         next.platform = value === 'mac' ? 'MacIntel' : 'Win32'
+        // 桌面端切 OS 时整套字体也按新 OS 重新取（移动端走整条随机接口，已含字体）
+        next.fonts = randomFonts(value as OSKind)
         if (value === 'mac' && prev.userAgent.includes('Windows')) {
           next.userAgent = prev.userAgent.replace(
             /\(Macintosh; Intel Mac OS X [^)]+\)/,
@@ -331,6 +333,15 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       tokenSeparators={[',', ' ']}
                     />
                   </Form.Item>
+                  <Form.Item label="字体列表" style={{ marginTop: 16 }} extra="伪造的已安装字体，防御字体枚举指纹；随机环境按 OS 取基础集 + 随机子集，可手工增减">
+                    <Select
+                      mode="tags"
+                      value={fp.fonts}
+                      onChange={(v) => setFpField('fonts', v)}
+                      placeholder="字体名称"
+                      tokenSeparators={[',']}
+                    />
+                  </Form.Item>
                   <Form.Item label="时区">
                     <Select
                       showSearch
@@ -383,6 +394,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       <Tag>{fp.screenWidth}×{fp.screenHeight}</Tag>
                       <Tag color="cyan">CPU {fp.hardwareConcurrency} 核</Tag>
                       <Tag color="cyan">RAM {fp.deviceMemory}GB</Tag>
+                      <Tag color="gold">{fp.fonts.length} 字体</Tag>
                     </div>
                   </div>
                 </Form>

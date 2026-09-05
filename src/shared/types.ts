@@ -27,6 +27,10 @@ export interface Fingerprint {
   touch?: boolean
   // 设备像素比（移动端 2~3）
   devicePixelRatio?: number
+  // ---- 字体指纹（防御字体枚举） ----
+  // 伪造的「已安装字体」列表。按 OS 取一致基础集 + 随机子集，运行时通过
+  // document.fonts.check/load 与 Canvas measureText 防护，杜绝宿主机真实字体泄漏。
+  fonts: string[]
 }
 
 /** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */

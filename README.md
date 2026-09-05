@@ -67,6 +67,7 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 可禁用 `RTCPeerConnection`，防止真实 IP 泄漏                                            |
+| 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 
 相关接口：`POST /api/fingerprint/random`（body `os` 可选 `windows|mac|android|ios`）、`GET /api/fingerprint/presets`。
 

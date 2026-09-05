@@ -22,6 +22,7 @@
     doNotTrack: string
     touch?: boolean
     devicePixelRatio?: number
+    fonts?: string[]
   }
 
   // ipcRenderer 提前到最前：起始页的 window.roxy.navigate 闭包要用它
@@ -258,6 +259,67 @@
     ;(window as any).webkitRTCPeerConnection = undefined
     if (navigator.mediaDevices) {
       def(navigator.mediaDevices, 'enumerateDevices', () => Promise.resolve([]))
+    }
+  }
+
+  // ===== 字体指纹防护 =====
+  // 真实浏览器通过 document.fonts.check / load 与 Canvas measureText 的字体宽度差异来枚举已安装字体，
+  // 从而泄漏宿主机自身字体。这里把「已安装字体」收敛为伪造列表 fp.fonts：
+  // 1) check / load 只对列表内字体（或通用族）返回可用；
+  // 2) measureText 遇到列表外字体时把 family 回落到 sans-serif，使其宽度与基线一致，宽度对照法无法分辨「装了 / 没装」。
+  const FALLBACK_FONTS = ['Arial', 'Arial Black', 'Courier New', 'Georgia', 'Impact', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'Segoe UI', 'Tahoma', 'Microsoft YaHei', 'SimSun']
+  const fakeFonts = Array.isArray(fp.fonts) && fp.fonts.length ? fp.fonts : FALLBACK_FONTS
+  const fontSet = new Set(fakeFonts.map((f) => f.toLowerCase()))
+  const GENERIC = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji', 'fangsong'])
+  const isFontAvailable = (name: string): boolean => {
+    const n = name.trim().replace(/^["']|["']$/g, '').toLowerCase()
+    if (!n || GENERIC.has(n)) return true
+    return fontSet.has(n)
+  }
+  // 从 CSS font 简写里取出 family 段（size 之后的全部），拆成候选族
+  const SIZE_RE = /([-+]?\d*\.?\d+(?:px|pt|em|rem|%|ex|ch|vw|vh|cm|mm|in)?)\s*(?:\/\s*[-+]?\d*\.?\d+(?:px|pt|em|rem|%|ex|ch|vw|vh|cm|mm|in)?)?\s+(.+)$/
+  const familyOf = (fontSpec: string): string => {
+    const m = String(fontSpec).match(SIZE_RE)
+    return m ? m[2] : fontSpec
+  }
+  // 把 font 简写里的 family 替换成第一个可用族；全部不可用时回落 sans-serif，
+  // 让 measureText 对列表外字体统一返回基线宽度，杜绝宽度枚举。
+  const mapFontFamily = (fontSpec: string): string => {
+    const fam = familyOf(fontSpec)
+    if (fam.split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return fontSpec
+    return fontSpec.slice(0, fontSpec.length - fam.length) + 'sans-serif'
+  }
+  try {
+    const df = (document as any).fonts
+    if (df && typeof df.check === 'function') {
+      const origCheck = df.check.bind(df)
+      df.check = (spec: string, text?: string) => {
+        // 任一候选族可用即视为可用（与真实浏览器多候选回退语义一致）
+        if (familyOf(spec).split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return true
+        return origCheck(spec, text)
+      }
+      const origLoad = typeof df.load === 'function' ? df.load.bind(df) : null
+      if (origLoad) {
+        df.load = (spec: string, text?: string) => {
+          if (familyOf(spec).split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return origLoad(spec, text)
+          // 不在列表内：解析为空数组（不抛错，也不会让脚本误以为字体可用）
+          return Promise.resolve([])
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  if (typeof CanvasRenderingContext2D !== 'undefined') {
+    const origMeasure = CanvasRenderingContext2D.prototype.measureText
+    CanvasRenderingContext2D.prototype.measureText = function (this: any, text: string) {
+      try {
+        const mapped = mapFontFamily(this.font || '10px sans-serif')
+        if (mapped !== this.font) this.font = mapped
+      } catch {
+        /* ignore */
+      }
+      return origMeasure.call(this, text)
     }
   }
 

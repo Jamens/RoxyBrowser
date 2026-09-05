@@ -92,6 +92,59 @@ const IOS_DEVICES = [
   { model: 'iPhone SE', osver: '17_4', safariVer: '17.4', screen: [375, 667] as [number, number], dpr: 2 }
 ]
 
+// ============ 字体指纹池 ============
+// 真实浏览器里「已安装字体」是强指纹：站点通过 document.fonts.check / Canvas measureText /
+// DOM 宽度对照枚举已安装字体，从而泄漏宿主机自身字体。这里按 OS 给出一套「该 OS 默认会有的
+// 字体」基础集——既能伪装成真实机器，又彻底挡住宿主机字体泄漏。randomFonts 在其基础上随机剔除
+// 约 15% 做环境间差异化；预设则直接用完整确定集（保证预设可复现、各字段一致）。
+
+// 跨平台必定存在的核心安全字体（任何桌面 / 移动浏览器都有）
+const CORE_FONTS = ['Arial', 'Arial Black', 'Courier New', 'Georgia', 'Impact', 'Times New Roman', 'Trebuchet MS', 'Verdana']
+
+const FONT_POOL: Record<OSKind, string[]> = {
+  windows: [
+    'Arial Narrow', 'Bahnschrift', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS', 'Consolas',
+    'Constantia', 'Corbel', 'Ebrima', 'Franklin Gothic Medium', 'Gabriola', 'HoloLens MDL2 Assets',
+    'Ink Free', 'Leelawadee UI', 'Lucida Console', 'Lucida Sans Unicode', 'Marlett',
+    'Microsoft Himalaya', 'Microsoft JhengHei', 'Microsoft New Tai Lue', 'Microsoft PhagsPa',
+    'Microsoft Sans Serif', 'Microsoft Tai Le', 'Microsoft YaHei', 'Microsoft Yi Baiti', 'MingLiU',
+    'Mongolian Baiti', 'MS Gothic', 'MV Boli', 'Myanmar Text', 'Nirmala UI', 'Palatino Linotype',
+    'Segoe Print', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Historic', 'Segoe UI Symbol',
+    'SimSun', 'Sitka', 'Sylfaen', 'Tahoma', 'Webdings', 'Wingdings', 'Yu Gothic'
+  ],
+  mac: [
+    'American Typewriter', 'Andale Mono', 'Arial Rounded MT Bold', 'Avenir', 'Avenir Next',
+    'Avenir Next Condensed', 'Baskerville', 'Big Caslon', 'Bodoni 72', 'Bradley Hand',
+    'Brush Script MT', 'Chalkboard', 'Chalkboard SE', 'Chalkduster', 'Charter', 'Cochin',
+    'Copperplate', 'Courier', 'Didot', 'DIN Alternate', 'Futura', 'Geneva', 'Gill Sans',
+    'Helvetica', 'Helvetica Neue', 'Herculanum', 'Hoefler Text', 'Luminari', 'Marker Felt',
+    'Menlo', 'Monaco', 'Noteworthy', 'Optima', 'Palatino', 'Papyrus', 'Phosphate', 'Rockwell',
+    'Savoye LET', 'Signpainter', 'Skia', 'Snell Roundhand', 'Tahoma', 'Trattatello'
+  ],
+  android: [
+    'Roboto', 'Noto Sans', 'Noto Sans CJK SC', 'Noto Serif', 'Droid Sans', 'Droid Sans Fallback',
+    'Droid Serif', 'sans-serif', 'sans-serif-light', 'sans-serif-thin', 'sans-serif-condensed',
+    'serif', 'monospace', 'casual', 'cursive'
+  ],
+  ios: [
+    '.SF UI Text', '.SF UI Display', '.SF Pro Text', '.SF Pro Display', 'SF Pro', 'New York',
+    'Helvetica', 'Helvetica Neue', 'Courier', 'Apple Color Emoji', 'Chalkboard SE', 'Cochin',
+    'Gill Sans', 'Hoefler Text', 'Marker Felt', 'Papyrus', 'Snell Roundhand', 'Optima', 'Futura',
+    'Menlo', 'Monaco', 'Noteworthy', 'Savoye LET', 'system-ui', 'sans-serif', 'serif', 'monospace'
+  ]
+}
+
+/** 某 OS 的完整确定字体集（预设用，保证可复现） */
+export function osFontList(os: OSKind): string[] {
+  return [...CORE_FONTS, ...FONT_POOL[os]]
+}
+
+/** 随机字体集：核心安全字体必含 + OS 池随机剔除约 15%，做环境间差异化 */
+export function randomFonts(os: OSKind): string[] {
+  const pool = FONT_POOL[os].filter(() => rand() < 0.85)
+  return [...CORE_FONTS, ...pool]
+}
+
 /** 计算 IANA 时区在当前时刻的 UTC 偏移（分钟），与 Date.getTimezoneOffset 语义一致 */
 export function getTimezoneOffsetMinutes(timeZone: string): number {
   const now = new Date()
@@ -157,7 +210,8 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
         webrtc: 'disable',
         doNotTrack: 'unspecified',
         touch: true,
-        devicePixelRatio: dev.dpr
+        devicePixelRatio: dev.dpr,
+        fonts: randomFonts('android')
       }
     }
     const dev = pick(IOS_DEVICES)
@@ -175,13 +229,14 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
       deviceMemory: 8,
       canvasNoise: true,
       webglVendor: 'Apple Inc.',
-      webglRenderer: 'Apple GPU',
-      audioNoise: true,
-      webrtc: 'disable',
-      doNotTrack: 'unspecified',
-      touch: true,
-      devicePixelRatio: dev.dpr
-    }
+        webglRenderer: 'Apple GPU',
+        audioNoise: true,
+        webrtc: 'disable',
+        doNotTrack: 'unspecified',
+        touch: true,
+        devicePixelRatio: dev.dpr,
+        fonts: randomFonts('ios')
+      }
   }
 
   // ===== 桌面端 =====
@@ -214,7 +269,8 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
     webglRenderer: gpu.renderer,
     audioNoise: true,
     webrtc: 'disable',
-    doNotTrack: 'unspecified'
+    doNotTrack: 'unspecified',
+    fonts: randomFonts(chosenOs)
   }
 }
 
@@ -236,6 +292,7 @@ function presetFingerprint(
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
+    fonts: osFontList(core.os),
     ...core
   }
 }
