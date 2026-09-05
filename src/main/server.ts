@@ -851,6 +851,72 @@ function buildApiRouter(): express.Router {
     res.json(mapProfile(p))
   })
 
+  // 整环境迁移：导出（含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名；扩展以名称带出，导入按名重映射）
+  router.get('/profiles/export/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    const extRepo = AppDataSource.getRepository(ExtensionEntity)
+    const groupRepo = AppDataSource.getRepository(GroupEntity)
+    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+    const accRepo = AppDataSource.getRepository(AccountEntity)
+    const cookieRepo = AppDataSource.getRepository(CookieEntity)
+
+    const group = p.groupId ? await groupRepo.findOne({ where: { id: p.groupId, teamId: req.tid } }) : null
+    const proxy = p.proxyId ? await proxyRepo.findOne({ where: { id: p.proxyId, teamId: req.tid } }) : null
+    const accounts = await accRepo.find({ where: { profileId: p.id } })
+    const cookies = await cookieRepo.find({ where: { profileId: p.id } })
+    const extIds = Array.isArray(p.extensions) ? (p.extensions as number[]) : []
+    const extensions = extIds.length ? await extRepo.find({ where: extIds.map((id) => ({ id, teamId: req.tid })) }) : []
+
+    // 导出为扁平结构，与导入端完全对齐（导入直接按字段映射；所有 id 在导入端重新生成）
+    const data: Record<string, unknown> = {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      name: p.name,
+      platform: p.platform,
+      startUrl: p.startUrl,
+      remark: p.remark,
+      fingerprint: p.fingerprint,
+      // 扩展以名称带出，导入端按名重映射回 id
+      extensions: extensions.map((e) => e.name),
+      // 分组 / 代理以「名称」形式带出；代理同时附带完整连接信息（proxyDetail），
+      // 导入端优先按名复用已有代理，否则按 proxyDetail 就地新建
+      group: group ? group.name : null,
+      proxy: proxy ? proxy.name : null,
+      proxyDetail: proxy
+        ? {
+            type: proxy.type,
+            host: proxy.host,
+            port: proxy.port,
+            username: proxy.username,
+            password: proxy.password,
+            remark: proxy.remark,
+            country: proxy.country,
+            region: proxy.region,
+            city: proxy.city,
+            isp: proxy.isp,
+            expiresAt: proxy.expiresAt ? new Date(proxy.expiresAt).toISOString() : null
+          }
+        : null,
+      accounts: accounts.map((a) => ({ platform: a.platform, username: a.username, password: a.password, remark: a.remark })),
+      cookies: cookies.map((c) => ({
+        domain: c.domain,
+        name: c.name,
+        value: c.value,
+        path: c.path || '/',
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly,
+        sameSite: c.sameSite || 'unspecified',
+        expirationDate: c.expirationDate ? new Date(c.expirationDate).toISOString() : null,
+        hostOnly: c.hostOnly == null ? true : !!c.hostOnly
+      }))
+    }
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="profile-${p.id}-${encodeURIComponent(p.name)}.json"`)
+    res.send(JSON.stringify(data, null, 2))
+  })
+
   router.put('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
@@ -2128,17 +2194,23 @@ function buildApiRouter(): express.Router {
     const groupRepo = AppDataSource.getRepository(GroupEntity)
     const proxyRepo = AppDataSource.getRepository(ProxyEntity)
     const accountRepo = AppDataSource.getRepository(AccountEntity)
+    const cookieRepo = AppDataSource.getRepository(CookieEntity)
+    const extRepo = AppDataSource.getRepository(ExtensionEntity)
     const payload = req.body || {}
+    // 支持三种入参：{ items: [...] }（批量）、整环境导出单对象（含 name 字段）、裸数组 [...]
     const items = (Array.isArray(payload.items)
       ? payload.items
       : Array.isArray(payload)
         ? payload
-        : []) as Array<Record<string, unknown>>
+        : payload && payload.name
+          ? [payload]
+          : []) as Array<Record<string, unknown>>
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
 
-    // 分组 / 代理按名称复用，缺失则新建
+    // 分组 / 代理按名称复用，缺失则新建；扩展按名称重映射回 id（目标环境无同名扩展则丢弃该引用）
     const groupIdByName = new Map((await groupRepo.find({ where: ownerScope(req) })).map((g) => [g.name, g.id]))
     const proxyIdByName = new Map((await proxyRepo.find({ where: ownerScope(req) })).map((x) => [x.name, x.id]))
+    const extIdByName = new Map((await extRepo.find({ where: ownerScope(req) })).map((e) => [e.name, e.id]))
 
     const qbImp = repo
       .createQueryBuilder('p')
@@ -2151,6 +2223,7 @@ function buildApiRouter(): express.Router {
     let groupsCreated = 0
     let proxiesCreated = 0
     let accountsCreated = 0
+    let cookiesCreated = 0
 
     for (const item of items) {
       // 分组
@@ -2194,6 +2267,10 @@ function buildApiRouter(): express.Router {
         }
       }
 
+      // 扩展：按名称重映射回 id（目标环境没有同名扩展则丢弃该引用）
+      const extNames = Array.isArray(item.extensions) ? (item.extensions as string[]) : []
+      const extIds = extNames.map((n) => extIdByName.get(n)).filter((v): v is number => v != null)
+
       seq += 1
       const p = await repo.save(
         repo.create({
@@ -2201,6 +2278,7 @@ function buildApiRouter(): express.Router {
           ownerId: req.uid!,
           groupId,
           proxyId,
+          extensions: extIds,
           name: (item.name as string) || `导入环境 ${seq}`,
           seq,
           platform: (item.platform as string) || '',
@@ -2213,6 +2291,28 @@ function buildApiRouter(): express.Router {
         })
       )
       created.push({ id: p.id, name: p.name })
+
+      // Cookie：逐条重建并绑定新环境
+      for (const c of (item.cookies || []) as Array<Record<string, unknown>>) {
+        if (!c?.name || !c?.domain) continue
+        await cookieRepo.save(
+          cookieRepo.create({
+            profileId: p.id,
+            ownerId: req.uid!,
+            teamId: req.tid!,
+            domain: String(c.domain),
+            name: String(c.name),
+            value: String(c.value || ''),
+            path: String(c.path || '/'),
+            secure: !!c.secure,
+            httpOnly: !!c.httpOnly,
+            sameSite: String(c.sameSite || 'unspecified'),
+            expirationDate: c.expirationDate ? new Date(c.expirationDate as string | number) : null,
+            hostOnly: c.hostOnly == null ? true : !!c.hostOnly
+          })
+        )
+        cookiesCreated++
+      }
 
       // 账号
       for (const acc of (item.accounts || []) as Array<Record<string, unknown>>) {
@@ -2234,9 +2334,9 @@ function buildApiRouter(): express.Router {
     await writeLog(
       req,
       'import_profiles',
-      `导入 ${created.length} 个环境（新建分组 ${groupsCreated} 个、代理 ${proxiesCreated} 条、账号 ${accountsCreated} 条）`
+      `导入 ${created.length} 个环境（新建分组 ${groupsCreated} 个、代理 ${proxiesCreated} 条、账号 ${accountsCreated} 条、Cookie ${cookiesCreated} 条）`
     )
-    res.json({ created: created.length, items: created, groupsCreated, proxiesCreated, accountsCreated })
+    res.json({ created: created.length, items: created, groupsCreated, proxiesCreated, accountsCreated, cookiesCreated })
   })
 
 

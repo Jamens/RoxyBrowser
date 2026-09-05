@@ -186,14 +186,28 @@ export default function Environments() {
     }
     try {
       const parsed = JSON.parse(importText)
-      const items = Array.isArray(parsed) ? parsed : parsed.items
-      const res = await api.post<{ created: number }>('/api/profiles/import', { items })
+      // 兼容三种形态：数组、{ items: [...] } 批量、整环境单对象导出（含 name 字段）
+      const single = parsed && !Array.isArray(parsed) && !parsed.items && parsed.name
+      const body = single ? parsed : { items: Array.isArray(parsed) ? parsed : parsed.items }
+      const res = await api.post<{ created: number }>('/api/profiles/import', body)
       message.success(`成功导入 ${res.created} 个环境`)
       setImportOpen(false)
       setImportText('')
       load()
     } catch (e) {
       message.error(`导入失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 整环境迁移：导出单个环境为文件（含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名） */
+  const exportProfile = async (id: number, name: string) => {
+    try {
+      const data = await api.get<unknown>(`/api/profiles/export/${id}`)
+      const safe = (name || `profile-${id}`).replace(/[\\/:*?"<>|]/g, '_')
+      downloadText(JSON.stringify(data, null, 2), `roxy-profile-${safe}.json`)
+      message.success(`已导出「${name}」整环境配置`)
+    } catch (e) {
+      message.error((e as Error).message)
     }
   }
 
@@ -305,6 +319,9 @@ export default function Environments() {
             </Button>
           )}
           <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); setFormOpen(true) }} />
+          <Tooltip title="导出整环境配置（含指纹 / 代理 / 账号 / Cookie / 扩展）">
+            <Button size="small" icon={<ExportOutlined />} onClick={() => exportProfile(r.id, r.name)} />
+          </Tooltip>
           <Tooltip title="复制环境（含账号资料迁移）">
             <Button size="small" icon={<CopyOutlined />} onClick={() => duplicate(r.id)} />
           </Tooltip>
@@ -461,7 +478,7 @@ export default function Environments() {
         width={640}
       >
         <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-          支持从本工具导出的 JSON 导入（含完整指纹配置）；也可只给 name / platform，系统会自动生成随机指纹。
+          支持本工具导出的 JSON：整环境单对象导出文件、批量导出数组、或 {`{ items: [...] }`}；也可只给 name / platform，系统会自动生成随机指纹。
         </Typography.Paragraph>
         <Upload accept=".json" beforeUpload={pickImportFile} showUploadList={false}>
           <Button icon={<ImportOutlined />} style={{ marginBottom: 12 }}>

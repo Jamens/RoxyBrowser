@@ -47,6 +47,32 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 - 每个环境可设置起始页 URL，打开后进入内置新标签页（地址栏 + 快捷入口 + 当前指纹摘要）
 - **状态自愈**：Electron 进程退出时所有窗口都会销毁，启动时自动把 DB 中残留的 `running` 状态重置为 `idle`，避免「界面显示运行中、实际无窗口」导致打开 / 关闭 / RPA 回放全部失灵（重启不会自动重开之前运行的环境，需手动重新打开）
 
+#### 1.1 整环境迁移（导出 / 导入单环境）
+
+把一个环境**完整打包成单个 JSON 文件**、再在另一台机器 / 另一个团队空间里原样还原，用于跨设备备份与资料迁移。打包内容包含：指纹配置、分组、代理（连接信息）、账号、Cookie、扩展名。
+
+- **导出**：环境列表每行「导出」按钮 → `GET /api/profiles/export/:id`，浏览器以附件下载 `roxy-profile-<名称>.json`。
+- **导入**：导入弹窗粘贴内容或选择该文件 → `POST /api/profiles/import`。支持三种入参：整环境单对象导出文件（含 `name`）、`{ items: [...] }`、裸数组 `[...]`。
+- **导入映射规则（导出字段直接被导入消费，所有 id 在导入端重新生成）**：
+  - `name / platform / startUrl / remark / fingerprint`：原样写入新环境；`fingerprint` 缺失则随机生成。
+  - `group`：按**名称**匹配已有分组，没有则新建。
+  - `proxy` + `proxyDetail`：按**名称**优先复用已有代理；没有同名代理且 `proxyDetail.host/port` 齐全时，按 `proxyDetail` 就地新建代理。
+  - `extensions`：导出的是**扩展名称数组**，导入端按名重映射回扩展 id；目标环境没有同名扩展则丢弃该引用（扩展实体含本地目录文件，无法跨设备重建，仅保留名称引用）。
+  - `accounts`：逐条重建并绑定新环境（含平台 / 账号 / 密码 / 备注）。
+  - `cookies`：逐条重建并绑定新环境（含 domain / name / value / path / Secure / HttpOnly / SameSite / 过期时间 / hostOnly）。
+- 返回 `{ created, items, groupsCreated, proxiesCreated, accountsCreated, cookiesCreated }` 汇总新建数量。
+- 与「批量导出 / 导入」（`GET /api/profiles/export` 数组 ↔ `POST /api/profiles/import`，见上 §批量导入 / 导出）共用同一导入器，只是整环境导出是**单对象**形态。
+
+```bash
+# 导出单个环境（保存为 roxy-profile-<name>.json）
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:39100/api/profiles/export/12 -o roxy-profile-12.json
+
+# 导入该文件（单对象直接投递，无需包一层 items）
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:39100/api/profiles/import \
+  -d @roxy-profile-12.json
+```
+
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：

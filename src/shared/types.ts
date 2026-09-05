@@ -68,6 +68,47 @@ export interface ProfileDTO {
   updatedAt: string
 }
 
+// 整环境迁移导出 / 导入的数据结构（扁平结构，导入直接按字段映射；所有 id 在导入端重新生成）
+export interface ProfileExportDTO {
+  version: number
+  exportedAt: string
+  name: string
+  platform?: string
+  startUrl?: string
+  remark?: string
+  fingerprint: Record<string, unknown>
+  // 扩展以名称形式带出（导入端按名重映射回 id）
+  extensions?: string[]
+  // 分组 / 代理以名称形式带出；代理附带完整连接信息，导入端优先按名复用、否则就地新建
+  group: string | null
+  proxy: string | null
+  proxyDetail: {
+    type?: string
+    host: string
+    port: number
+    username?: string
+    password?: string
+    remark?: string
+    country?: string
+    region?: string
+    city?: string
+    isp?: string
+    expiresAt?: string | null
+  } | null
+  accounts: Array<{ platform?: string; username: string; password?: string; remark?: string }>
+  cookies: Array<{
+    domain: string
+    name: string
+    value: string
+    path?: string
+    secure?: boolean
+    httpOnly?: boolean
+    sameSite?: string
+    expirationDate?: string | null
+    hostOnly?: boolean
+  }>
+}
+
 export interface ProxyDTO {
   id: number
   teamId: number
