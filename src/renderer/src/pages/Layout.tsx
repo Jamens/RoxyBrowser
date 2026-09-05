@@ -21,6 +21,7 @@ import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
 import SystemStats from '../components/SystemStats'
+import ErrorBoundary from '../components/ErrorBoundary'
 import { useIsDark } from '../theme'
 import { useI18n, type TranslateFn } from '../i18n'
 
@@ -124,7 +125,9 @@ export default function AppLayout() {
           </Dropdown>
         </Header>
         <Content style={{ padding: 20, overflow: 'auto', background: token.colorBgLayout }}>
-          <Outlet />
+          <ErrorBoundary key={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </Content>
       </Layout>
     </Layout>
