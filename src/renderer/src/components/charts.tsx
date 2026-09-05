@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
 export const PALETTE = ['#1677ff', '#52c41a', '#faad14', '#eb2f96', '#13c2c2', '#722ed1', '#fa8c16', '#2f54eb']
 export const STATUS_COLORS: Record<string, string> = {
@@ -159,8 +159,24 @@ export function HBar({
   axis: string
   height?: number
 }) {
-  const labelW = 116
-  const W = 760
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [w, setW] = useState(480)
+  // 用真实渲染宽度作为 viewBox，避免固定 760 宽在窄卡片（1/3 列）里被整体缩小导致字号虚标
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const measure = () => {
+      const cw = el.getBoundingClientRect().width
+      if (cw > 0) setW(Math.round(cw))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const labelW = Math.round(w * 0.34)
+  const gutter = Math.round(w * 0.08)
   const gap = 14
   const minRow = 26
   const maxRow = 46
@@ -171,26 +187,28 @@ export function HBar({
   const H = Math.max(height, contentH)
   // 内容不足卡片高度时垂直居中，让大框里不再有大片空白
   const topPad = H > contentH ? 0 : (height - contentH) / 2
-  const barArea = W - labelW - 56
+  const barArea = w - labelW - gutter
   const max = Math.max(1, ...items.map((d) => d.value))
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="xMidYMid meet" role="img">
-      {items.map((d, i) => {
-        const yy = topPad + i * (rowH + gap)
-        const bw = Math.max(2, (d.value / max) * barArea)
-        return (
-          <g key={i}>
-            <text x={labelW - 10} y={yy + rowH / 2 + 5} textAnchor="end" fontSize={13} fill={axis}>
-              {d.label.length > 11 ? d.label.slice(0, 10) + '…' : d.label}
-            </text>
-            <rect x={labelW} y={yy} width={barArea} height={rowH} rx={8} fill={grid} />
-            <rect x={labelW} y={yy} width={bw} height={rowH} rx={8} fill={d.color} />
-            <text x={labelW + bw + 10} y={yy + rowH / 2 + 5} fontSize={13} fill={axis} fontWeight={600}>
-              {d.value}
-            </text>
-          </g>
-        )
-      })}
-    </svg>
+    <div ref={wrapRef} style={{ width: '100%' }}>
+      <svg viewBox={`0 0 ${w} ${H}`} width="100%" height={H} preserveAspectRatio="xMidYMid meet" role="img">
+        {items.map((d, i) => {
+          const yy = topPad + i * (rowH + gap)
+          const bw = Math.max(2, (d.value / max) * barArea)
+          return (
+            <g key={i}>
+              <text x={labelW - 10} y={yy + rowH / 2 + 5} textAnchor="end" fontSize={14} fill={axis}>
+                {d.label.length > 11 ? d.label.slice(0, 10) + '…' : d.label}
+              </text>
+              <rect x={labelW} y={yy} width={barArea} height={rowH} rx={8} fill={grid} />
+              <rect x={labelW} y={yy} width={bw} height={rowH} rx={8} fill={d.color} />
+              <text x={labelW + bw + 10} y={yy + rowH / 2 + 5} fontSize={14} fill={axis} fontWeight={600}>
+                {d.value}
+              </text>
+            </g>
+          )
+        })}
+      </svg>
+    </div>
   )
 }
