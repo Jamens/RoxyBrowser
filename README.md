@@ -281,11 +281,44 @@ curl -X PUT http://127.0.0.1:39100/api/v1/accounts/5 \
 curl -X DELETE http://127.0.0.1:39100/api/v1/accounts/5 -H "Authorization: Bearer <令牌>"
 ```
 
+**Cookie（按环境隔离）**
+
+```bash
+# 列出某环境的 Cookie
+curl "http://127.0.0.1:39100/api/v1/cookies?profileId=1" -H "Authorization: Bearer <令牌>"
+
+# 新增一条 Cookie
+curl -X POST http://127.0.0.1:39100/api/v1/cookies \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"profileId":1,"domain":".example.com","name":"session","value":"abc"}'
+
+# 更新 / 删除（按 id）
+curl -X PUT  http://127.0.0.1:39100/api/v1/cookies/7 -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" -d '{"value":"new"}'
+curl -X DELETE http://127.0.0.1:39100/api/v1/cookies/7 -H "Authorization: Bearer <令牌>"
+
+# 清空某环境的全部 Cookie
+curl -X DELETE "http://127.0.0.1:39100/api/v1/cookies?profileId=1" -H "Authorization: Bearer <令牌>"
+
+# 批量导入（Netscape / Set-Cookie / JSON 文本）
+curl -X POST http://127.0.0.1:39100/api/v1/cookies/import \
+  -H "Authorization: Bearer <令牌>" -H "Content-Type: application/json" \
+  -d '{"profileId":1,"text":"example.com\tFALSE\t/\tFALSE\t0\tsession\tabc"}'
+
+# 导出为 Netscape 文本
+curl "http://127.0.0.1:39100/api/v1/cookies/export?profileId=1" -H "Authorization: Bearer <令牌>"
+
+# 立即写入已打开的环境窗口（未打开则下次打开时自动注入）
+curl -X POST "http://127.0.0.1:39100/api/v1/cookies/apply?profileId=1" -H "Authorization: Bearer <令牌>"
+```
+
 **RPA 脚本**
 
 ```bash
 # 脚本列表（id / name / 步骤数 / 是否含变量）
 curl http://127.0.0.1:39100/api/v1/rpa -H "Authorization: Bearer <令牌>"
+
+# 脚本详情（含完整步骤与变量）
+curl http://127.0.0.1:39100/api/v1/rpa/1 -H "Authorization: Bearer <令牌>"
 
 # 触发回放（profileId 必填；variables 可选，覆盖脚本自带变量）
 curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \

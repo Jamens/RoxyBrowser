@@ -1906,6 +1906,146 @@ function buildApiRouter(): express.Router {
     res.json({ code: 0, data: { id: a.id } })
   })
 
+  // ===== Cookie（v1 自动化读写，按环境隔离）=====
+  v1.get('/cookies', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const profileId = Number((req.query as Record<string, string>).profileId)
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const list = await repo.find({ where: { teamId: tid, profileId }, order: { domain: 'ASC', name: 'ASC' } })
+    res.json({ code: 0, data: list.map(mapCookie) })
+  })
+
+  v1.post('/cookies', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const b = req.body || {}
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: Number(b.profileId), teamId: tid } })
+    if (!profile) return res.status(400).json({ code: 400, message: 'profile not found' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.save(
+      repo.create({
+        teamId: tid,
+        ownerId: 0,
+        profileId: profile.id,
+        domain: (b.domain || '').trim(),
+        name: (b.name || '').trim(),
+        value: b.value == null ? '' : String(b.value),
+        path: b.path || '/',
+        secure: !!b.secure,
+        httpOnly: !!b.httpOnly,
+        sameSite: b.sameSite || 'unspecified',
+        expirationDate: b.expirationDate ? new Date(b.expirationDate) : null,
+        hostOnly: b.hostOnly == null ? true : !!b.hostOnly
+      })
+    )
+    res.json({ code: 0, data: mapCookie(c) })
+  })
+
+  v1.put('/cookies/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!c) return res.status(404).json({ code: 404, message: 'cookie not found' })
+    const b = req.body || {}
+    for (const f of ['domain', 'name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'expirationDate', 'hostOnly'] as const) {
+      if (f in b) {
+        if (f === 'expirationDate') (c as any)[f] = b[f] ? new Date(b[f]) : null
+        else if (f === 'value') (c as any)[f] = b[f] == null ? '' : String(b[f])
+        else (c as any)[f] = b[f]
+      }
+    }
+    await repo.save(c)
+    res.json({ code: 0, data: mapCookie(c) })
+  })
+
+  v1.delete('/cookies/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!c) return res.status(404).json({ code: 404, message: 'cookie not found' })
+    await repo.remove(c)
+    res.json({ code: 0, data: { id: c.id } })
+  })
+
+  v1.delete('/cookies', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const profileId = Number((req.query as Record<string, string>).profileId)
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const r = await repo.delete({ teamId: tid, profileId })
+    res.json({ code: 0, data: { deleted: r.affected || 0 } })
+  })
+
+  v1.post('/cookies/import', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const b = req.body || {}
+    const profileId = Number(b.profileId)
+    const text: string = b.text || ''
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    if (!text.trim()) return res.status(400).json({ code: 400, message: 'empty cookie text' })
+    const { cookies, failed } = parseCookieText(text)
+    if (!cookies.length) return res.status(400).json({ code: 400, message: 'no cookie parsed', data: { failed } })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const saved = await repo.save(
+      cookies.map((c) =>
+        repo.create({
+          teamId: tid,
+          ownerId: 0,
+          profileId,
+          domain: (c.domain || '').trim(),
+          name: (c.name || '').trim(),
+          value: c.value == null ? '' : String(c.value),
+          path: c.path || '/',
+          secure: !!c.secure,
+          httpOnly: !!c.httpOnly,
+          sameSite: c.sameSite || 'unspecified',
+          expirationDate: c.expirationDate ? new Date(c.expirationDate) : null,
+          hostOnly: c.hostOnly == null ? true : !!c.hostOnly
+        })
+      )
+    )
+    res.json({ code: 0, data: { imported: saved.length, failed } })
+  })
+
+  v1.get('/cookies/export', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const profileId = Number((req.query as Record<string, string>).profileId)
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    const repo = AppDataSource.getRepository(CookieEntity)
+    const list = await repo.find({ where: { teamId: tid, profileId }, order: { domain: 'ASC', name: 'ASC' } })
+    const text = list
+      .map((c) => {
+        const flag = c.hostOnly ? 'FALSE' : 'TRUE'
+        const exp = c.expirationDate ? Math.floor(new Date(c.expirationDate).getTime() / 1000) : 0
+        return [c.domain, flag, c.path || '/', c.secure ? 'TRUE' : 'FALSE', exp, c.name, c.value].join('\t')
+      })
+      .join('\n')
+    res.json({ code: 0, data: { text, count: list.length } })
+  })
+
+  v1.post('/cookies/apply', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const profileId = Number((req.query as Record<string, string>).profileId || (req.body || {}).profileId)
+    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
+    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
+    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
+    try {
+      const { applyCookies } = await import('./browserManager')
+      const n = await applyCookies(profileId)
+      res.json({ code: 0, data: { applied: n } })
+    } catch (e) {
+      res.status(400).json({ code: 400, message: (e as Error).message })
+    }
+  })
+
   // ===== RPA 脚本（v1 自动化触发）=====
   // 列出当前团队的脚本（用于外部自动化查找 id / 步数 / 是否含变量）
   v1.get('/rpa', async (req: Request, res: Response) => {
@@ -1920,6 +2060,25 @@ function buildApiRouter(): express.Router {
         steps: (s.steps as unknown as RpaStep[]).length,
         hasVariables: !!(s.variables && Object.keys(s.variables).length)
       }))
+    })
+  })
+
+  // 脚本详情（含完整步骤与变量，供外部自动化取用）
+  v1.get('/rpa/:id', async (req: Request, res: Response) => {
+    const tid = (req as AuthedRequest).tid!
+    const repo = AppDataSource.getRepository(RpaScriptEntity)
+    const s = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
+    if (!s) return res.status(404).json({ code: 404, message: 'script not found' })
+    res.json({
+      code: 0,
+      data: {
+        id: s.id,
+        name: s.name,
+        remark: s.remark,
+        steps: s.steps,
+        variables: s.variables || {},
+        scheduleEnabled: s.scheduleEnabled
+      }
     })
   })
 
