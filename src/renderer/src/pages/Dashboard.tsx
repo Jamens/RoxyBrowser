@@ -215,9 +215,9 @@ export default function Dashboard() {
           ))}
         </Row>
 
-        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
           <Col xs={24} lg={15}>
-            <Card title={t('dashboard.trendTitle')} size="small" styles={{ body: { padding: 12 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <Card title={t('dashboard.trendTitle')} size="small" styles={{ body: { padding: 12, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%', display: 'flex', flexDirection: 'column' }}>
               {noData(trend.filter((d) => d.value > 0)) ? (
                 <EmptyHint text={t('dashboard.noData')} />
               ) : (
@@ -226,7 +226,7 @@ export default function Dashboard() {
             </Card>
           </Col>
           <Col xs={24} lg={9}>
-            <Card title={t('dashboard.proxyStatusTitle')} size="small" styles={{ body: { padding: 12 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <Card title={t('dashboard.proxyStatusTitle')} size="small" styles={{ body: { padding: 12, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%', display: 'flex', flexDirection: 'column' }}>
               {proxySegs.length === 0 ? (
                 <EmptyHint text={t('dashboard.noData')} />
               ) : (
