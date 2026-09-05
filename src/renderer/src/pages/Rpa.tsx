@@ -189,6 +189,7 @@ export default function Rpa() {
     {
       title: '步骤摘要',
       dataIndex: 'steps',
+      width: 300,
       render: (steps: RpaStep[]) => {
         const kinds = [...new Set(steps.map((s) => s.type))]
         const label: Record<string, string> = {
@@ -274,6 +275,7 @@ export default function Rpa() {
         <Table
           rowKey="id"
           size="middle"
+          scroll={{ x: 1260 }}
           loading={loading}
           columns={columns}
           dataSource={scripts}
