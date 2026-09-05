@@ -14,7 +14,8 @@ import {
   SettingOutlined,
   SnippetsOutlined,
   AppstoreAddOutlined,
-  VideoCameraOutlined
+  VideoCameraOutlined,
+  DashboardOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
@@ -27,6 +28,7 @@ const { Sider, Header, Content } = Layout
 
 // 菜单项随语言动态生成，故做成函数而非常量（模块级常量拿不到 t）
 const buildMenus = (t: TranslateFn) => [
+  { key: '/dashboard', icon: <DashboardOutlined />, label: t('nav.dashboard') },
   { key: '/envs', icon: <AppstoreOutlined />, label: t('nav.envs') },
   { key: '/templates', icon: <ChromeOutlined />, label: t('nav.templates') },
   { key: '/proxies', icon: <GlobalOutlined />, label: t('nav.proxies') },
