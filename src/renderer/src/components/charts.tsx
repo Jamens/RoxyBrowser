@@ -159,12 +159,12 @@ export function HBar({
   axis: string
   height?: number
 }) {
-  const labelW = 92
+  const labelW = 116
   const W = 760
-  const rowH = 26
-  const gap = 12
+  const rowH = 30
+  const gap = 14
   const H = Math.max(height, items.length * (rowH + gap))
-  const barArea = W - labelW - 52
+  const barArea = W - labelW - 56
   const max = Math.max(1, ...items.map((d) => d.value))
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="xMidYMid meet" role="img">
@@ -173,12 +173,12 @@ export function HBar({
         const bw = Math.max(2, (d.value / max) * barArea)
         return (
           <g key={i}>
-            <text x={labelW - 8} y={yy + rowH / 2 + 4} textAnchor="end" fontSize={11} fill={axis}>
+            <text x={labelW - 10} y={yy + rowH / 2 + 5} textAnchor="end" fontSize={13} fill={axis}>
               {d.label.length > 11 ? d.label.slice(0, 10) + '…' : d.label}
             </text>
-            <rect x={labelW} y={yy} width={barArea} height={rowH} rx={6} fill={grid} />
-            <rect x={labelW} y={yy} width={bw} height={rowH} rx={6} fill={d.color} />
-            <text x={labelW + bw + 8} y={yy + rowH / 2 + 4} fontSize={11} fill={axis} fontWeight={600}>
+            <rect x={labelW} y={yy} width={barArea} height={rowH} rx={8} fill={grid} />
+            <rect x={labelW} y={yy} width={bw} height={rowH} rx={8} fill={d.color} />
+            <text x={labelW + bw + 10} y={yy + rowH / 2 + 5} fontSize={13} fill={axis} fontWeight={600}>
               {d.value}
             </text>
           </g>
