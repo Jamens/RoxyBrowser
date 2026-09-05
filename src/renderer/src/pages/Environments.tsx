@@ -33,6 +33,7 @@ export default function Environments() {
   const [editing, setEditing] = useState<ProfileDTO | null>(null)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [groupForm] = Form.useForm()
+  const [quickCreating, setQuickCreating] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -83,6 +84,21 @@ export default function Environments() {
       load()
     } catch (e) {
       message.error((e as Error).message)
+    }
+  }
+
+  const quickCreate = async () => {
+    try {
+      setQuickCreating(true)
+      const p = await api.post<ProfileDTO>('/api/profiles/quick-create', {})
+      message.success(`已快速创建「${p.name}」，正在打开窗口…`)
+      await api.post(`/api/profiles/${p.id}/open`)
+      message.success('窗口已打开')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setQuickCreating(false)
     }
   }
 
@@ -358,6 +374,9 @@ export default function Environments() {
             }}
           >
             新建环境
+          </Button>
+          <Button icon={<ThunderboltOutlined />} loading={quickCreating} onClick={quickCreate}>
+            快速创建
           </Button>
           <Button icon={<FolderAddOutlined />} onClick={() => setGroupModalOpen(true)}>
             新建分组

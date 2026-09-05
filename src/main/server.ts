@@ -765,6 +765,33 @@ function buildApiRouter(): express.Router {
     )
   })
 
+  router.post('/profiles/quick-create', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const qbMax = repo
+      .createQueryBuilder('p')
+      .select('MAX(p.seq)', 'm')
+      .where('p.teamId = :tid', { tid: req.tid })
+    ownerAndWhere(qbMax, req)
+    const max = await qbMax.getRawOne<{ m: number | null }>()
+    const seq = (max?.m || 1000) + 1
+    const p = await repo.save(
+      repo.create({
+        teamId: req.tid!,
+        ownerId: req.uid!,
+        name: `环境 ${seq}`,
+        seq,
+        remark: '',
+        platform: '',
+        startUrl: DEFAULT_START_URL,
+        proxyId: null,
+        fingerprint: randomFingerprint() as unknown as Record<string, unknown>,
+        isTemplate: false,
+        createdBy: req.uid!
+      })
+    )
+    await writeLog(req, 'quick_create_profile', `快速创建环境「${p.name}」(#${p.id})`)
+    res.json(mapProfile(p))
+  })
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
