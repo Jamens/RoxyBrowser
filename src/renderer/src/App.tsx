@@ -6,6 +6,7 @@ import { I18nProvider, useI18n } from './i18n'
 import { antdLocaleFor } from './i18n/antdLocale'
 import Login from './pages/Login'
 import AppLayout from './pages/Layout'
+import Landing from './pages/Landing'
 import Environments from './pages/Environments'
 import Templates from './pages/Templates'
 import Proxies from './pages/Proxies'
@@ -69,6 +70,7 @@ function AppShell() {
         <HashRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/landing" element={<Landing />} />
             <Route path="/browser" element={<BrowserTab />} />
             <Route path="/" element={<AppLayout />}>
               <Route index element={<Navigate to="/envs" replace />} />
