@@ -70,10 +70,10 @@ function AppShell() {
         <HashRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
-            <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/browser" element={<BrowserTab />} />
             <Route path="/" element={<AppLayout />}>
               <Route index element={<Navigate to="/envs" replace />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/envs" element={<Environments />} />
               <Route path="/templates" element={<Templates />} />
               <Route path="/proxies" element={<Proxies />} />
