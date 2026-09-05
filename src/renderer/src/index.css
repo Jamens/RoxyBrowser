@@ -13,3 +13,149 @@ html, body, #root {
 [data-theme='dark'] .ant-card {
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
 }
+
+/* ===== 登录页科技感视觉 ===== */
+.login-wrap {
+  height: 100%;
+  display: flex;
+  background: radial-gradient(130% 130% at 25% 15%, #163a7a 0%, #0e2150 50%, #0a1530 100%);
+  color: #eaf2ff;
+}
+.login-aside {
+  position: relative;
+  flex: 1.15;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+.login-aside-inner {
+  position: relative;
+  z-index: 2;
+  max-width: 520px;
+  text-align: center;
+}
+.login-brand {
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 1px;
+  margin-bottom: 28px;
+}
+.login-hero-title {
+  font-size: 30px;
+  font-weight: 800;
+  color: #fff;
+  margin: 0 0 12px;
+  line-height: 1.25;
+  text-shadow: 0 2px 18px rgba(40, 120, 255, 0.45);
+}
+.login-hero-sub {
+  color: rgba(190, 215, 255, 0.85);
+  font-size: 14px;
+  margin: 0 0 18px;
+  letter-spacing: 0.5px;
+}
+.login-shield-wrap {
+  margin: 8px auto 18px;
+  width: 340px;
+  max-width: 80%;
+}
+.login-shield-svg {
+  width: 100%;
+  height: auto;
+  animation: loginFloat 6s ease-in-out infinite;
+  filter: drop-shadow(0 8px 30px rgba(40, 120, 255, 0.35));
+}
+.login-feats {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.login-feat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(90, 160, 255, 0.12);
+  border: 1px solid rgba(120, 190, 255, 0.28);
+  color: #cfe2ff;
+  font-size: 13px;
+}
+.login-feat .anticon {
+  color: #5ad1ff;
+}
+.login-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background-image: linear-gradient(rgba(120, 180, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(120, 180, 255, 0.1) 1px, transparent 1px);
+  background-size: 42px 42px;
+  -webkit-mask-image: radial-gradient(120% 120% at 50% 40%, #000 30%, transparent 80%);
+  mask-image: radial-gradient(120% 120% at 50% 40%, #000 30%, transparent 80%);
+  animation: loginGridMove 20s linear infinite;
+  opacity: 0.6;
+}
+.login-particle {
+  position: absolute;
+  z-index: 1;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #5ad1ff;
+  box-shadow: 0 0 12px 3px rgba(90, 209, 255, 0.7);
+  animation: loginTwinkle 3.4s ease-in-out infinite;
+}
+.login-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+@keyframes loginFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+@keyframes loginGridMove {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 42px 42px;
+  }
+}
+@keyframes loginTwinkle {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scale(0.6);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (max-width: 900px) {
+  .login-aside {
+    display: none;
+  }
+  .login-wrap {
+    background: radial-gradient(130% 130% at 50% 0%, #163a7a 0%, #0a1530 100%);
+  }
+}

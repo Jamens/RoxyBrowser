@@ -67,6 +67,13 @@ const zhCN = {
   'login.registerSubmit': '注册并创建团队空间',
   'login.registerSuccess': '注册成功',
 
+  // ---- 登录页科技感视觉 ----
+  'login.heroTitle': '为跨境账号安全而生',
+  'login.heroSub': '银行级隔离 · 指纹防护 · 端到端加密',
+  'login.feat1': '指纹防护',
+  'login.feat2': '端到端加密',
+  'login.feat3': '多账号隔离',
+
   // ---- 顶栏 ----
   'layout.logout': '退出登录',
   'layout.logoutSuccess': '已退出登录',
@@ -234,6 +241,13 @@ const enUS: MessageDict = {
   'login.registerSubmit': 'Sign up & create team',
   'login.registerSuccess': 'Registered successfully',
 
+  // ---- Login hero (tech/security visual) ----
+  'login.heroTitle': 'Built for cross-border account security',
+  'login.heroSub': 'Bank-grade isolation · Fingerprint protection · End-to-end encryption',
+  'login.feat1': 'Fingerprint guard',
+  'login.feat2': 'End-to-end encryption',
+  'login.feat3': 'Multi-account isolation',
+
   'layout.logout': 'Sign out',
   'layout.logoutSuccess': 'Signed out',
   'layout.memory': 'Memory',
@@ -400,6 +414,13 @@ const jaJP: MessageDict = {
   'login.registerSubmit': '登録してチームを作成',
   'login.registerSuccess': '登録しました',
 
+  // ---- ログイン視覚（テック/セキュリティ）----
+  'login.heroTitle': 'クロスボーダーアカウントの安全のために',
+  'login.heroSub': '銀行級隔離 · 指紋防護 · エンドツーエンド暗号化',
+  'login.feat1': '指紋防護',
+  'login.feat2': 'エンドツーエンド暗号化',
+  'login.feat3': 'マルチアカウント隔離',
+
   'layout.logout': 'ログアウト',
   'layout.logoutSuccess': 'ログアウトしました',
   'layout.memory': 'メモリ',
@@ -565,6 +586,13 @@ const deDE: MessageDict = {
   'login.submit': 'Anmelden',
   'login.registerSubmit': 'Registrieren & Team erstellen',
   'login.registerSuccess': 'Registrierung erfolgreich',
+
+  // ---- Login-Hero (Tech/Sicherheit) ----
+  'login.heroTitle': 'Für die Sicherheit grenzüberschreitender Konten',
+  'login.heroSub': 'Bankenklasse-Isolation · Fingerabdruck-Schutz · End-to-End-Verschlüsselung',
+  'login.feat1': 'Fingerabdruck-Schutz',
+  'login.feat2': 'End-to-End-Verschlüsselung',
+  'login.feat3': 'Multi-Account-Isolation',
 
   'layout.logout': 'Abmelden',
   'layout.logoutSuccess': 'Abgemeldet',
