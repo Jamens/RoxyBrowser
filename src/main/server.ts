@@ -2360,6 +2360,10 @@ export async function bootstrap(): Promise<string> {
     username: DB_CONFIG.user,
     password: DB_CONFIG.password,
     database: DB_CONFIG.database,
+    // DATETIME 列无时区信息，统一按 UTC 解释（读/写一致，且不依赖运行机器的系统时区）。
+    // 否则 mysql2 默认 local 会把库里存的 UTC 瞬间当成「机器本地墙钟」读出，
+    // 导致前端按国家时区换算后整体偏移 8 小时（如中国用户看到 12:28 而非 20:28）。
+    timezone: '+00:00',
     synchronize: true, // 开发模式自动同步表结构
     logging: false,
     entities: [
