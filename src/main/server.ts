@@ -1635,6 +1635,18 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const tid = (req as AuthedRequest).tid!
     const b = req.body || {}
+    let fingerprint = (b.fingerprint || randomFingerprint()) as Record<string, unknown>
+    let platform = b.platform || ''
+    let startUrl = b.startUrl || DEFAULT_START_URL
+    let remark = b.remark || ''
+    if (b.templateId) {
+      const tpl = await repo.findOne({ where: { id: Number(b.templateId), teamId: tid, isTemplate: true } })
+      if (!tpl) return res.status(404).json({ code: 404, message: 'template not found' })
+      fingerprint = tpl.fingerprint as Record<string, unknown>
+      platform = b.platform || tpl.platform || ''
+      startUrl = b.startUrl || tpl.startUrl || DEFAULT_START_URL
+      remark = b.remark || tpl.remark || ''
+    }
     const max = await repo.createQueryBuilder('p').select('MAX(p.seq)', 'm').where('p.teamId = :tid', { tid }).getRawOne()
     const seq = (max?.m || 1000) + 1
     const p = await repo.save(
@@ -1642,9 +1654,10 @@ function buildApiRouter(): express.Router {
         teamId: tid,
         name: b.name || `API环境 ${seq}`,
         seq,
-        platform: b.platform || '',
-        startUrl: b.startUrl || DEFAULT_START_URL,
-        fingerprint: (b.fingerprint || randomFingerprint()) as Record<string, unknown>,
+        platform,
+        startUrl,
+        remark,
+        fingerprint,
         createdBy: 0
       })
     )
