@@ -212,10 +212,44 @@ function httpGetViaProxy(
   })
 }
 
+/**
+ * 匿名度判定：请求一个会回显请求头的服务，看代理有没有把客户端真实 IP / 代理标识透传出去。
+ * - 出现 X-Forwarded-For / X-Real-IP 等 → transparent（泄露真实 IP）
+ * - 仅出现 Via / Proxy-Connection 等 → anonymous（看得出用了代理，但未泄露 IP）
+ * - 都没有 → elite（高匿）
+ * 该服务不可达时返回 unknown，不影响主检测结果（尽力而为）。
+ */
+async function detectAnonymity(proxy: ProxyEntity, timeoutMs?: number): Promise<string> {
+  try {
+    const { body } = await httpGetViaProxy(
+      'http://httpbin.org/headers',
+      {
+        type: proxy.type,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.username,
+        password: proxy.password
+      },
+      timeoutMs
+    )
+    const data = JSON.parse(body)
+    const keys = Object.keys(data.headers || {}).map((k) => k.toLowerCase())
+    if (keys.some((k) => ['x-forwarded-for', 'x-real-ip', 'x-client-ip', 'client-ip', 'forwarded'].includes(k))) {
+      return 'transparent'
+    }
+    if (keys.some((k) => ['via', 'proxy-connection', 'proxy-agent'].includes(k))) {
+      return 'anonymous'
+    }
+    return 'elite'
+  } catch {
+    return 'unknown'
+  }
+}
+
 async function checkProxy(
   proxy: ProxyEntity,
   timeoutMs?: number
-): Promise<{ ok: boolean; country: string; region: string; city: string; isp: string; exitIp: string; latency: number }> {
+): Promise<{ ok: boolean; country: string; region: string; city: string; isp: string; exitIp: string; latency: number; anonymity: string }> {
   try {
     const { body, ms } = await httpGetViaProxy(
       'http://ip-api.com/json/?fields=status,country,regionName,city,isp,query',
@@ -230,7 +264,8 @@ async function checkProxy(
     )
     const data = JSON.parse(body)
     if (data.status !== 'success')
-      return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: ms }
+      return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: ms, anonymity: 'unknown' }
+    const anonymity = await detectAnonymity(proxy, timeoutMs)
     return {
       ok: true,
       country: data.country || '',
@@ -238,10 +273,11 @@ async function checkProxy(
       city: data.city || '',
       isp: data.isp || '',
       exitIp: data.query || '',
-      latency: ms
+      latency: ms,
+      anonymity
     }
   } catch {
-    return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: 0 }
+    return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: 0, anonymity: 'unknown' }
   }
 }
 
@@ -270,6 +306,7 @@ async function runProxyCheckAll(): Promise<void> {
       p.city = result.city
       p.isp = result.isp
       p.exitIp = result.exitIp
+      p.anonymity = result.anonymity
       p.lastCheckAt = new Date()
       await repo.save(p)
     } catch (e) {
@@ -1090,6 +1127,7 @@ function buildApiRouter(): express.Router {
     p.city = result.city
     p.isp = result.isp
     p.exitIp = result.exitIp
+    p.anonymity = result.anonymity
     p.lastCheckAt = new Date()
     await repo.save(p)
     res.json(p)
@@ -1919,6 +1957,7 @@ function buildApiRouter(): express.Router {
     p.city = result.city
     p.isp = result.isp
     p.exitIp = result.exitIp
+    p.anonymity = result.anonymity
     p.lastCheckAt = new Date()
     await repo.save(p)
     res.json({ code: 0, data: p })

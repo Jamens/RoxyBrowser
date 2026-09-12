@@ -100,7 +100,8 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 ### 3. 代理 IP
 
 - 支持 HTTP / HTTPS / SOCKS5，带用户名密码
-- 一键检测：通过代理访问 ip-api.com，回写出口 IP、地区、延迟、可用状态
+- 一键检测：通过代理访问 ip-api.com，回写出口 IP、地区、延迟、可用状态，并判定**匿名度**
+  - 判定依据：请求头出现 `X-Forwarded-For` / `X-Real-IP` 等 → 透明（泄露真实 IP）；仅出现 `Via` / `Proxy-Connection` → 匿名（看得出用了代理但未泄露 IP）；都没有 → 高匿；回显服务不可达则显示「未检测」（尽力而为，不影响主检测结果）
 - 绑定到环境后，该环境窗口的所有流量走此代理（`proxyBypassRules` 已排除本地地址）
 - **IP 池视角**：按「是否被环境占用 + 是否过期 + 检测状态」计算每个代理的池状态（空闲 / 使用中 / 已过期 / 失效）
 - **一键分配**：优先分配空闲代理，可按地区筛选，可选直接绑定到指定环境

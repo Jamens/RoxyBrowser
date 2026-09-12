@@ -142,6 +142,10 @@ export class ProxyEntity {
   @Column({ type: 'int', nullable: true })
   latency: number | null
 
+  // 匿名度：elite 高匿 / anonymous 匿名 / transparent 透明（泄露真实 IP）/ unknown 未测出
+  @Column({ type: 'varchar', length: 16, default: 'unknown' })
+  anonymity: string
+
   @Column({ type: 'varchar', length: 64, default: '' })
   exitIp: string
 

@@ -201,6 +201,17 @@ export default function Proxies() {
     return <Tag color={c}>{t}</Tag>
   }
 
+  // 匿名度：高匿（绿）/ 匿名（蓝）/ 透明（橙，会泄露真实 IP）/ 未知（灰）
+  const anonymityTag = (v?: string) => {
+    const map: Record<string, [string, string]> = {
+      elite: ['green', '高匿'],
+      anonymous: ['blue', '匿名'],
+      transparent: ['orange', '透明']
+    }
+    const [c, t] = map[v || ''] || ['default', '未检测']
+    return <Tag color={c}>{t}</Tag>
+  }
+
   const columns: ColumnsType<ProxyDTO> = [
     { title: '名称', dataIndex: 'name', width: 140, ellipsis: true },
     { title: '协议', dataIndex: 'type', width: 80, render: (v) => <Tag color="blue">{String(v).toUpperCase()}</Tag> },
@@ -236,6 +247,7 @@ export default function Proxies() {
         </Space>
       )
     },
+    { title: '匿名度', dataIndex: 'anonymity', width: 90, render: (v) => anonymityTag(v) },
     {
       title: '池状态',
       dataIndex: 'poolStatus',
@@ -363,7 +375,7 @@ export default function Proxies() {
       </Row>
 
       <Typography.Paragraph type="secondary">
-        支持 HTTP / HTTPS / SOCKS5 协议，检测后会自动记录出口 IP、国家 / 地区 / 城市 / 运营商。绑定到环境后，环境窗口流量全部走此代理。「分配到环境」可从 IP 池一键挑选空闲代理并绑定，支持按地区筛选。
+        支持 HTTP / HTTPS / SOCKS5 协议，检测后会自动记录出口 IP、国家 / 地区 / 城市 / 运营商与匿名度（高匿 / 匿名 / 透明）。绑定到环境后，环境窗口流量全部走此代理。「分配到环境」可从 IP 池一键挑选空闲代理并绑定，支持按地区筛选。
       </Typography.Paragraph>
 
       <Table

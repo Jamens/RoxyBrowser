@@ -125,6 +125,7 @@ export interface ProxyDTO {
   isp: string
   status: 'unknown' | 'active' | 'invalid'
   latency: number | null
+  anonymity: string
   exitIp: string
   expiresAt: string | null
   // IP 池衍生字段（列表接口附带，非持久列）
