@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin } from 'antd'
+import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin, Collapse } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
@@ -366,6 +366,16 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                   <Typography.Text type="secondary">预设 = 各字段一致的成品组合；随机 = 按设备池整套生成</Typography.Text>
                 </Space>
                 <Form layout="vertical">
+                  {/* 基础/高级分组（对标官方 4.0.3）：常用项默认展开，细粒度项折叠收起 */}
+                  <Collapse
+                    ghost
+                    defaultActiveKey={['basic']}
+                    items={[
+                      {
+                        key: 'basic',
+                        label: '基础设置',
+                        children: (
+                          <>
                   <Form.Item label="操作系统">
                     <Select
                       value={fp.os}
@@ -396,33 +406,13 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       onChange={(e) => setFpField('userAgent', e.target.value)}
                     />
                   </Form.Item>
-                  <Space size="middle" style={{ display: 'flex' }} wrap>
-                    <Form.Item label="Navigator Platform" style={{ marginBottom: 0 }}>
-                      <Input value={fp.platform} style={{ width: 160 }} onChange={(e) => setFpField('platform', e.target.value)} />
-                    </Form.Item>
-                    <Form.Item label="CPU 核心" style={{ marginBottom: 0 }}>
-                      <InputNumber min={1} max={64} value={fp.hardwareConcurrency} onChange={(v) => setFpField('hardwareConcurrency', v || 4)} />
-                    </Form.Item>
-                    <Form.Item label="内存 (GB)" style={{ marginBottom: 0 }}>
-                      <InputNumber min={1} max={64} value={fp.deviceMemory} onChange={(v) => setFpField('deviceMemory', v || 8)} />
-                    </Form.Item>
-                  </Space>
-                  <Form.Item label="语言（Language 列表）" style={{ marginTop: 16 }}>
+                  <Form.Item label="语言（Language 列表）">
                     <Select
                       mode="tags"
                       value={fp.languages}
                       onChange={(v) => setFpField('languages', v)}
                       placeholder="如 en-US、en"
                       tokenSeparators={[',', ' ']}
-                    />
-                  </Form.Item>
-                  <Form.Item label="字体列表" style={{ marginTop: 16 }} extra="伪造的已安装字体，防御字体枚举指纹；随机环境按 OS 取基础集 + 随机子集，可手工增减">
-                    <Select
-                      mode="tags"
-                      value={fp.fonts}
-                      onChange={(v) => setFpField('fonts', v)}
-                      placeholder="字体名称"
-                      tokenSeparators={[',']}
                     />
                   </Form.Item>
                   <Form.Item label="时区">
@@ -441,6 +431,34 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       <InputNumber min={480} max={4320} value={fp.screenHeight} onChange={(v) => setFpField('screenHeight', v || 1080)} />
                     </Form.Item>
                   </Space>
+                          </>
+                        )
+                      },
+                      {
+                        key: 'advanced',
+                        label: '高级设置',
+                        children: (
+                          <>
+                  <Space size="middle" style={{ display: 'flex' }} wrap>
+                    <Form.Item label="Navigator Platform" style={{ marginBottom: 0 }}>
+                      <Input value={fp.platform} style={{ width: 160 }} onChange={(e) => setFpField('platform', e.target.value)} />
+                    </Form.Item>
+                    <Form.Item label="CPU 核心" style={{ marginBottom: 0 }}>
+                      <InputNumber min={1} max={64} value={fp.hardwareConcurrency} onChange={(v) => setFpField('hardwareConcurrency', v || 4)} />
+                    </Form.Item>
+                    <Form.Item label="内存 (GB)" style={{ marginBottom: 0 }}>
+                      <InputNumber min={1} max={64} value={fp.deviceMemory} onChange={(v) => setFpField('deviceMemory', v || 8)} />
+                    </Form.Item>
+                  </Space>
+                  <Form.Item label="字体列表" style={{ marginTop: 16 }} extra="伪造的已安装字体，防御字体枚举指纹；随机环境按 OS 取基础集 + 随机子集，可手工增减">
+                    <Select
+                      mode="tags"
+                      value={fp.fonts}
+                      onChange={(v) => setFpField('fonts', v)}
+                      placeholder="字体名称"
+                      tokenSeparators={[',']}
+                    />
+                  </Form.Item>
                   <div style={{ marginTop: 16 }}>
                     <Form.Item label="WebGL 显卡信息" style={{ marginBottom: 8 }}>
                       <Input value={fp.webglVendor} onChange={(e) => setFpField('webglVendor', e.target.value)} placeholder="Vendor" />
@@ -466,6 +484,11 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       />
                     </Form.Item>
                   </Space>
+                          </>
+                        )
+                      }
+                    ]}
+                  />
                   <div style={{ marginTop: 20 }}>
                     <Typography.Text type="secondary">
                       当前指纹摘要：
