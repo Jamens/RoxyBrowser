@@ -1677,6 +1677,43 @@ function buildApiRouter(): express.Router {
     res.json(m)
   })
 
+  // 可邀请的已有成员：系统中已存在、但尚未加入当前团队的账号（供「勾选已有成员」使用）
+  router.get('/team/candidates', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    const members = await memberRepo.find({ where: { teamId: req.tid } })
+    const inTeam = new Set(members.map((m) => m.userId))
+    const users = await userRepo.find({ order: { id: 'ASC' } })
+    res.json(
+      users
+        .filter((u) => !inTeam.has(u.id))
+        .map((u) => ({ id: u.id, username: u.username, nickname: u.nickname }))
+    )
+  })
+
+  // 批量把已有账号加入本团队（勾选已有成员一键邀请）
+  router.post('/team/members/batch', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    if (req.role === 'member') return res.status(403).json({ message: '无权限' })
+    const { userIds, role } = req.body || {}
+    if (!Array.isArray(userIds) || userIds.length === 0) return res.status(400).json({ message: '请选择要邀请的成员' })
+    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    let added = 0
+    for (const raw of userIds) {
+      const uid = Number(raw)
+      if (!uid) continue
+      const user = await userRepo.findOne({ where: { id: uid } })
+      if (!user) continue
+      const exists = await memberRepo.findOne({ where: { teamId: req.tid, userId: uid } })
+      if (exists) continue
+      await memberRepo.save(memberRepo.create({ teamId: req.tid!, userId: uid, role: role || 'member' }))
+      added++
+    }
+    if (added === 0) return res.status(400).json({ message: '所选成员均已在团队中' })
+    await writeLog(req, 'add_member', `批量邀请 ${added} 位已有成员`)
+    res.json({ ok: true, added })
+  })
+
   router.put('/team/members/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     if (req.role === 'member') return res.status(403).json({ message: '无权限' })
     const memberRepo = AppDataSource.getRepository(TeamMemberEntity)

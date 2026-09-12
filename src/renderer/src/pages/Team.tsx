@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Descriptions, Avatar, Upload, UploadProps } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Descriptions, Avatar, Upload, UploadProps, Radio, Checkbox } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { UserAddOutlined, ReloadOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
@@ -13,6 +13,13 @@ interface Member {
   username: string
   nickname: string
   createdAt: string
+}
+
+/** 可邀请的已有成员（系统内已存在、尚未加入本团队） */
+interface Candidate {
+  id: number
+  username: string
+  nickname: string
 }
 
 interface TeamInfo {
@@ -55,6 +62,10 @@ export default function Team() {
   const [info, setInfo] = useState<TeamInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
+  // 邀请方式：create = 新建账号；pick = 勾选系统内已有成员
+  const [inviteMode, setInviteMode] = useState<'create' | 'pick'>('create')
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [picked, setPicked] = useState<number[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -68,7 +79,36 @@ export default function Team() {
     load()
   }, [load])
 
+  // 打开邀请弹窗时拉取「可邀请的已有成员」
+  const openInvite = async () => {
+    setInviteMode('create')
+    setPicked([])
+    form.resetFields()
+    try {
+      setCandidates(await api.get<Candidate[]>('/api/team/candidates'))
+    } catch {
+      setCandidates([])
+    }
+    setOpen(true)
+  }
+
   const addMember = async () => {
+    // 勾选已有成员：批量加入本团队
+    if (inviteMode === 'pick') {
+      if (picked.length === 0) {
+        message.warning('请选择要邀请的成员')
+        return
+      }
+      try {
+        const res = await api.post<{ ok: boolean; added: number }>('/api/team/members/batch', { userIds: picked })
+        message.success(`已邀请 ${res.added} 位成员`)
+        setOpen(false)
+        load()
+      } catch (e) {
+        message.error((e as Error).message)
+      }
+      return
+    }
     const values = await form.validateFields()
     try {
       await api.post('/api/team/members', values)
@@ -164,7 +204,7 @@ export default function Team() {
       title="团队空间"
       extra={
         <Space>
-          <Button type="primary" icon={<UserAddOutlined />} onClick={() => setOpen(true)}>
+          <Button type="primary" icon={<UserAddOutlined />} onClick={openInvite}>
             邀请 / 添加成员
           </Button>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
@@ -200,7 +240,41 @@ export default function Team() {
         基于角色的权限管理：所有者与管理员可管理成员和环境配置，普通成员可使用环境执行日常运营。所有操作均记录在操作日志中并标注操作人，便于责任追溯。
       </Typography.Paragraph>
       <Table rowKey="id" size="middle" columns={columns} dataSource={info?.members || []} pagination={false} />
-      <Modal title="邀请 / 添加成员" open={open} onOk={addMember} onCancel={() => setOpen(false)} destroyOnClose>
+      <Modal
+        title="邀请 / 添加成员"
+        open={open}
+        onOk={addMember}
+        onCancel={() => setOpen(false)}
+        destroyOnClose
+        okText={inviteMode === 'pick' ? `邀请（${picked.length}）` : '确定'}
+      >
+        <Radio.Group
+          value={inviteMode}
+          onChange={(e) => setInviteMode(e.target.value)}
+          optionType="button"
+          buttonStyle="solid"
+          style={{ marginBottom: 16 }}
+          options={[
+            { value: 'create', label: '新建账号' },
+            { value: 'pick', label: `勾选已有成员（${candidates.length}）` }
+          ]}
+        />
+        {inviteMode === 'pick' ? (
+          candidates.length === 0 ? (
+            <Typography.Text type="secondary">暂无可邀请的已有成员（系统内账号均已在本团队中）</Typography.Text>
+          ) : (
+            <Checkbox.Group style={{ width: '100%' }} value={picked} onChange={(v) => setPicked(v as number[])}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {candidates.map((c) => (
+                  <Checkbox key={c.id} value={c.id}>
+                    {c.username}
+                    {c.nickname ? `（${c.nickname}）` : ''}
+                  </Checkbox>
+                ))}
+              </Space>
+            </Checkbox.Group>
+          )
+        ) : (
         <Form form={form} layout="vertical">
           <Form.Item name="username" label="用户名（已注册用户直接加入，新用户自动创建账号）" rules={[{ required: true }]}>
             <Input placeholder="成员用户名" />
@@ -220,6 +294,7 @@ export default function Team() {
             />
           </Form.Item>
         </Form>
+        )}
       </Modal>
     </Card>
   )
