@@ -1,24 +1,27 @@
-import { useLayoutEffect } from 'react'
+import { useLayoutEffect, lazy, Suspense } from 'react'
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { ConfigProvider, theme, App as AntdApp } from 'antd'
+import { ConfigProvider, theme, App as AntdApp, Spin } from 'antd'
 import { useIsDark } from './theme'
 import { I18nProvider, useI18n } from './i18n'
 import { antdLocaleFor } from './i18n/antdLocale'
 import Login from './pages/Login'
 import AppLayout from './pages/Layout'
-import Dashboard from './pages/Dashboard'
-import Environments from './pages/Environments'
-import Templates from './pages/Templates'
-import Proxies from './pages/Proxies'
-import Accounts from './pages/Accounts'
-import Cookies from './pages/Cookies'
-import Extensions from './pages/Extensions'
-import Rpa from './pages/Rpa'
-import Team from './pages/Team'
-import Logs from './pages/Logs'
-import ApiDocs from './pages/ApiDocs'
-import Settings from './pages/Settings'
 import BrowserTab from './pages/BrowserTab'
+
+// 启动速度优化：除登录 / 浏览器全屏页外，其余页面按需懒加载，
+// 首屏只加载 AppLayout 骨架 + 当前路由对应 chunk，其余页面进入时再拉取。
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Environments = lazy(() => import('./pages/Environments'))
+const Templates = lazy(() => import('./pages/Templates'))
+const Proxies = lazy(() => import('./pages/Proxies'))
+const Accounts = lazy(() => import('./pages/Accounts'))
+const Cookies = lazy(() => import('./pages/Cookies'))
+const Extensions = lazy(() => import('./pages/Extensions'))
+const Rpa = lazy(() => import('./pages/Rpa'))
+const Team = lazy(() => import('./pages/Team'))
+const Logs = lazy(() => import('./pages/Logs'))
+const ApiDocs = lazy(() => import('./pages/ApiDocs'))
+const Settings = lazy(() => import('./pages/Settings'))
 
 export default function App() {
   // I18nProvider 必须包在外层，AppShell 才能通过 useI18n 拿到当前语言，
@@ -68,25 +71,33 @@ function AppShell() {
       */}
       <AntdApp style={{ height: '100%' }}>
         <HashRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/browser" element={<BrowserTab />} />
-            <Route path="/" element={<AppLayout />}>
-              <Route index element={<Navigate to="/envs" replace />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/envs" element={<Environments />} />
-              <Route path="/templates" element={<Templates />} />
-              <Route path="/proxies" element={<Proxies />} />
-              <Route path="/accounts" element={<Accounts />} />
-              <Route path="/cookies" element={<Cookies />} />
-              <Route path="/extensions" element={<Extensions />} />
-              <Route path="/rpa" element={<Rpa />} />
-              <Route path="/team" element={<Team />} />
-              <Route path="/logs" element={<Logs />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/api" element={<ApiDocs />} />
-            </Route>
-          </Routes>
+          <Suspense
+            fallback={
+              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                <Spin size="large" />
+              </div>
+            }
+          >
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/browser" element={<BrowserTab />} />
+              <Route path="/" element={<AppLayout />}>
+                <Route index element={<Navigate to="/envs" replace />} />
+                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/envs" element={<Environments />} />
+                <Route path="/templates" element={<Templates />} />
+                <Route path="/proxies" element={<Proxies />} />
+                <Route path="/accounts" element={<Accounts />} />
+                <Route path="/cookies" element={<Cookies />} />
+                <Route path="/extensions" element={<Extensions />} />
+                <Route path="/rpa" element={<Rpa />} />
+                <Route path="/team" element={<Team />} />
+                <Route path="/logs" element={<Logs />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/api" element={<ApiDocs />} />
+              </Route>
+            </Routes>
+          </Suspense>
         </HashRouter>
       </AntdApp>
     </ConfigProvider>
