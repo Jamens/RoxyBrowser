@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Form, Select, InputNumber, Button, Space, Typography, Tag, Divider } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
@@ -11,6 +11,19 @@ import { useI18n, LOCALE_CHANGE_EVENT } from '../i18n'
 
 // 主题、自动时段、国家与语言同步进 localStorage，供渲染层 resolveDark / i18n 同步读取
 // （theme.ts 与 i18n 都在模块级同步读取，不能依赖 React 状态或异步请求）
+// 把客户端出网代理交给主进程套用到默认 session（system 模式时主进程会恢复系统代理）。
+// 放组件外：load 的 useCallback 依赖数组保持不变，避免每次渲染生成新引用导致请求重跑。
+function applyNetworkProxy(s: AppSettings) {
+  window.roxy?.setNetworkProxy?.({
+    mode: s.networkMode,
+    type: s.customProxyType,
+    host: s.customProxyHost,
+    port: s.customProxyPort,
+    username: s.customProxyUsername,
+    password: s.customProxyPassword
+  })
+}
+
 function persistThemeLocals(s: AppSettings) {
   localStorage.setItem('roxy_theme', s.theme)
   localStorage.setItem('roxy_auto_day_start', String(s.autoDayStart))
@@ -35,6 +48,7 @@ export default function Settings() {
   }, [])
 
   const country = Form.useWatch('country', form) || DEFAULT_SETTINGS.country
+  const networkMode = Form.useWatch('networkMode', form) || DEFAULT_SETTINGS.networkMode
   const tz = countryTimezone(country)
   const tzInfo = describeTimeZone(tz, now)
 
@@ -45,6 +59,7 @@ export default function Settings() {
       const s = await api.get<AppSettings>('/api/settings')
       form.setFieldsValue(s)
       persistThemeLocals(s)
+      applyNetworkProxy(s)
     } catch (e) {
       form.setFieldsValue(DEFAULT_SETTINGS)
       persistThemeLocals(DEFAULT_SETTINGS)
@@ -66,6 +81,7 @@ export default function Settings() {
       // 主题 / 国家 / 语言即时生效：写入 localStorage 并通知 App 层重读
       persistThemeLocals(res.settings)
       window.dispatchEvent(new Event('roxy-theme-change'))
+      applyNetworkProxy(res.settings)
       message.success(t('settings.saved'))
     } catch (e) {
       message.error((e as Error).message)
@@ -221,6 +237,43 @@ export default function Settings() {
         >
           <InputNumber min={7} max={3650} addonAfter={t('common.days')} style={{ width: 160 }} />
         </Form.Item>
+
+        <Divider>{t('settings.sectionNetwork')}</Divider>
+        <Form.Item name="networkMode" label={t('settings.networkMode')} extra={t('settings.networkModeExtra')}>
+          <Select
+            style={{ width: 220 }}
+            options={[
+              { value: 'system', label: t('settings.networkSystem') },
+              { value: 'custom', label: t('settings.networkCustom') }
+            ]}
+          />
+        </Form.Item>
+        {networkMode === 'custom' && (
+          <Space wrap size={12}>
+            <Form.Item name="customProxyType" label={t('settings.proxyType')}>
+              <Select
+                style={{ width: 110 }}
+                options={[
+                  { value: 'http', label: 'HTTP' },
+                  { value: 'https', label: 'HTTPS' },
+                  { value: 'socks5', label: 'SOCKS5' }
+                ]}
+              />
+            </Form.Item>
+            <Form.Item name="customProxyHost" label={t('settings.proxyHost')} rules={[{ required: true }]}>
+              <Input placeholder="127.0.0.1" style={{ width: 170 }} />
+            </Form.Item>
+            <Form.Item name="customProxyPort" label={t('settings.proxyPort')} rules={[{ required: true }]}>
+              <InputNumber min={1} max={65535} style={{ width: 110 }} />
+            </Form.Item>
+            <Form.Item name="customProxyUsername" label={t('settings.proxyUser')}>
+              <Input style={{ width: 140 }} />
+            </Form.Item>
+            <Form.Item name="customProxyPassword" label={t('settings.proxyPass')}>
+              <Input.Password style={{ width: 140 }} />
+            </Form.Item>
+          </Space>
+        )}
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

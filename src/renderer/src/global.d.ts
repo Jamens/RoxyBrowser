@@ -7,6 +7,15 @@ declare global {
       navigate?: (url: string) => void
       /** 取消起始页正在进行的导航（配合加载遮罩上的「取消」按钮） */
       cancel?: () => void
+      /** 设置客户端自身出网代理（system = 跟随系统；custom = 自定义代理） */
+      setNetworkProxy?: (cfg: {
+        mode: 'system' | 'custom'
+        type: 'http' | 'https' | 'socks5'
+        host: string
+        port: number
+        username: string
+        password: string
+      }) => Promise<{ ok: boolean }>
     }
   }
 }

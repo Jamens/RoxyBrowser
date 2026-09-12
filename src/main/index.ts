@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, session } from 'electron'
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
 import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider } from './server'
@@ -9,6 +9,44 @@ process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuiting = false
+
+// ===== 客户端自身出网代理（网络设置 > 网络连接方式）=====
+// 作用于默认 session（主界面 / 本地 API 之外的外部请求）；
+// 环境窗口用的是各自 persist:env-{id} 分区，仍按环境绑定的代理走，不受此设置影响。
+// localhost 必须绕过，否则本地 API 请求也会被代理，导致应用自身不可用。
+const LOCAL_BYPASS = 'localhost;127.0.0.1;[::1]'
+
+interface NetworkProxyConfig {
+  mode: 'system' | 'custom'
+  type: 'http' | 'https' | 'socks5'
+  host: string
+  port: number
+  username: string
+  password: string
+}
+
+function applyNetworkProxy(cfg: NetworkProxyConfig) {
+  const ses = session.defaultSession
+  if (cfg?.mode !== 'custom' || !cfg.host || !cfg.port) {
+    // 跟随系统代理 / 配置不完整：清掉自定义规则
+    void ses.setProxy({ mode: 'system' }).catch((e) => console.error('[roxy] 恢复系统代理失败:', e))
+    return
+  }
+  const scheme = cfg.type === 'socks5' ? 'socks5' : 'http'
+  const auth = cfg.username ? `${encodeURIComponent(cfg.username)}:${encodeURIComponent(cfg.password)}@` : ''
+  void ses
+    .setProxy({
+      mode: 'fixed_servers',
+      proxyRules: `${scheme}://${auth}${cfg.host}:${cfg.port}`,
+      proxyBypassRules: LOCAL_BYPASS
+    })
+    .catch((e) => console.error('[roxy] 应用自定义代理失败:', e))
+}
+
+ipcMain.handle('app:set-network-proxy', (_e, cfg: NetworkProxyConfig) => {
+  applyNetworkProxy(cfg)
+  return { ok: true }
+})
 
 function trayIconPath(): string {
   // 主进程从 out/main 运行，按不同打包形态依序探测图标位置

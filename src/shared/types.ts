@@ -325,6 +325,14 @@ export interface AppSettings {
   proxyCheckInterval: number
   // 操作日志保留天数
   logRetentionDays: number
+  // 客户端网络连接方式：system = 跟随系统代理；custom = 使用下方自定义代理
+  networkMode: 'system' | 'custom'
+  // 自定义代理（networkMode === 'custom' 时生效）：协议 / 主机 / 端口 / 可选账号密码
+  customProxyType: 'http' | 'https' | 'socks5'
+  customProxyHost: string
+  customProxyPort: number
+  customProxyUsername: string
+  customProxyPassword: string
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -339,5 +347,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchEngine: 'bing',
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
-  logRetentionDays: 90
+  logRetentionDays: 90,
+  networkMode: 'system',
+  customProxyType: 'http',
+  customProxyHost: '',
+  customProxyPort: 8080,
+  customProxyUsername: '',
+  customProxyPassword: ''
 }
