@@ -121,6 +121,10 @@ const zhCN = {
   'settings.proxyPort': '端口',
   'settings.proxyUser': '账号（可选）',
   'settings.proxyPass': '密码（可选）',
+  'settings.trayDisplay': '任务栏图标显示',
+  'settings.trayDisplayExtra': '选择「窗口名称」后，环境窗口在任务栏显示环境名（页面标题不再覆盖），多窗口并行时便于快速定位',
+  'settings.trayIcon': '图标',
+  'settings.trayName': '窗口名称',
   'settings.save': '保存设置',
   'settings.saved': '设置已保存',
 
@@ -309,6 +313,10 @@ const enUS: MessageDict = {
   'settings.proxyPort': 'Port',
   'settings.proxyUser': 'Username (optional)',
   'settings.proxyPass': 'Password (optional)',
+  'settings.trayDisplay': 'Taskbar icon display',
+  'settings.trayDisplayExtra': 'With "Window name", each environment window shows its name in the taskbar (page title no longer overrides it) — easier to locate when running many windows',
+  'settings.trayIcon': 'Icon',
+  'settings.trayName': 'Window name',
   'settings.save': 'Save settings',
   'settings.saved': 'Settings saved',
 
@@ -494,6 +502,10 @@ const jaJP: MessageDict = {
   'settings.proxyPort': 'ポート',
   'settings.proxyUser': 'ユーザー名（任意）',
   'settings.proxyPass': 'パスワード（任意）',
+  'settings.trayDisplay': 'タスクバーアイコン表示',
+  'settings.trayDisplayExtra': '「ウィンドウ名」を選ぶと、環境ウィンドウがタスクバーに環境名を表示します（ページタイトルで上書きされません）。複数ウィンドウ時の識別に便利です',
+  'settings.trayIcon': 'アイコン',
+  'settings.trayName': 'ウィンドウ名',
   'settings.save': '設定を保存',
   'settings.saved': '設定を保存しました',
 
@@ -679,6 +691,10 @@ const deDE: MessageDict = {
   'settings.proxyPort': 'Port',
   'settings.proxyUser': 'Benutzername (optional)',
   'settings.proxyPass': 'Passwort (optional)',
+  'settings.trayDisplay': 'Taskleistensymbol',
+  'settings.trayDisplayExtra': 'Mit „Fenstername" zeigt jedes Umgebungsfenster seinen Namen in der Taskleiste (der Seitentitel überschreibt ihn nicht mehr) – bei vielen Fenstern leichter zu finden',
+  'settings.trayIcon': 'Symbol',
+  'settings.trayName': 'Fenstername',
   'settings.save': 'Einstellungen speichern',
   'settings.saved': 'Einstellungen gespeichert',
 

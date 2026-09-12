@@ -86,6 +86,9 @@ const windows = new Map<number, BrowserWindow>()
 // 无法用于区分同步对象，所以单独记录环境名
 const windowTitles = new Map<number, string>()
 let syncEnabled = false
+// 任务栏图标显示模式（软件设置 > 任务栏图标显示）：
+// 'icon' = 应用图标（默认）；'name' = 窗口标题锁定为环境名，多窗口并行时便于在任务栏定位
+let trayDisplayMode: 'icon' | 'name' = 'icon'
 // 参与同步的环境窗口；空集合表示「全部已打开窗口」
 const syncTargets = new Set<number>()
 
@@ -101,6 +104,21 @@ export function setSyncTargets(ids: number[]) {
 }
 export function getSyncTargets(): number[] {
   return [...syncTargets]
+}
+
+/**
+ * 任务栏图标显示（软件设置 > 任务栏图标显示）。
+ * 'name' 模式下环境窗口标题锁定为环境名：页面 <title> 会覆盖窗口标题，
+ * 必须 preventDefault 后重新 setTitle，否则任务栏显示的是网页名而不是环境名。
+ * 切换时对已打开的窗口立即生效。
+ */
+export function setTrayDisplay(mode: 'icon' | 'name') {
+  trayDisplayMode = mode
+  for (const [id, w] of windows) {
+    if (w.isDestroyed()) continue
+    const name = windowTitles.get(id)
+    if (mode === 'name' && name) w.setTitle(`${name} — RoxyBrowser Clone`)
+  }
 }
 export function getRunningWindowIds(): number[] {
   return [...windows.keys()]
@@ -235,6 +253,13 @@ export async function openWindow(profileId: number): Promise<void> {
     markClosed(profileId)
   })
   win.once('ready-to-show', () => win.show())
+
+  // 任务栏显示窗口名称：页面 <title> 会覆盖窗口标题，开启时锁回环境名
+  win.on('page-title-updated', (e) => {
+    if (trayDisplayMode !== 'name') return
+    e.preventDefault()
+    win.setTitle(`${profile.name} — RoxyBrowser Clone`)
+  })
 
   // 录制期间记录页面跳转（包括首次导航，回放时会重新走一遍 URL 序列）
   win.webContents.on('did-navigate', (_e, url) => {

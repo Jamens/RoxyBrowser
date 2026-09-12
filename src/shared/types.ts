@@ -333,6 +333,8 @@ export interface AppSettings {
   customProxyPort: number
   customProxyUsername: string
   customProxyPassword: string
+  // 任务栏图标显示：icon = 应用图标；name = 显示窗口（环境）名称，多窗口并行时便于定位
+  trayDisplay: 'icon' | 'name'
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -353,5 +355,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customProxyHost: '',
   customProxyPort: 8080,
   customProxyUsername: '',
-  customProxyPassword: ''
+  customProxyPassword: '',
+  trayDisplay: 'icon'
 }

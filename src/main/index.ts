@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, session } 
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
 import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider } from './server'
-import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows } from './browserManager'
+import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay } from './browserManager'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -45,6 +45,12 @@ function applyNetworkProxy(cfg: NetworkProxyConfig) {
 
 ipcMain.handle('app:set-network-proxy', (_e, cfg: NetworkProxyConfig) => {
   applyNetworkProxy(cfg)
+  return { ok: true }
+})
+
+// 任务栏图标显示：'name' 时环境窗口标题锁定为环境名（页面 <title> 不再覆盖）
+ipcMain.handle('app:set-tray-display', (_e, mode: 'icon' | 'name') => {
+  setTrayDisplay(mode === 'name' ? 'name' : 'icon')
   return { ok: true }
 })
 

@@ -24,6 +24,11 @@ function applyNetworkProxy(s: AppSettings) {
   })
 }
 
+// 任务栏图标显示模式交给主进程（'name' 时环境窗口标题锁定为环境名）
+function applyTrayDisplay(s: AppSettings) {
+  window.roxy?.setTrayDisplay?.(s.trayDisplay || 'icon')
+}
+
 function persistThemeLocals(s: AppSettings) {
   localStorage.setItem('roxy_theme', s.theme)
   localStorage.setItem('roxy_auto_day_start', String(s.autoDayStart))
@@ -60,6 +65,7 @@ export default function Settings() {
       form.setFieldsValue(s)
       persistThemeLocals(s)
       applyNetworkProxy(s)
+      applyTrayDisplay(s)
     } catch (e) {
       form.setFieldsValue(DEFAULT_SETTINGS)
       persistThemeLocals(DEFAULT_SETTINGS)
@@ -82,6 +88,7 @@ export default function Settings() {
       persistThemeLocals(res.settings)
       window.dispatchEvent(new Event('roxy-theme-change'))
       applyNetworkProxy(res.settings)
+      applyTrayDisplay(res.settings)
       message.success(t('settings.saved'))
     } catch (e) {
       message.error((e as Error).message)
@@ -274,6 +281,16 @@ export default function Settings() {
             </Form.Item>
           </Space>
         )}
+
+        <Form.Item name="trayDisplay" label={t('settings.trayDisplay')} extra={t('settings.trayDisplayExtra')}>
+          <Select
+            style={{ width: 220 }}
+            options={[
+              { value: 'icon', label: t('settings.trayIcon') },
+              { value: 'name', label: t('settings.trayName') }
+            ]}
+          />
+        </Form.Item>
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

@@ -16,6 +16,8 @@ declare global {
         username: string
         password: string
       }) => Promise<{ ok: boolean }>
+      /** 任务栏图标显示：icon = 应用图标；name = 窗口（环境）名称 */
+      setTrayDisplay?: (mode: 'icon' | 'name') => Promise<{ ok: boolean }>
     }
   }
 }
