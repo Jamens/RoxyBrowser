@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload, Tooltip } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined, DownloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
@@ -110,6 +110,23 @@ export default function Accounts() {
       message.error((e as Error).message)
     }
     return false
+  }
+
+  // 标准导入模板（对标官方模板批量导入）：表头 + 注释说明 + 两种格式示例；
+  // 后端解析时会自动跳过表头（「环境,…」/「平台,…」开头）与 ; 注释行
+  const downloadTemplate = () => {
+    const tpl = [
+      '; RoxyBrowser 账号导入模板',
+      '; 每行一条账号，支持两种格式：',
+      ';   格式A（带环境，自动匹配归属）：#环境序号|环境名,平台,账号,密码,备注',
+      ';   格式B（归属到弹窗所选环境）：平台,账号,密码,备注',
+      '; 以 ; 开头的行与第一行表头会被自动跳过',
+      '环境,平台,账号,密码,备注',
+      '#1001|Amazon US Store 01,Amazon,demo@example.com,pass123,示例行（可删除）',
+      'Amazon,demo2@example.com,pass456,格式B示例（归属到所选环境）'
+    ].join('\n')
+    downloadText(tpl, 'roxy-accounts-template.csv', 'text/plain;charset=utf-8')
+    message.success('模板已下载，填写后再上传或粘贴')
   }
 
   const exportAccounts = async () => {
@@ -250,7 +267,7 @@ export default function Accounts() {
           <Form.Item
             label="账号列表"
             required
-            extra="每行一条。格式 A：#序号|环境名,平台,账号,密码,备注（自动匹配环境）。格式 B：平台,账号,密码[,备注]"
+            extra="每行一条。格式 A：#序号|环境名,平台,账号,密码,备注（自动匹配环境）。格式 B：平台,账号,密码[,备注]。模板表头与 ; 注释行会自动跳过"
           >
             <Input.TextArea
               rows={8}
@@ -259,9 +276,14 @@ export default function Accounts() {
               onChange={(e) => setImportText(e.target.value)}
             />
           </Form.Item>
-          <Upload beforeUpload={pickFile} showUploadList={false} accept=".txt,.csv">
-            <Button icon={<ImportOutlined />}>从文件选择</Button>
-          </Upload>
+          <Space>
+            <Upload beforeUpload={pickFile} showUploadList={false} accept=".txt,.csv">
+              <Button icon={<ImportOutlined />}>从文件选择</Button>
+            </Upload>
+            <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>
+              下载模板
+            </Button>
+          </Space>
         </Form>
       </Modal>
     </Card>

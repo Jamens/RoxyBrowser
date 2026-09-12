@@ -1302,6 +1302,8 @@ function buildApiRouter(): express.Router {
     let ok = 0
     const failed: string[] = []
     for (const line of lines) {
+      // 跳过模板表头与注释行（对标官方模板批量导入：模板第一行是表头，; 或 // 开头为注释）
+      if (line.startsWith(';') || line.startsWith('//') || /^(环境|平台)\s*[,，]/.test(line)) continue
       const parts = line.split(',').map((s) => s.trim())
       let profileId = defaultProfileId
       let platform = ''
