@@ -15,6 +15,39 @@ import { useAppCtx } from '../hooks/useApp'
 import { countryTimezone } from '@shared/countries'
 import { formatDateTimeInZone } from '@shared/timezone'
 
+/** RPA 运行日志条目（取自操作日志，action 以 rpa 开头） */
+interface RpaLogEntry {
+  id: number
+  username: string
+  action: string
+  detail: string
+  createdAt: string
+}
+
+/** 日志动作 → 标签文案与颜色 */
+function rpaLogTag(action: string): { text: string; color: string } {
+  switch (action) {
+    case 'rpa_run':
+      return { text: '手动回放', color: 'blue' }
+    case 'rpa_schedule_run':
+      return { text: '定时完成', color: 'green' }
+    case 'rpa_schedule_fail':
+      return { text: '定时失败', color: 'red' }
+    case 'rpa_schedule_skip':
+      return { text: '定时跳过', color: 'orange' }
+    case 'rpa_record_start':
+      return { text: '开始录制', color: 'purple' }
+    case 'create_rpa_script':
+      return { text: '创建脚本', color: 'default' }
+    case 'update_rpa_script':
+      return { text: '更新脚本', color: 'default' }
+    case 'delete_rpa_script':
+      return { text: '删除脚本', color: 'default' }
+    default:
+      return { text: action, color: 'default' }
+  }
+}
+
 /** 步骤可读化描述 */
 function stepText(s: RpaStep): string {
   switch (s.type) {
@@ -65,6 +98,22 @@ export default function Rpa() {
   const [editForm] = Form.useForm()
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 运行日志（对标 4.0.2 实时监控 / 日志滚动）：复用操作日志接口按 rpa 关键字过滤，5s 自动刷新
+  const [runLogs, setRunLogs] = useState<RpaLogEntry[]>([])
+  const loadRunLogs = useCallback(async () => {
+    try {
+      const list = await api.get<RpaLogEntry[]>('/api/logs?keyword=rpa')
+      setRunLogs(list.slice(0, 50))
+    } catch {
+      /* 日志拉取失败不打断页面 */
+    }
+  }, [])
+  useEffect(() => {
+    loadRunLogs()
+    const t = setInterval(loadRunLogs, 5000)
+    return () => clearInterval(t)
+  }, [loadRunLogs])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -359,6 +408,53 @@ export default function Rpa() {
           pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 个脚本` }}
           locale={{ emptyText: <Empty description="暂无脚本 — 选择一个环境点击「开始录制」，把重复操作固化成脚本" /> }}
         />
+      </Card>
+
+      {/* 运行日志（对标 4.0.2 实时监控）：最新在上，固定高度滚动，5s 自动刷新 */}
+      <Card
+        title="运行日志"
+        style={{ marginTop: 16 }}
+        extra={
+          <Space>
+            <Tag color="processing">每 5 秒自动刷新</Tag>
+            <Button size="small" icon={<ReloadOutlined />} onClick={loadRunLogs}>
+              刷新
+            </Button>
+          </Space>
+        }
+      >
+        {runLogs.length === 0 ? (
+          <Empty description="暂无运行记录 — 回放或定时执行后会实时出现在这里" />
+        ) : (
+          <div style={{ maxHeight: 320, overflowY: 'auto', fontFamily: 'tabular-nums' }}>
+            {runLogs.map((l) => {
+              const tag = rpaLogTag(l.action)
+              return (
+                <div
+                  key={l.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 8,
+                    padding: '6px 4px',
+                    borderBottom: '1px dashed rgba(128,128,128,0.2)'
+                  }}
+                >
+                  <Typography.Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>
+                    {formatDateTimeInZone(l.createdAt, countryTimezone(localStorage.getItem('roxy_country')), true)}
+                  </Typography.Text>
+                  <Tag color={tag.color} style={{ flexShrink: 0, marginInlineEnd: 0 }}>
+                    {tag.text}
+                  </Tag>
+                  <Typography.Text style={{ flex: 1, wordBreak: 'break-all' }}>{l.detail}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ flexShrink: 0, fontSize: 12 }}>
+                    {l.username}
+                  </Typography.Text>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </Card>
 
       {/* 保存录制 */}
