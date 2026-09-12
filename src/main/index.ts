@@ -54,6 +54,17 @@ ipcMain.handle('app:set-tray-display', (_e, mode: 'icon' | 'name') => {
   return { ok: true }
 })
 
+// 内核版本信息（对标官方「内核版本」）：设置页「关于」区块展示
+ipcMain.handle('app:get-versions', () => ({
+  app: app.getVersion(),
+  electron: process.versions.electron,
+  chrome: process.versions.chrome,
+  node: process.versions.node,
+  v8: process.versions.v8,
+  platform: process.platform,
+  arch: process.arch
+}))
+
 function trayIconPath(): string {
   // 主进程从 out/main 运行，按不同打包形态依序探测图标位置
   const candidates = [

@@ -52,6 +52,12 @@ export default function Settings() {
     return () => clearInterval(id)
   }, [])
 
+  // 内核版本信息（对标官方「内核版本」）：主进程 process.versions 经 IPC 取回
+  const [versions, setVersions] = useState<{ app: string; electron: string; chrome: string; node: string; v8: string; platform: string; arch: string } | null>(null)
+  useEffect(() => {
+    window.roxy?.getVersions?.().then(setVersions).catch(() => {})
+  }, [])
+
   const country = Form.useWatch('country', form) || DEFAULT_SETTINGS.country
   const networkMode = Form.useWatch('networkMode', form) || DEFAULT_SETTINGS.networkMode
   const tz = countryTimezone(country)
@@ -298,6 +304,17 @@ export default function Settings() {
           </Button>
         </Form.Item>
       </Form>
+
+      {/* 关于（对标官方「内核版本」）：纯展示，不进表单 */}
+      <Divider>{t('settings.sectionAbout')}</Divider>
+      <Space wrap size={[8, 8]}>
+        <Tag color="blue">{t('settings.aboutApp')} v{versions?.app ?? '-'}</Tag>
+        <Tag color="geekblue">Chromium {versions?.chrome ?? '-'}</Tag>
+        <Tag>Electron {versions?.electron ?? '-'}</Tag>
+        <Tag>Node.js {versions?.node ?? '-'}</Tag>
+        <Tag>V8 {versions?.v8 ?? '-'}</Tag>
+        <Tag>{versions ? `${versions.platform}/${versions.arch}` : '-'}</Tag>
+      </Space>
     </Card>
   )
 }

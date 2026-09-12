@@ -19,5 +19,17 @@ contextBridge.exposeInMainWorld('roxy', {
    */
   setNetworkProxy: (cfg: NetworkProxyConfig) => ipcRenderer.invoke('app:set-network-proxy', cfg) as Promise<{ ok: boolean }>,
   /** 任务栏图标显示：icon = 应用图标；name = 窗口（环境）名称 */
-  setTrayDisplay: (mode: 'icon' | 'name') => ipcRenderer.invoke('app:set-tray-display', mode) as Promise<{ ok: boolean }>
+  setTrayDisplay: (mode: 'icon' | 'name') => ipcRenderer.invoke('app:set-tray-display', mode) as Promise<{ ok: boolean }>,
+  /** 内核版本信息（应用 / Electron / Chromium / Node / V8 / 平台） */
+  getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>
 })
+
+export interface AppVersions {
+  app: string
+  electron: string
+  chrome: string
+  node: string
+  v8: string
+  platform: string
+  arch: string
+}
