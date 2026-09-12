@@ -196,6 +196,8 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 - **变量**：脚本可定义变量（如 `token`、`keyword`），步骤里的 `navigate.url` / `input.value` / `change.value` 用 `{{变量名}}` 引用。回放弹窗可逐变量覆盖（留空则用脚本默认值），便于同一脚本在不同环境复用时切换账号、搜索词等。
   - 未定义的占位符**保留原样**（方便排查「漏配变量」），不会抛错。
 - **导入 / 导出**：每个脚本支持单独导出为 JSON（含步骤与变量，浏览器以附件下载）；「导入」按钮支持单对象、`{ "items": [...] }` 或数组，可一次导入多个脚本（定时配置重置为关闭）。导入导出格式成对，往返测试通过。
+- **定时执行**（对标官方 4.0.2）：编辑脚本可开启「定时执行」+ 间隔分钟 + 目标环境。内置调度器每 30 秒扫描一次，到点且目标环境**处于运行态**才自动回放；环境未运行则跳过本轮并写日志，**绝不自动开窗**（自动拉起窗口会绕过用户对环境的显式控制）。执行中的脚本不会被重复触发。
+- **运行日志**（对标官方 4.0.2 实时监控）：RPA 页底部「运行日志」面板滚动展示本团队 RPA 相关记录（手动回放 / 定时完成 / 定时失败 / 定时跳过 / 录制），最新在上、固定高度滚动、每 5 秒自动刷新。
 - **隔离**：脚本按账户隔离（同其他业务数据一致）。
 
 后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`GET /api/rpa/export/:id`（导出）、`POST /api/rpa/import`（导入）、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`（回放，body 可带 `profileId` 与覆盖 `variables`）。
