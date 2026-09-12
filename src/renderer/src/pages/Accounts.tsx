@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload, Tooltip } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
@@ -43,12 +43,20 @@ export default function Accounts() {
   const [importOpen, setImportOpen] = useState(false)
   const [importText, setImportText] = useState('')
   const [importProfile, setImportProfile] = useState<number | undefined>()
+  // 当前用户角色：member 不可查看明文密码 / 导出（对标官方 3.8.9 账号权限管理）
+  const [role, setRole] = useState('owner')
+  const isMember = role === 'member'
 
   const load = useCallback(async () => {
     try {
-      const [a, p] = await Promise.all([api.get<Row[]>('/api/accounts'), api.get<ProfileDTO[]>('/api/profiles')])
+      const [a, p, me] = await Promise.all([
+        api.get<Row[]>('/api/accounts'),
+        api.get<ProfileDTO[]>('/api/profiles'),
+        api.get<{ role: string }>('/api/auth/me')
+      ])
       setList(a)
       setProfiles(p)
+      setRole(me.role)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -131,12 +139,15 @@ export default function Accounts() {
     {
       title: '密码',
       dataIndex: 'password',
-      render: (v) => (
-        <Space size={4}>
-          <Input.Password value={v} size="small" bordered={false as never} style={{ width: 140 }} readOnly />
-          <CopyBtn text={v} label="密码" />
-        </Space>
-      )
+      render: (v, r) =>
+        r.passwordMasked ? (
+          <Typography.Text type="secondary">无权限查看</Typography.Text>
+        ) : (
+          <Space size={4}>
+            <Input.Password value={v} size="small" bordered={false as never} style={{ width: 140 }} readOnly />
+            <CopyBtn text={v} label="密码" />
+          </Space>
+        )
     },
     { title: '备注', dataIndex: 'remark', ellipsis: true, render: (v) => v || '-' },
     {
@@ -169,9 +180,11 @@ export default function Accounts() {
           <Button icon={<ImportOutlined />} onClick={() => { setImportProfile(undefined); setImportText(''); setImportOpen(true) }}>
             批量导入
           </Button>
-          <Button icon={<ExportOutlined />} onClick={exportAccounts}>
-            导出
-          </Button>
+          <Tooltip title={isMember ? '仅管理员可导出账号' : ''}>
+            <Button icon={<ExportOutlined />} onClick={exportAccounts} disabled={isMember}>
+              导出
+            </Button>
+          </Tooltip>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -207,8 +220,8 @@ export default function Accounts() {
           <Form.Item name="username" label="账号" rules={[{ required: true, message: '必填' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="password" label="密码">
-            <Input.Password />
+          <Form.Item name="password" label="密码" extra={isMember ? '成员角色不可查看/修改密码' : undefined}>
+            <Input.Password disabled={isMember} placeholder={isMember ? '无权限' : undefined} />
           </Form.Item>
           <Form.Item name="remark" label="备注">
             <Input />

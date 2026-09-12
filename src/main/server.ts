@@ -88,6 +88,16 @@ function ownerAndWhere(qb: { andWhere: (sql: string, params?: Record<string, unk
   if (!isAdminRole(req.role)) qb.andWhere(`${alias}.ownerId = :oid`, { oid: req.uid })
 }
 
+// 实时角色：JWT 里的 role 在「调整成员角色」后会过期，敏感操作以数据库为准，保证权限调整即时生效
+async function freshRole(req: AuthedRequest): Promise<string> {
+  try {
+    const m = await AppDataSource.getRepository(TeamMemberEntity).findOne({ where: { teamId: req.tid, userId: req.uid } })
+    return m?.role || req.role || 'member'
+  } catch {
+    return req.role || 'member'
+  }
+}
+
 // ---------- 工具 ----------
 type AuthedRequest = Request & { uid?: number; tid?: number; username?: string; role?: string }
 
@@ -654,7 +664,7 @@ function buildApiRouter(): express.Router {
     const userRepo = AppDataSource.getRepository(UserEntity)
     const user = await userRepo.findOne({ where: { id: req.uid } })
     if (!user) return res.status(401).json({ message: '用户不存在' })
-    res.json({ id: user.id, username: user.username, nickname: user.nickname, role: req.role })
+    res.json({ id: user.id, username: user.username, nickname: user.nickname, role: await freshRole(req) })
   })
 
   // ===== 窗口同步开关 =====
@@ -1213,7 +1223,16 @@ function buildApiRouter(): express.Router {
     const all = await repo.find({ order: { id: 'DESC' } })
     const list = all.filter((a) => profileIds.has(a.profileId))
     const nameMap = new Map(profiles.map((p) => [p.id, p.name]))
-    res.json(list.map((a) => ({ ...a, profileName: nameMap.get(a.profileId) || '' })))
+    // 成员角色不返回明文密码（对标官方 3.8.9 账号权限管理），仅打标记由前端展示「无权限查看」
+    const canView = isAdminRole(await freshRole(req))
+    res.json(
+      list.map((a) => ({
+        ...a,
+        password: canView ? a.password : '',
+        passwordMasked: !canView,
+        profileName: nameMap.get(a.profileId) || ''
+      }))
+    )
   })
 
   router.post('/accounts', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -1242,7 +1261,9 @@ function buildApiRouter(): express.Router {
     const ids = new Set(profiles.map((p) => p.id))
     const a = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
-    for (const f of ['platform', 'username', 'password', 'remark'] as const) {
+    // 成员角色不允许改密码（看不到明文，避免误清空/越权修改）
+    const fields = (await freshRole(req)) === 'member' ? (['platform', 'username', 'remark'] as const) : (['platform', 'username', 'password', 'remark'] as const)
+    for (const f of fields) {
       if (f in req.body) (a as any)[f] = req.body[f]
     }
     await repo.save(a)
@@ -1324,7 +1345,9 @@ function buildApiRouter(): express.Router {
   })
 
   // 账号导出（文本，含环境归属，便于还原）：`#环境序号|环境名,平台,账号,密码,备注`
+  // 含明文密码，仅 owner/admin 可用（对标官方 3.8.9 批量导出按角色控权）
   router.get('/accounts/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    if (!isAdminRole(await freshRole(req))) return res.status(403).json({ message: '无权限：仅管理员可导出账号' })
     const repo = AppDataSource.getRepository(AccountEntity)
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
     const profiles = await profileRepo.find({ where: ownerScope(req) })

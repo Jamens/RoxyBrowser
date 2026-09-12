@@ -150,6 +150,8 @@ export interface AccountDTO {
   platform: string
   username: string
   password: string
+  /** 成员角色时后端不返回明文密码，此标记为 true（对标官方 3.8.9 账号权限管理） */
+  passwordMasked?: boolean
   remark: string
   createdAt: string
 }
