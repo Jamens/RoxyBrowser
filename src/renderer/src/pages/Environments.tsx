@@ -6,7 +6,7 @@ import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ImportOutlined, ExportOutlined, ThunderboltOutlined
+  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined
 } from '@ant-design/icons'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
@@ -73,6 +73,21 @@ export default function Environments() {
     try {
       await api.post(`/api/profiles/${id}/open`)
       message.success('窗口已打开')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 手动切换线路（对标官方）：从 IP 池换一条「不同的」可用代理，旧线路自动释放回池
+  const switchLine = async (r: ProfileDTO) => {
+    try {
+      const res = await api.post<{ proxy: { name: string }; running: boolean }>(`/api/profiles/${r.id}/switch-line`, {})
+      if (res.running) {
+        message.warning(`已切换到新线路「${res.proxy.name}」；环境运行中，重启后生效`)
+      } else {
+        message.success(`已切换到新线路「${res.proxy.name}」`)
+      }
       load()
     } catch (e) {
       message.error((e as Error).message)
@@ -306,7 +321,7 @@ export default function Environments() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 232,
       render: (_, r) => (
         <Space size={4}>
           {r.status === 'running' ? (
@@ -319,6 +334,15 @@ export default function Environments() {
             </Button>
           )}
           <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); setFormOpen(true) }} />
+          <Popconfirm
+            title="切换线路"
+            description="从 IP 池分配一条不同的可用代理替换当前绑定"
+            onConfirm={() => switchLine(r)}
+          >
+            <Tooltip title="手动切换线路（一键换 IP）">
+              <Button size="small" icon={<SwapOutlined />} />
+            </Tooltip>
+          </Popconfirm>
           <Tooltip title="导出整环境配置（含指纹 / 代理 / 账号 / Cookie / 扩展）">
             <Button size="small" icon={<ExportOutlined />} onClick={() => exportProfile(r.id, r.name)} />
           </Tooltip>

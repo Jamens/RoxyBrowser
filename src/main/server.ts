@@ -481,9 +481,10 @@ class ApiError extends Error {
 }
 
 // 从 IP 池分配代理（供 /api/proxies/allocate 与 v1 共用，保证分配口径唯一）
+// excludeProxyId：切换线路场景排除当前绑定的代理，保证换到的是「另一条线路」
 async function allocateProxy(
   teamId: number,
-  opts: { profileId?: number | null; country?: string; region?: string }
+  opts: { profileId?: number | null; country?: string; region?: string; excludeProxyId?: number | null }
 ): Promise<{ proxy: ProxyEntity; profileId: number | null; reused: boolean; poolStatus: 'available' | 'in-use' }> {
   const repo = AppDataSource.getRepository(ProxyEntity)
   const now = Date.now()
@@ -491,6 +492,9 @@ async function allocateProxy(
   const all = await repo.find({ where: { teamId } })
   // 候选 = 未失效且未过期的代理（active 或 unknown 均可分配，与 proxyPoolStatus 的「available」定义一致）
   let candidates = all.filter((p) => p.status !== 'invalid' && (!p.expiresAt || new Date(p.expiresAt).getTime() > now))
+  if (opts.excludeProxyId) {
+    candidates = candidates.filter((p) => p.id !== opts.excludeProxyId)
+  }
   if (opts.country) {
     const c = String(opts.country).toLowerCase()
     candidates = candidates.filter((p) => p.country && p.country.toLowerCase().includes(c))
@@ -500,7 +504,10 @@ async function allocateProxy(
     candidates = candidates.filter((p) => p.region && p.region.toLowerCase().includes(r))
   }
   if (!candidates.length)
-    throw new ApiError(409, 'IP 池中无可用代理' + (opts.country ? `（地区：${opts.country}）` : ''))
+    throw new ApiError(
+      409,
+      (opts.excludeProxyId ? 'IP 池中没有可切换的其他线路' : 'IP 池中无可用代理') + (opts.country ? `（地区：${opts.country}）` : '')
+    )
   // 优先分配未被任何环境占用的代理
   const free = candidates.filter((p) => (usage.get(p.id) || 0) === 0)
   const reused = free.length === 0
@@ -977,6 +984,35 @@ function buildApiRouter(): express.Router {
     await repo.save(p)
     await writeLog(req, 'update_profile', `修改环境「${p.name}」(#${p.id})`)
     res.json(mapProfile(p))
+  })
+
+  // 手动切换线路（对标官方）：从 IP 池分配一条「不同的」可用代理替换当前绑定。
+  // 旧代理随 proxyId 覆盖自动释放回池（占用数 -1）。运行中的环境只改绑定，
+  // 窗口代理在打开时注入，需重启环境才生效（响应里带 running 标记由前端提示）。
+  router.post('/profiles/:id/switch-line', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    try {
+      const { proxy, reused } = await allocateProxy(req.tid!, {
+        excludeProxyId: p.proxyId,
+        country: (req.body || {}).country,
+        region: (req.body || {}).region
+      })
+      const oldProxy = p.proxyId ? await AppDataSource.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } }) : null
+      p.proxyId = proxy.id
+      await repo.save(p)
+      const running = p.status === 'running'
+      await writeLog(
+        req,
+        'switch_line',
+        `环境「${p.name}」(#${p.id})切换线路：${oldProxy ? `「${oldProxy.name}」` : '（无代理）'} → 「${proxy.name}」(#${proxy.id})${reused ? '（池中无空闲代理，复用已占用代理）' : ''}${running ? '；环境运行中，重启后生效' : ''}`
+      )
+      res.json({ proxy, running, oldProxyId: oldProxy?.id ?? null })
+    } catch (e) {
+      if (e instanceof ApiError) return res.status(e.status).json({ message: e.message })
+      throw e
+    }
   })
 
   router.delete('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
