@@ -415,6 +415,10 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 > 图表为自研内联 SVG（`src/renderer/src/components/charts.tsx`），**不依赖第三方图表库**；
 > 折线图与条形图按容器真实宽度 1:1 渲染（`ResizeObserver` 测量），保证字号为真实像素、气泡定位准确。
 
+### 12. 启动速度优化
+
+- 渲染层构建拆分为 `react-vendor` / `antd` / `vendor` 多个 vendor chunk（并行下载 + 长期缓存，首屏不再等待 3.4MB 单包解析）；各页面按路由懒加载（`React.lazy` + `Suspense`），进入对应页面时才加载其专属 chunk（Dashboard / Rpa / Environments 等均为独立小包），首屏体积与解析时间显著下降。
+
 ## 目录结构
 
 ```
