@@ -6,10 +6,11 @@ import {
 import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined,
-  ImportOutlined, ExportOutlined, ApiOutlined
+  ImportOutlined, ExportOutlined, ApiOutlined, QrcodeOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import QRCode from 'qrcode'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ProxyDTO } from '@shared/types'
@@ -49,6 +50,10 @@ export default function Proxies() {
   const [allocCountry, setAllocCountry] = useState('')
   const [allocating, setAllocating] = useState(false)
   const [profiles, setProfiles] = useState<ProfileBrief[]>([])
+
+  const [qrOpen, setQrOpen] = useState(false)
+  const [qrUrl, setQrUrl] = useState('')
+  const [qrText, setQrText] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -99,6 +104,19 @@ export default function Proxies() {
       message.error((e as Error).message)
     } finally {
       setAllocating(false)
+    }
+  }
+
+  // 扫码导出：编码为标准代理 URI（type://user:pass@host:port），手机代理工具扫码即可导入
+  const showQr = async (p: ProxyDTO) => {
+    const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(p.password || '')}@` : ''
+    const uri = `${p.type}://${auth}${p.host}:${p.port}`
+    try {
+      setQrText(uri)
+      setQrUrl(await QRCode.toDataURL(uri, { width: 256, margin: 2 }))
+      setQrOpen(true)
+    } catch (e) {
+      message.error('二维码生成失败：' + (e as Error).message)
     }
   }
 
@@ -245,9 +263,16 @@ export default function Proxies() {
     },
     {
       title: '操作',
-      width: 210,
+      width: 268,
       render: (_, r) => (
         <Space size={4}>
+          <Button
+            size="small"
+            icon={<QrcodeOutlined />}
+            onClick={() => showQr(r)}
+          >
+            扫码
+          </Button>
           <Button
             size="small"
             icon={<SafetyCertificateOutlined />}
@@ -422,6 +447,22 @@ export default function Proxies() {
             系统会优先挑选未被占用的空闲代理；若池中无空闲代理，将复用已占用代理。
           </Typography.Paragraph>
         </Form>
+      </Modal>
+
+      <Modal title="扫码导出代理配置" open={qrOpen} onCancel={() => setQrOpen(false)} footer={null} width={360} destroyOnClose>
+        <div style={{ textAlign: 'center', padding: '8px 0' }}>
+          {qrUrl ? (
+            <img src={qrUrl} alt="代理配置二维码" style={{ width: 256, height: 256, borderRadius: 8 }} />
+          ) : (
+            <Typography.Text type="secondary">生成中…</Typography.Text>
+          )}
+          <Typography.Paragraph type="secondary" style={{ marginTop: 14, fontSize: 12, wordBreak: 'break-all' }}>
+            {qrText}
+          </Typography.Paragraph>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            用手机代理工具扫码即可一键导入配置
+          </Typography.Text>
+        </div>
       </Modal>
     </Card>
   )
