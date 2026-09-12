@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Descriptions } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Descriptions, Avatar, Upload, UploadProps } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { UserAddOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
+import { UserAddOutlined, ReloadOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
@@ -16,7 +16,7 @@ interface Member {
 }
 
 interface TeamInfo {
-  team: { id: number; name: string; createdAt: string }
+  team: { id: number; name: string; icon?: string | null; createdAt: string }
   members: Member[]
 }
 
@@ -55,6 +55,40 @@ export default function Team() {
     await api.put(`/api/team/members/${m.id}`, { role })
     message.success('角色已更新')
     load()
+  }
+
+  // 团队图标：前端转 base64(data URL) 直接存库，不走文件上传通道
+  const beforeUploadIcon: NonNullable<UploadProps['beforeUpload']> = (file) => {
+    if (!file.type.startsWith('image/')) {
+      message.error('请选择图片文件')
+      return false
+    }
+    if (file.size / 1024 / 1024 > 1) {
+      message.error('图标需小于 1MB')
+      return false
+    }
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        await api.put('/api/team', { icon: reader.result })
+        message.success('团队图标已更新')
+        load()
+      } catch (e) {
+        message.error((e as Error).message)
+      }
+    }
+    reader.readAsDataURL(file)
+    return false // 阻止 antd 自动上传
+  }
+
+  const removeIcon = async () => {
+    try {
+      await api.put('/api/team', { icon: '' })
+      message.success('已移除团队图标')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
   }
 
   const columns: ColumnsType<Member> = [
@@ -110,6 +144,21 @@ export default function Team() {
           <Descriptions.Item label="团队名称">{info.team?.name}</Descriptions.Item>
           <Descriptions.Item label="成员数">{info.members.length}</Descriptions.Item>
           <Descriptions.Item label="创建时间">{dayjs(info.team?.createdAt).format('YYYY-MM-DD')}</Descriptions.Item>
+          <Descriptions.Item label="团队图标">
+            <Space>
+              <Avatar size={40} src={info.team?.icon || undefined} style={info.team?.icon ? undefined : { backgroundColor: '#1677ff', fontSize: 18 }}>
+                {!info.team?.icon ? info.team?.name?.[0] || 'T' : null}
+              </Avatar>
+              <Upload showUploadList={false} accept="image/*" beforeUpload={beforeUploadIcon}>
+                <Button size="small" icon={<UploadOutlined />}>上传图标</Button>
+              </Upload>
+              {info.team?.icon && (
+                <Popconfirm title="移除团队图标？" onConfirm={removeIcon}>
+                  <Button size="small" danger icon={<DeleteOutlined />}>移除</Button>
+                </Popconfirm>
+              )}
+            </Space>
+          </Descriptions.Item>
         </Descriptions>
       )}
       <Typography.Paragraph type="secondary">

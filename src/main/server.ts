@@ -1605,6 +1605,20 @@ function buildApiRouter(): express.Router {
     })
   })
 
+  // 更新团队信息（名称 / 图标）
+  router.put('/team', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    if (req.role === 'member') return res.status(403).json({ message: '无权限' })
+    const repo = AppDataSource.getRepository(TeamEntity)
+    const team = await repo.findOne({ where: { id: req.tid } })
+    if (!team) return res.status(404).json({ message: '团队不存在' })
+    const { name, icon } = req.body || {}
+    if (typeof name === 'string' && name.trim()) team.name = name.trim()
+    if (icon !== undefined) team.icon = icon ? String(icon) : null
+    await repo.save(team)
+    await writeLog(req, 'update_team', `更新团队信息`)
+    res.json({ ok: true, team: { id: team.id, name: team.name, icon: team.icon } })
+  })
+
   // 邀请成员（直接创建账号并加入团队）
   router.post('/team/members', authMiddleware, async (req: AuthedRequest, res: Response) => {
     if (req.role === 'member') return res.status(403).json({ message: '无权限' })

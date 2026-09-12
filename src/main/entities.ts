@@ -35,6 +35,10 @@ export class TeamEntity {
   @Column({ type: 'varchar', length: 128 })
   name: string
 
+  // 团队图标：存 data URL（base64），为空表示使用默认图标
+  @Column({ type: 'text', nullable: true })
+  icon: string | null
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }
