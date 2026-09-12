@@ -20,6 +20,36 @@ interface TeamInfo {
   members: Member[]
 }
 
+// 团队图标限制：原始文件 ≤ 2MB；像素边长超过 256 时自动等比压缩，避免 base64 过大撑爆存储
+const MAX_ICON_BYTES = 2 * 1024 * 1024
+const MAX_ICON_EDGE = 256
+
+/** 读取图片，超过 maxEdge 时等比压缩，返回 data URL 与是否发生过压缩 */
+function compressImage(file: File, maxEdge: number): Promise<{ dataUrl: string; compressed: boolean }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取图片失败'))
+    reader.onload = () => {
+      const src = String(reader.result)
+      const img = new Image()
+      img.onerror = () => reject(new Error('图片解析失败，请换一张'))
+      img.onload = () => {
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height))
+        if (scale === 1) return resolve({ dataUrl: src, compressed: false })
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round(img.width * scale))
+        canvas.height = Math.max(1, Math.round(img.height * scale))
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return reject(new Error('当前环境不支持图片压缩'))
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve({ dataUrl: canvas.toDataURL('image/png'), compressed: true })
+      }
+      img.src = src
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
 export default function Team() {
   const { message } = useAppCtx()
   const [info, setInfo] = useState<TeamInfo | null>(null)
@@ -58,26 +88,28 @@ export default function Team() {
   }
 
   // 团队图标：前端转 base64(data URL) 直接存库，不走文件上传通道
-  const beforeUploadIcon: NonNullable<UploadProps['beforeUpload']> = (file) => {
+  const beforeUploadIcon: NonNullable<UploadProps['beforeUpload']> = async (file) => {
     if (!file.type.startsWith('image/')) {
-      message.error('请选择图片文件')
+      message.error('请选择图片文件（JPG / PNG / WebP 等）')
       return false
     }
-    if (file.size / 1024 / 1024 > 1) {
-      message.error('图标需小于 1MB')
+    if (file.size > MAX_ICON_BYTES) {
+      message.error(`图标不能超过 2MB，当前 ${(file.size / 1024 / 1024).toFixed(2)}MB，请压缩后再上传`)
       return false
     }
-    const reader = new FileReader()
-    reader.onload = async () => {
-      try {
-        await api.put('/api/team', { icon: reader.result })
-        message.success('团队图标已更新')
-        load()
-      } catch (e) {
-        message.error((e as Error).message)
+    try {
+      const { dataUrl, compressed } = await compressImage(file, MAX_ICON_EDGE)
+      // 压缩后仍过大（极少数高噪声图）则拒绝，避免写入超长字段
+      if (dataUrl.length > 2 * 1024 * 1024) {
+        message.error('压缩后仍然过大，请换一张更小的图片')
+        return false
       }
+      await api.put('/api/team', { icon: dataUrl })
+      message.success(compressed ? `团队图标已更新（原图较大，已自动压缩到 ${MAX_ICON_EDGE}px）` : '团队图标已更新')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
     }
-    reader.readAsDataURL(file)
     return false // 阻止 antd 自动上传
   }
 
@@ -152,6 +184,9 @@ export default function Team() {
               <Upload showUploadList={false} accept="image/*" beforeUpload={beforeUploadIcon}>
                 <Button size="small" icon={<UploadOutlined />}>上传图标</Button>
               </Upload>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                支持 JPG / PNG / WebP，单个文件 ≤ 2MB；边长超过 {MAX_ICON_EDGE}px 会自动等比压缩
+              </Typography.Text>
               {info.team?.icon && (
                 <Popconfirm title="移除团队图标？" onConfirm={removeIcon}>
                   <Button size="small" danger icon={<DeleteOutlined />}>移除</Button>

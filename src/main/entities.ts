@@ -35,8 +35,10 @@ export class TeamEntity {
   @Column({ type: 'varchar', length: 128 })
   name: string
 
-  // 团队图标：存 data URL（base64），为空表示使用默认图标
-  @Column({ type: 'text', nullable: true })
+  // 团队图标：存 data URL（base64），为空表示使用默认图标。
+  // 必须用 longtext：MySQL 的 text 上限仅 64KB，而一张图片转 base64 后往往几百 KB 甚至 1MB+，
+  // 用 text 会静默截断 / 写入失败（表现为「上传大图没提示也存不进去」）。
+  @Column({ type: 'longtext', nullable: true })
   icon: string | null
 
   @CreateDateColumn({ type: 'datetime' })
