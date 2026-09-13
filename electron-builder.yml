@@ -10,6 +10,8 @@ files:
   - out/**
   - resources/**
   - package.json
+  # AI Agent Support 模式的知识源（产品文档），打包后安装版才能检索到
+  - README.md
 
 # 原生镜像读取需要真实路径，因此把 resources 从 asar 中解包
 asarUnpack:
