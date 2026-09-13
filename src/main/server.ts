@@ -152,6 +152,13 @@ function wrapAsync(router: express.Router): express.Router {
   return router
 }
 
+// 敏感操作：导出（数据外泄）/ 删除 / 改角色 / 成员与令牌管理 / 密码重置等
+const SENSITIVE_LOG_KEYWORDS = ['delete', 'purge', 'export', 'import', 'role', 'member', 'token', 'password', 'reset']
+function isSensitiveAction(action: string): boolean {
+  const a = action.toLowerCase()
+  return SENSITIVE_LOG_KEYWORDS.some((k) => a.includes(k))
+}
+
 async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
   if (!req.tid || !req.uid) return
   const repo = AppDataSource.getRepository(OperationLogEntity)
@@ -161,7 +168,8 @@ async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
       userId: req.uid,
       username: req.username || 'api',
       action,
-      detail: typeof detail === 'string' ? detail : JSON.stringify(detail)
+      detail: typeof detail === 'string' ? detail : JSON.stringify(detail),
+      sensitive: isSensitiveAction(action)
     })
   )
 }

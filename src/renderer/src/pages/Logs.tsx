@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Input, Tag, Typography, Space } from 'antd'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Card, Table, Input, Tag, Typography, Space, Switch } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
@@ -41,6 +41,12 @@ const ACTION_LABELS: Record<string, string> = {
 export default function Logs() {
   const [list, setList] = useState<LogDTO[]>([])
   const [keyword, setKeyword] = useState('')
+  const [onlySensitive, setOnlySensitive] = useState(false)
+
+  const shown = useMemo(
+    () => (onlySensitive ? list.filter((l) => l.sensitive) : list),
+    [list, onlySensitive]
+  )
 
   const load = useCallback(async () => {
     try {
@@ -79,8 +85,13 @@ export default function Logs() {
     {
       title: '操作',
       dataIndex: 'action',
-      width: 110,
-      render: (v) => <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
+      width: 130,
+      render: (v, r) => (
+        <Space size={4}>
+          <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
+          {r.sensitive && <Tag color="red">敏感</Tag>}
+        </Space>
+      )
     },
     { title: '详情', dataIndex: 'detail', ellipsis: true }
   ]
@@ -90,15 +101,21 @@ export default function Logs() {
       <Typography.Paragraph type="secondary">
         团队空间内所有关键操作（创建 / 修改 / 删除 / 打开环境等）都会记录操作人身份与时间，便于多人共用工作区时的责任追溯与权限管理。
       </Typography.Paragraph>
-      <Input
-        placeholder="搜索操作人 / 动作 / 详情"
-        prefix={<SearchOutlined />}
-        style={{ width: 280, marginBottom: 16 }}
-        allowClear
-        value={keyword}
-        onChange={(e) => setKeyword(e.target.value)}
-      />
-      <Table rowKey="id" size="middle" columns={columns} dataSource={list} pagination={{ pageSize: 15 }} />
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input
+          placeholder="搜索操作人 / 动作 / 详情"
+          prefix={<SearchOutlined />}
+          style={{ width: 280 }}
+          allowClear
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        <Space size={6}>
+          <Switch checked={onlySensitive} onChange={setOnlySensitive} />
+          <Typography.Text>只看敏感操作</Typography.Text>
+        </Space>
+      </Space>
+      <Table rowKey="id" size="middle" columns={columns} dataSource={shown} pagination={{ pageSize: 15 }} />
     </Card>
   )
 }

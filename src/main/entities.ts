@@ -329,6 +329,10 @@ export class OperationLogEntity {
   @Column({ type: 'text' })
   detail: string
 
+  // 敏感操作标记：导出 / 删除 / 改角色 / 成员与令牌管理等，便于前端高亮与筛选
+  @Column({ type: 'tinyint', default: 0 })
+  sensitive: boolean
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }

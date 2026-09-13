@@ -181,6 +181,7 @@ export interface LogDTO {
   username: string
   action: string
   detail: string
+  sensitive?: boolean
   createdAt: string
 }
 

@@ -8,7 +8,8 @@ import {
   CheckCircleOutlined,
   KeyOutlined,
   VideoCameraOutlined,
-  AppstoreAddOutlined
+  AppstoreAddOutlined,
+  WarningOutlined
 } from '@ant-design/icons'
 import { api } from '../api'
 import { useI18n } from '../i18n'
@@ -168,7 +169,8 @@ export default function Dashboard() {
     { title: t('dashboard.proxyAvailable'), value: data.pool?.available ?? 0, icon: <CheckCircleOutlined />, color: '#52c41a', bg: 'rgba(82,196,26,0.12)' },
     { title: t('dashboard.accountTotal'), value: (data.accounts || []).length, icon: <KeyOutlined />, color: '#fa8c16', bg: 'rgba(250,140,22,0.12)' },
     { title: t('dashboard.rpaTotal'), value: (data.rpa || []).length, icon: <VideoCameraOutlined />, color: '#722ed1', bg: 'rgba(114,46,209,0.12)' },
-    { title: t('dashboard.extTotal'), value: (data.extensions || []).length, icon: <AppstoreAddOutlined />, color: '#eb2f96', bg: 'rgba(235,47,150,0.12)' }
+    { title: t('dashboard.extTotal'), value: (data.extensions || []).length, icon: <AppstoreAddOutlined />, color: '#eb2f96', bg: 'rgba(235,47,150,0.12)' },
+    { title: '敏感操作', value: (data.logs || []).filter((l) => l.sensitive).length, icon: <WarningOutlined />, color: '#ff4d4f', bg: 'rgba(255,77,79,0.12)' }
   ]
 
   return (
