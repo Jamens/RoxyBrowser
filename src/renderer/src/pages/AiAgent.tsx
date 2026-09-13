@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Typography, Select, Switch, Alert, Modal, Form, message } from 'antd'
+import { Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Typography, Select, Switch, Alert, Modal, Form, message, theme } from 'antd'
 import { RobotOutlined, SendOutlined, ClearOutlined, SettingOutlined, PlayCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
@@ -54,6 +54,8 @@ function EnvCard({
   onSave: (envId: number) => void
 }) {
   const { t } = useI18n()
+  // 用主题 token 而非硬编码 rgba(0,0,0,0.1)：暗色模式下黑边框几乎不可见
+  const { token } = theme.useToken()
   const last = steps[steps.length - 1]
   const sColor = !status || status.status === 'running' ? 'green' : status.status === 'done' ? 'blue' : 'red'
   const sText = !status || status.status === 'running' ? t('aiAgent.agent.running') : status.status === 'done' ? t('aiAgent.agent.done') : t('aiAgent.agent.failed')
@@ -63,7 +65,7 @@ function EnvCard({
         <img
           src={last.screenshot}
           alt=""
-          style={{ width: '100%', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', marginBottom: 8, flexShrink: 0 }}
+          style={{ width: '100%', borderRadius: 6, border: `1px solid ${token.colorBorderSecondary}`, marginBottom: 8, flexShrink: 0 }}
         />
       )}
       {status && status.status !== 'running' && status.result && (
