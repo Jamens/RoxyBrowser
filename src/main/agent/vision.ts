@@ -12,6 +12,8 @@ export interface VisionRequest {
   instruction: string
   dom: DomSnapshot
   history: AgentAction[]
+  /** 由 navHint.buildNavHint 确定性算出的导航强指令（点名站点 + 搜索词 + 步骤顺序） */
+  navHint?: string
 }
 
 const SYSTEM_PROMPT = `You are a precise browser-automation agent that controls ONE browser window via screenshots.
@@ -37,8 +39,11 @@ Guidance:
 - "finish" 当指令已完成或无法完成时，把结果/原因写进 thought。
 - "ask" 当你需要人工决策（如验证码、需登录、歧义）时，把问题写进 question。
 - "navigate" 当指令要求打开某个网站/网页时（如「打开必应」「进入百度」「打开 https://example.com」），直接用 navigate 跳转到目标 URL，不要只在地址栏里输入。url 必须填完整、含协议的地址（如 https://www.bing.com）。若指令是「搜索 X」，先 navigate 到搜索引擎主页，再用 type 在搜索框输入 X 并加 "\\n" 提交；不要直接打开环境预设的起始页就 finish。
+- 站点别名对照（务必按指令点名的站点跳转，不要拿当前已打开的页面顶替）：必应=Bing=https://www.bing.com；谷歌=Google=https://www.google.com；百度=Baidu=https://www.baidu.com；DuckDuckGo=https://duckduckgo.com；GitHub=https://github.com；YouTube=https://www.youtube.com；Bilibili=https://www.bilibili.com。
 - "type" 填入当前聚焦的输入框；若给了 x,y 则先点该输入框再输入。直接写原文（含空格）。若目标是地址栏、搜索框，或用户指令包含「打开/搜索/进入」等需要提交的内容，输入末尾必须加 "\\n" 来按回车提交；普通表单输入不要擅自提交。
 - 不要过早 finish：若当前页面仍是环境预设的起始页（通常是 baidu.com）而你的指令尚未执行，先 navigate 到目标站点，不要直接输出 finish。只有指令真正完成后再 finish。
+- 复合指令（如「搜索必应，并搜索 Electron，点击搜索到的第一条链接」）必须逐步执行，不可跳步：① navigate 到指令点名的站点（必应→bing.com，绝不用百度等其它已开页面顶替）→ ② 在该站点搜索框输入关键词（Electron）并按回车 → ③ 等待搜索结果加载 → ④ 点击第一条结果。**在未真正完成「搜索」之前，严禁去点页面上的任何链接**；若当前页面已经是目标站点，则跳过第①步直接进入第②步。
+- 若提示词里出现「【导航要求】…」，那是系统为你算出的确定目标，优先级高于你的推测，请严格照做。
 - 只输出 JSON，不要任何额外文字。`
 
 function buildUserText(req: VisionRequest): string {
@@ -49,7 +54,10 @@ function buildUserText(req: VisionRequest): string {
   const hist = req.history.length
     ? req.history.map((h, i) => `step ${i + 1}: ${h.action}${h.thought ? ` - ${h.thought}` : ''}`).join('\n')
     : '(none)'
-  return `当前页面标题: ${dom.title}\nURL: ${dom.url}\n视口: ${dom.vw}x${dom.vh}\n\n用户指令: ${req.instruction}\n\n可交互元素（中心坐标，与截图对齐）:\n${elLines || '(未检测到)'}\n\n已执行动作:\n${hist}\n\n请输出下一个动作（仅 JSON）。`
+  const navBlock = req.navHint
+    ? `\n【导航要求】${req.navHint}\n`
+    : ''
+  return `当前页面标题: ${dom.title}\nURL: ${dom.url}\n视口: ${dom.vw}x${dom.vh}\n\n用户指令: ${req.instruction}${navBlock}\n可交互元素（中心坐标，与截图对齐）:\n${elLines || '(未检测到)'}\n\n已执行动作:\n${hist}\n\n请输出下一个动作（仅 JSON）。`
 }
 
 function extractJson(text: string): unknown {

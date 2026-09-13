@@ -3,6 +3,7 @@
 import type { BrowserWindow } from 'electron'
 import type { AgentAction, AIAgentSettings, RpaStep } from '../../shared/types'
 import { createVisionAdapter } from './vision'
+import { buildNavHint } from './navHint'
 import { extractDom } from './dom'
 import { executeAction } from './actions'
 import type { DomEl, DomSnapshot, RunOptions } from './types'
@@ -109,9 +110,18 @@ export async function runAgentSession(opts: {
   const { win, instruction, settings, options, emit, controls } = opts
   const vision = createVisionAdapter(settings.localVisionModel || 'minicpm-v:latest')
   const maxSteps = options.maxSteps || settings.maxStepsPerRun || 30
+  // 确定性解析指令里点名的站点与搜索词，作为强指令注入每一步（绕过弱模型把当前
+  // 已打开页面误当目标的系统性误判）。无明确站点时 hint 为空串，交给模型自行判断。
+  const navInfo = buildNavHint(instruction)
+  console.log(`[agent] navHint: ${navInfo.hint || '(none)'}`)
+  console.log(`[agent] searchUrl: ${navInfo.searchUrl || '(none)'}`)
+  const encodedTerm = navInfo.term ? encodeURIComponent(navInfo.term) : ''
   const history: AgentAction[] = []
   const recordedSteps: RpaStep[] = []
   let step = 0
+  // 本地视觉模型偶发抖动容错：要连续失败这么多次才判定本轮失败（单次抖动不再 abort 整轮）
+  const MAX_VISION_FAIL = 3
+  let visionFailStreak = 0
 
   try {
     while (step < maxSteps) {
@@ -124,7 +134,36 @@ export async function runAgentSession(opts: {
       const dom = await extractDom(win)
       console.log(`[agent] step ${step + 1} perceive: ${dom.title} | ${dom.url} | ${dom.els.length} elements`)
       // —— DECIDE ——
-      const action = await vision.understand({ imageBase64: vlm, instruction, dom, history })
+      // 导航强指令的注入时机：一直注入到「搜索已完成」为止。
+      //   ① 已执行过 type（模型自己选择手动输入）→ 撤掉，避免与手输冲突；
+      //   ② 当前 URL 已含关键词，或已 navigate 到含关键词的地址（即已到结果页）→ 撤掉。
+      // 这样模型可以先 navigate 到站点、再 navigate 到「搜索直达 URL」，两步都拿得到提示；
+      // 一旦到站/到结果页就立即撤掉，避免每步被逼着重复 navigate 造成死循环重载。
+      const alreadyTyped = history.some((a) => a.action === 'type')
+      const reachedSearch =
+        !!encodedTerm &&
+        (dom.url.includes(encodedTerm) ||
+          history.some(
+            (a) => a.action === 'navigate' && typeof a.url === 'string' && a.url.includes(encodedTerm)
+          ))
+      const nav = alreadyTyped || reachedSearch ? undefined : navInfo.hint
+      let action: AgentAction
+      try {
+        action = await vision.understand({ imageBase64: vlm, instruction, dom, history, navHint: nav })
+        visionFailStreak = 0
+      } catch (ve) {
+        // 本地视觉模型偶发失败（如 UnknownVizError）常是瞬时抖动，直接 abort 会让整轮
+        // 执行前功尽弃。允许连续失败 MAX_VISION_FAIL 次，期间跳过本步、保留进度稍后重试。
+        visionFailStreak++
+        const msg = ve instanceof Error ? ve.message : String(ve)
+        console.error(`[agent] 视觉模型调用失败 (${visionFailStreak}/${MAX_VISION_FAIL}): ${msg}`)
+        if (visionFailStreak >= MAX_VISION_FAIL) {
+          emit.error({ error: `视觉模型连续失败 ${visionFailStreak} 次：${msg}` })
+          return
+        }
+        await sleep(rand(1500, 3000))
+        continue
+      }
       step++
       console.log(`[agent] step ${step} decide: ${action.action}${action.thought ? ' | ' + action.thought : ''}`)
       // —— FINISH / ASK（不执行动作，仅下发结果）——
