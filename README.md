@@ -419,6 +419,31 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 - 渲染层构建拆分为 `react-vendor` / `antd` / `vendor` 多个 vendor chunk（并行下载 + 长期缓存，首屏不再等待 3.4MB 单包解析）；各页面按路由懒加载（`React.lazy` + `Suspense`），进入对应页面时才加载其专属 chunk（Dashboard / Rpa / Environments 等均为独立小包），首屏体积与解析时间显著下降。
 
+### 13. AI Agent（本地大模型 · 零 token）
+
+内置 AI 助手面板（侧边栏「AI Agent」），模型后端**默认本地 Ollama**——推理完全在本机完成，不调用任何按量计费的云端 API，对话内容不出本机。
+
+**三种模式**（面板右上角可切换）：
+
+| 模式 | 行为 |
+| ---- | ---- |
+| 自动 | Dispatcher 按消息内容自动路由：命中产品词（环境 / 代理 / 指纹 / RPA…）→ 产品客服，其余 → 通用对话 |
+| 通用对话 | 纯本地模型自由问答 |
+| 产品客服 | 检索本产品 README 相关章节拼入上下文，讲解功能、回答「怎么用 / 怎么做」；文档未提及的会如实说明，不编造 |
+
+**使用步骤**：
+
+1. 本机安装 [Ollama](https://ollama.com) 并拉取模型：`ollama pull qwen2.5:7b`（中文友好，约 4.5GB；显存富余可上 `qwen2.5:14b`）
+2. 「设置 → AI Agent」：开启 AI Agent，填本地模型名，点「检测连接」——会明确提示 Ollama 未启动 / 模型未拉取 / 就绪三种状态
+3. 侧边栏进入「AI Agent」即可对话；Enter 发送、Shift+Enter 换行，产品客服的回复会带「产品客服」标签
+
+**实现要点**：
+
+- 模型适配层 `src/main/agent/ollama.ts`：`/api/tags` 连通探针 + `/api/chat` 对话，纯 `fetch` 零额外依赖；对话接口只携带最近 20 条历史（本地模型上下文有限）
+- 知识检索 `src/main/agent/knowledge.ts`：README 按标题切片（5 分钟缓存），中文 2-gram + 拉丁词打分取 top-6 片段拼入 system prompt，总长 ≤7000 字符
+- 接口：`POST /api/ai-agent/chat`（`mode: auto/chat/support`）、`GET /api/ai-agent/status`（探针）
+- 云端 BYOK（自带 Key）仅为可选兜底配置，当前版本尚未开放实际调用；Agent 执行闭环（看屏自动操作浏览器）规划中
+
 ## 目录结构
 
 ```
@@ -427,6 +452,7 @@ src/
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
 │   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
+│   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发
 │   └── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
