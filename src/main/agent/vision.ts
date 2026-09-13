@@ -1,7 +1,8 @@
 // 视觉理解适配器（Route A：截图 + DOM → VLM → 下一个原子动作）
 // P1 默认本地 Ollama 视觉模型（minicpm-v / llama3.2-vision / qwen3-vl），零 token。
 // 统一接口便于 P4 接入云端 BYOK 视觉模型。
-import type { AgentAction } from '../../shared/types'
+import type { AgentAction, AIAgentBackend, AIAgentCloudProvider } from '../../shared/types'
+import { cloudVisionChat } from './cloud'
 import type { DomSnapshot } from './types'
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
@@ -111,11 +112,49 @@ function coerce(raw: unknown): AgentAction | null {
   }
 }
 
-export function createVisionAdapter(model: string) {
-  return { understand: (req: VisionRequest) => understand(req, model) }
+export interface VisionAdapterConfig {
+  backend: AIAgentBackend
+  localVisionModel: string
+  cloudProvider: AIAgentCloudProvider
+  cloudBaseUrl: string
+  cloudApiKey: string
+  cloudVisionModel: string
 }
 
-async function understand(req: VisionRequest, model: string): Promise<AgentAction> {
+export function createVisionAdapter(cfg: VisionAdapterConfig) {
+  return { understand: (req: VisionRequest) => understand(req, cfg) }
+}
+
+/**
+ * 看屏决策：本地走 Ollama 视觉模型，云端走 BYOK 多模态模型。
+ * 两套共用同一份动作协议（SYSTEM_PROMPT / buildUserText / extractJson / coerce）。
+ */
+async function understand(req: VisionRequest, cfg: VisionAdapterConfig): Promise<AgentAction> {
+  if (cfg.backend === 'cloud') return understandCloud(req, cfg)
+  return understandOllama(req, cfg.localVisionModel)
+}
+
+async function understandCloud(req: VisionRequest, cfg: VisionAdapterConfig): Promise<AgentAction> {
+  if (!cfg.cloudApiKey?.trim() || !cfg.cloudVisionModel?.trim()) {
+    throw new Error(
+      '云端视觉模型未配置：Agent 执行闭环需要多模态模型，请在「设置 → AI Agent」填写 API Key 与视觉模型名（如 gpt-4o / qwen-vl-max / glm-4v）'
+    )
+  }
+  const text = await cloudVisionChat({
+    provider: cfg.cloudProvider,
+    baseUrl: cfg.cloudBaseUrl,
+    apiKey: cfg.cloudApiKey,
+    model: cfg.cloudVisionModel,
+    systemPrompt: SYSTEM_PROMPT,
+    userText: buildUserText(req),
+    imageBase64: req.imageBase64
+  })
+  const parsed = coerce(extractJson(text))
+  if (parsed) return parsed
+  throw new Error(`云端视觉模型未返回可解析的动作 JSON，原始输出：${text.slice(0, 200)}`)
+}
+
+async function understandOllama(req: VisionRequest, model: string): Promise<AgentAction> {
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: buildUserText(req), images: [req.imageBase64] }

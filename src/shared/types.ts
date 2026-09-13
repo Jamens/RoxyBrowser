@@ -321,6 +321,8 @@ export interface AIAgentSettings {
   cloudBaseUrl: string
   cloudApiKey: string
   cloudModel: string
+  // 云端 BYOK 视觉模型名（Agent 执行闭环看屏决策用，需多模态，如 gpt-4o / qwen-vl-max / glm-4v）
+  cloudVisionModel: string
   // 执行闭环（P1+）默认是否要求人工审批
   needApprovalByDefault: boolean
   // 单次运行最大步数上限
@@ -406,6 +408,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cloudBaseUrl: '',
     cloudApiKey: '',
     cloudModel: '',
+    cloudVisionModel: '',
     needApprovalByDefault: false,
     maxStepsPerRun: 30
   }

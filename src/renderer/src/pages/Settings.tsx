@@ -380,6 +380,9 @@ export default function Settings() {
             <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
               <Input style={{ width: 200 }} placeholder="deepseek-chat" />
             </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
+              <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
+            </Form.Item>
             <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
               <Input.Password style={{ width: 260 }} placeholder="sk-..." />
             </Form.Item>

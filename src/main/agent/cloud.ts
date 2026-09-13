@@ -69,6 +69,70 @@ export async function cloudChat(opts: CloudChatOptions): Promise<string> {
   return data.choices?.[0]?.message?.content || ''
 }
 
+export interface CloudVisionOptions {
+  provider: AIAgentCloudProvider
+  /** 用户自定义 base（代理 / 私有部署）；留空则用厂商默认地址 */
+  baseUrl?: string
+  apiKey: string
+  /** 多模态视觉模型名（需支持图像输入，如 gpt-4o / qwen-vl-max / glm-4v） */
+  model: string
+  systemPrompt: string
+  userText: string
+  /** 截图 JPEG base64（不含 data: 前缀），按视口分辨率、与坐标 1:1 对齐 */
+  imageBase64: string
+  signal?: AbortSignal
+}
+
+const IMG_DATA_PREFIX = 'data:image/jpeg;base64,'
+
+/**
+ * 发起一次云端多模态（视觉）对话：把「文本指令 + 截图」作为多模态消息发给 OpenAI 兼容的
+ * /v1/chat/completions，返回模型文本（预期为动作 JSON，由调用方解析）。
+ * 与 cloudChat 共用 resolveEndpoint / Bearer 鉴权 / 错误处理；仅消息体改为多模态 content 数组。
+ */
+export async function cloudVisionChat(opts: CloudVisionOptions): Promise<string> {
+  const apiKey = (opts.apiKey || '').trim()
+  const model = (opts.model || '').trim()
+  if (!apiKey) throw new Error('未配置云端 API Key（请在「设置 → AI Agent」填写）')
+  if (!model) {
+    throw new Error('未配置云端视觉模型名：Agent 执行闭环需要多模态模型，请在「设置 → AI Agent」填写（如 gpt-4o / qwen-vl-max / glm-4v）')
+  }
+  const url = resolveEndpoint(opts.provider, opts.baseUrl)
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: 'system', content: opts.systemPrompt },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: opts.userText },
+          { type: 'image_url', image_url: { url: `${IMG_DATA_PREFIX}${opts.imageBase64}` } }
+        ]
+      }
+    ],
+    stream: false
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal: opts.signal
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`云端视觉模型返回 ${res.status}${text ? `: ${text}` : ''}`)
+  }
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>
+    error?: { message?: string } | string
+  }
+  if (data.error) {
+    const msg = typeof data.error === 'string' ? data.error : data.error.message || 'unknown error'
+    throw new Error(msg)
+  }
+  return data.choices?.[0]?.message?.content || ''
+}
+
 export interface CloudStatus {
   reachable: boolean
   baseUrl: string

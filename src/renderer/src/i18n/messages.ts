@@ -216,6 +216,8 @@ const zhCN = {
   'aiAgent.cloudBaseUrl': 'API 地址',
   'aiAgent.cloudModel': '模型名',
   'aiAgent.cloudApiKey': 'API Key',
+  'aiAgent.cloudVisionModel': '视觉模型（云端）',
+  'aiAgent.cloudVisionModelExtra': 'Agent 看屏操作依赖支持图像输入的多模态模型。各厂商可用的视觉模型名称不同且会更新，请务必到对应官网确认你账号下可用的模型名后再填写（不要照抄示例）：DeepSeek → platform.deepseek.com；阿里通义千问 → 阿里云百炼 / Model Studio 文档；智谱 GLM → open.bigmodel.cn；OpenAI → platform.openai.com。示例：gpt-4o / qwen-vl-max / glm-4v。',
 
   // ---- AI Agent：Chat 模式 ----
   'aiAgent.chat.title': 'AI 助手',
@@ -485,6 +487,8 @@ const enUS: MessageDict = {
   'aiAgent.cloudBaseUrl': 'API base URL',
   'aiAgent.cloudModel': 'Model name',
   'aiAgent.cloudApiKey': 'API Key',
+  'aiAgent.cloudVisionModel': 'Vision model (cloud)',
+  'aiAgent.cloudVisionModelExtra': 'Agent screen-control needs a multimodal model that accepts images. Available vision model names differ by provider and change over time—please verify the exact model name available on your account at the official site before filling it in (do not just copy the examples): DeepSeek → platform.deepseek.com; Alibaba Qwen → Alibaba Cloud Model Studio docs; Zhipu GLM → open.bigmodel.cn; OpenAI → platform.openai.com. Examples: gpt-4o / qwen-vl-max / glm-4v.',
 
   // ---- AI Agent: Chat mode ----
   'aiAgent.chat.title': 'AI Assistant',
@@ -750,6 +754,8 @@ const jaJP: MessageDict = {
   'aiAgent.cloudBaseUrl': 'API アドレス',
   'aiAgent.cloudModel': 'モデル名',
   'aiAgent.cloudApiKey': 'API Key',
+  'aiAgent.cloudVisionModel': '視覚モデル（クラウド）',
+  'aiAgent.cloudVisionModelExtra': 'Agent の画面操作には画像入力に対応したマルチモーダルモデルが必要です。利用可能な視覚モデル名は提供元や時期により異なります。必ず各公式サイトでご自身のアカウントで利用可能なモデル名を確認してから入力してください（例をそのままコピーしないでください）：DeepSeek → platform.deepseek.com、阿里通義千問 → 阿里雲 Model Studio ドキュメント、智譜 GLM → open.bigmodel.cn、OpenAI → platform.openai.com。例：gpt-4o / qwen-vl-max / glm-4v。',
 
   // ---- AI Agent：Chat モード ----
   'aiAgent.chat.title': 'AI アシスタント',
@@ -1015,6 +1021,8 @@ const deDE: MessageDict = {
   'aiAgent.cloudBaseUrl': 'API-Adresse',
   'aiAgent.cloudModel': 'Modellname',
   'aiAgent.cloudApiKey': 'API-Key',
+  'aiAgent.cloudVisionModel': 'Visuelles Modell (Cloud)',
+  'aiAgent.cloudVisionModelExtra': 'Die Agent-Bildschirmsteuerung benötigt ein Multimodal-Modell, das Bilder akzeptiert. Verfügbare Vision-Modellnamen unterscheiden sich je nach Anbieter und ändern sich über die Zeit – bitte vor der Eingabe den genauen, für Ihr Konto verfügbaren Modellnamen auf der offiziellen Website prüfen (Beispiele nicht einfach kopieren): DeepSeek → platform.deepseek.com; Alibaba Qwen → Alibaba Cloud Model Studio-Doku; Zhipu GLM → open.bigmodel.cn; OpenAI → platform.openai.com. Beispiele: gpt-4o / qwen-vl-max / glm-4v.',
 
   // ---- AI Agent: Chat-Modus ----
   'aiAgent.chat.title': 'AI-Assistent',

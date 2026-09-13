@@ -108,7 +108,14 @@ export async function runAgentSession(opts: {
   controls: SessionControls
 }): Promise<void> {
   const { win, instruction, settings, options, emit, controls } = opts
-  const vision = createVisionAdapter(settings.localVisionModel || 'minicpm-v:latest')
+  const vision = createVisionAdapter({
+    backend: settings.backend,
+    localVisionModel: settings.localVisionModel || 'minicpm-v:latest',
+    cloudProvider: settings.cloudProvider,
+    cloudBaseUrl: settings.cloudBaseUrl,
+    cloudApiKey: settings.cloudApiKey,
+    cloudVisionModel: settings.cloudVisionModel
+  })
   const maxSteps = options.maxSteps || settings.maxStepsPerRun || 30
   // 确定性解析指令里点名的站点与搜索词，作为强指令注入每一步（绕过弱模型把当前
   // 已打开页面误当目标的系统性误判）。无明确站点时 hint 为空串，交给模型自行判断。

@@ -10,6 +10,7 @@ import type { BrowserWindow } from 'electron'
 import type { AppSettings, AgentAction, RpaStep } from '../../shared/types'
 import { runAgentSession } from './session'
 import { checkOllamaStatus } from './ollama'
+import { checkCloudStatus } from './cloud'
 import type { RunOptions } from './types'
 
 // 矩阵并行默认上限（设计文档 §9 R5 / §11）：超出排队，避免一次性拉起几十个 VLM 会话把机器拖垮。
@@ -76,24 +77,43 @@ export class AgentRunner {
       // 去重，避免同一环境被重复驱动
       const uniq = Array.from(new Set(envIds))
       const settings = await this.deps.getSettings()
-      // 运行前预检视觉模型：提前给出可执行提示，而不是等执行到第一步才在循环里炸 404。
-      // 经验证：Chat 用文本模型、Agent 用视觉模型，两套互不相干；且预检必须同时覆盖
-      // 「Ollama 没启动」与「模型没 pull」两种情况——31c8d7c 只覆盖了后者，导致 Ollama 未运行时不报错、
-      // 直接进循环才炸 404「model not found」，用户完全看不到下载提示（正是本 bug 的起点）。
-      const visionModel = settings.aiAgent.localVisionModel || 'minicpm-v:latest'
-      const pull = visionModel.includes(':') ? visionModel.split(':')[0] : visionModel
-      const st = await checkOllamaStatus({ model: visionModel })
-      if (!st.reachable) {
-        return {
-          error: `未能连接本地 Ollama（${st.baseUrl} 无响应）。请先启动 Ollama，再执行：ollama pull ${pull}（或在「设置 → AI Agent → 视觉模型」中改为已安装的名称）`
+      const a = settings.aiAgent
+      // 运行前预检视觉模型：提前给出可执行提示，而不是等执行到第一步才在循环里炸。
+      // 云端 BYOK 与本地 Ollama 用不同的视觉模型配置：云端走 cloudVisionModel（多模态，与文本对话的
+      // cloudModel 分开），本地走 localVisionModel。两者都需预检「未配置 / 不可达 / 模型无效」三类情况。
+      if (a.backend === 'cloud') {
+        if (!a.cloudApiKey?.trim() || !a.cloudVisionModel?.trim()) {
+          return {
+            error: '云端视觉模型未配置：Agent 执行闭环需要多模态模型，请在「设置 → AI Agent」填写 API Key 与视觉模型名（如 gpt-4o / qwen-vl-max / glm-4v）'
+          }
         }
-      }
-      if (!st.modelPulled) {
-        const hint = st.models.length
-          ? `，本机已安装：${st.models.join('、')}`
-          : '，本机尚未拉取任何模型'
-        return {
-          error: `视觉模型「${visionModel}」未安装${hint}。请先执行：ollama pull ${pull}（或在 设置 → AI Agent → 视觉模型 中改为已安装的名称）`
+        const cs = await checkCloudStatus({
+          provider: a.cloudProvider,
+          baseUrl: a.cloudBaseUrl,
+          apiKey: a.cloudApiKey,
+          model: a.cloudVisionModel
+        })
+        if (!cs.reachable) {
+          return {
+            error: `云端视觉模型连通性自检失败（${a.cloudVisionModel}）：${cs.error || '未知错误'}。请确认 API Key 有效、模型名正确且支持图像输入。`
+          }
+        }
+      } else {
+        const visionModel = a.localVisionModel || 'minicpm-v:latest'
+        const pull = visionModel.includes(':') ? visionModel.split(':')[0] : visionModel
+        const st = await checkOllamaStatus({ model: visionModel })
+        if (!st.reachable) {
+          return {
+            error: `未能连接本地 Ollama（${st.baseUrl} 无响应）。请先启动 Ollama，再执行：ollama pull ${pull}（或在「设置 → AI Agent → 视觉模型」中改为已安装的名称）`
+          }
+        }
+        if (!st.modelPulled) {
+          const hint = st.models.length
+            ? `，本机已安装：${st.models.join('、')}`
+            : '，本机尚未拉取任何模型'
+          return {
+            error: `视觉模型「${visionModel}」未安装${hint}。请先执行：ollama pull ${pull}（或在 设置 → AI Agent → 视觉模型 中改为已安装的名称）`
+          }
         }
       }
       const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
