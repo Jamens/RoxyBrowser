@@ -39,6 +39,7 @@ import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from 
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
+import { cloudChat, checkCloudStatus } from './agent/cloud'
 import { buildSupportSystemPrompt } from './agent/knowledge'
 
 // ---------- 配置 ----------
@@ -1981,10 +1982,28 @@ function buildApiRouter(): express.Router {
     res.json({ ok: true, settings: merged })
   })
 
-  // ===== AI Agent：本地 Ollama 连通性探针（零 token）=====
+  // ===== AI Agent：连通性探针（本地 Ollama 或 云端 BYOK）=====
   router.get('/ai-agent/status', authMiddleware, async (_req: AuthedRequest, res: Response) => {
     const settings = await getSettings()
     const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
+    // 云端：自检 Key/模型是否就绪，并发一次极小调用确认鉴权与可达
+    if (a.backend === 'cloud') {
+      const s = await checkCloudStatus({
+        provider: a.cloudProvider,
+        baseUrl: a.cloudBaseUrl,
+        apiKey: a.cloudApiKey,
+        model: a.cloudModel
+      })
+      res.json({
+        reachable: s.reachable,
+        baseUrl: s.baseUrl,
+        model: s.model,
+        modelPulled: s.reachable,
+        models: [],
+        error: s.error
+      })
+      return
+    }
     const status = await checkOllamaStatus({ model: a.localModel })
     res.json(status)
   })
@@ -1997,10 +2016,6 @@ function buildApiRouter(): express.Router {
     const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
     if (!a.enabled) {
       res.status(400).json({ message: 'AI Agent 未启用，请先在「设置 → AI Agent」开启' })
-      return
-    }
-    if (a.backend !== 'local') {
-      res.status(400).json({ message: '云端 BYOK 后端尚未开放，请先在设置页切换为「本地 Ollama」' })
       return
     }
     // 白名单校验消息结构，最多带最近 20 条历史（本地模型上下文有限，防撑爆）
@@ -2027,6 +2042,27 @@ function buildApiRouter(): express.Router {
       mode === 'support'
         ? [{ role: 'system', content: buildSupportSystemPrompt(lastQuestion) }, ...msgs.filter((m) => m.role !== 'system')]
         : msgs
+    // 云端 BYOK：OpenAI 兼容 chat/completions，用户自带 Key（会产生 token 费用）
+    if (a.backend === 'cloud') {
+      if (!a.cloudApiKey?.trim() || !a.cloudModel?.trim()) {
+        res.status(400).json({ message: '云端模型未配置：请在「设置 → AI Agent」填写 API Key 与模型名' })
+        return
+      }
+      try {
+        const reply = await cloudChat({
+          provider: a.cloudProvider,
+          baseUrl: a.cloudBaseUrl,
+          apiKey: a.cloudApiKey,
+          model: a.cloudModel,
+          messages: finalMsgs
+        })
+        res.json({ reply, mode })
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e)
+        res.status(502).json({ message: `云端模型调用失败：${detail}` })
+      }
+      return
+    }
     try {
       const reply = await ollamaChat({ model: a.localModel, messages: finalMsgs })
       res.json({ reply, mode })
