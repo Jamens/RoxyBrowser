@@ -429,3 +429,90 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 ## 与商业产品的差异说明
 
 本项目是**功能对等的自研实现**：指纹注入通过 Electron 的 `session` + preload 脚本完成；商业产品通常会对 Chromium 内核做二进制级改写，本项目未涉及内核定制。对于跨境电商 / 社媒多账号的隔离需求，本实现已覆盖其核心使用方式。
+
+## 附录 A：AI Agent 设计参考
+
+> 本节汇集 AI Agent 的底层设计契约，供二次开发与排障参考。功能层面的使用说明见 §13。
+
+### A.1 架构分层
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ UI 层（renderer）                                             │
+│  指令输入框(@窗口/模板/文件/审批) · 实时步骤流 · 审批弹窗 ·      │
+│  Settings 里 AI Agent 配置（backend/localModel/cloudKey）     │
+└───────────────┬─────────────────────────────────────────────┘
+                │ IPC: agent:start / step / need-approval / done / approve / stop
+┌───────────────▼─────────────────────────────────────────────┐
+│ Agent 编排层（main 进程，agent/ 模块）                         │
+│  Supervisor（矩阵调度） → Session（单窗口闭环状态机）          │
+│  Planner（拆解） · AntiDetect（拟人化） · Approver（审批）     │
+└───────────────┬─────────────────────────────────────────────┘
+                │ VisionModelAdapter 统一接口
+┌───────────────▼─────────────────────────────────────────────┐
+│ 模型适配层（agent/vision/）                                    │
+│  LocalAdapter  → Ollama（minicpm-v / llama3.2-vision）        │
+│  CloudAdapter  → DeepSeek-VL / Qwen-VL / GLM-4V（自带 Key）   │
+└───────────────┬─────────────────────────────────────────────┘
+                │ HTTP（本地 11434 / 用户填的 baseUrl）
+┌───────────────▼─────────────────────────────────────────────┐
+│ 浏览器执行层（现有能力，复用不重写）                            │
+│  BrowserWindow.webContents.capturePage()  ← 截图              │
+│  webContents.sendInputEvent()            ← 可信输入           │
+│  现有 RPA 引擎（录制/回放）            ← 模板沉淀            │
+│  现有多窗口 + 指纹/代理隔离            ← 矩阵并行           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### A.2 三种模式与分发器（Dispatcher）
+
+- **自动（Auto）**：按消息内容路由——命中产品词（环境 / 代理 / 指纹 / RPA…）→ 产品客服；其余 → 通用对话。
+- **通用对话（Chat）**：纯本地模型自由问答，零浏览器控制。
+- **产品客服（Support）**：检索本产品文档（README + 功能文档 + changelog）→ 组织答案，讲解功能、回答「怎么做」；文档未提及的如实说明，不编造。
+
+### A.3 动作协议（VLM 输出契约）
+
+```ts
+type AgentAction =
+  | { thought: string; action: 'click'; x: number; y: number }
+  | { thought: string; action: 'type'; text: string }
+  | { thought: string; action: 'navigate'; url: string }
+  | { thought: string; action: 'scroll'; delta: number }
+  | { thought: string; action: 'wait'; ms: number }
+  | { thought: string; action: 'finish' }
+  | { thought: string; action: 'ask'; question: string }   // 转人工
+```
+
+### A.4 IPC 通道（renderer ↔ main）
+
+```
+renderer → main:
+  agent:start     { envIds:number[], instruction:string, options?:{needApproval?:boolean, maxSteps?:number} }
+  agent:approve   { runId:string, approved:boolean }
+  agent:stop      { runId:string }
+main → renderer:
+  agent:step         { runId, envId, step:AgentAction, screenshot?:string }
+  agent:need-approval{ runId, envId, step:AgentAction }
+  agent:done         { runId, envId, result }
+  agent:error        { runId, envId, error }
+```
+
+### A.5 推荐本地模型栈（零 token，Ollama 一键拉取）
+
+| 阶段 | 用途 | 推荐模型 | 显存/内存参考 |
+| --- | --- | --- | --- |
+| 通用对话 / 客服 | 中文问答 | `qwen2.5:7b` / `qwen2.5:14b` / `deepseek-r1:8b` | 4.5–9 GB VRAM，或 CPU 慢跑 |
+| 视觉（看屏决策） | VLM | `minicpm-v:latest`（≈3B） / `llama3.2-vision:11b` / `qwen3-vl` | 4–12 GB VRAM |
+
+> 约束：本地模型质量弱于官方托管 VLM；弱机建议先上 `minicpm-v` / `qwen2.5:7b`，显存不足可走 CPU（慢但零费）。
+
+### A.6 风险与缓解
+
+| 风险 | 缓解 |
+| --- | --- |
+| 开源/本地 VLM 识别率弱于官方，复杂页易点错 | 约束 prompt + 解析失败重试；高风险动作默认走审批；关键流程先人工确认 |
+| 本地模型需 GPU/大内存，CPU 慢 | 默认本地 Ollama（零 token）；弱机可走 CPU 慢速，或用户启用 BYOK 兜底（会产生费用）；启动前检测本机 Ollama 已安装且模型已拉取 |
+| 云端模型费用 | 用户自带 Key，文档标注预估单价；本地方案零费；可设步数上限控成本 |
+| 反风控有限 | 文档明示不保证过风控，仅降机械感；敏感业务人工值守 |
+| 矩阵并发吃资源 | 可配置最大并发窗口数；超出排队 |
+| 自带 Key 明文泄露 | `cloudApiKey` 加密存储（OS keychain / 加密字段），不落明文日志 |
