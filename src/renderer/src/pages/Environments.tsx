@@ -6,7 +6,7 @@ import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined
+  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined
 } from '@ant-design/icons'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
@@ -26,6 +26,8 @@ export default function Environments() {
   const [groupId, setGroupId] = useState<number | undefined>()
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<React.Key[]>([])
+  const [batchGroup, setBatchGroup] = useState<number | undefined>()
+  const [batchProxy, setBatchProxy] = useState<number | undefined>()
   const [syncMode, setSyncMode] = useState(false)
   const [windows, setWindows] = useState<{ id: number; title: string }[]>([])
   const [syncIds, setSyncIds] = useState<number[]>([])
@@ -288,6 +290,63 @@ export default function Environments() {
     }
   }
 
+  // 批量移动分组
+  const batchMoveGroup = async () => {
+    if (batchGroup === undefined) {
+      message.warning('请选择目标分组')
+      return
+    }
+    try {
+      const res = await api.post<{ updated: number }>('/api/profiles/batch', {
+        ids: selected.map(Number),
+        action: 'moveGroup',
+        groupId: batchGroup
+      })
+      message.success(`已移动 ${res.updated} 个环境到分组`)
+      setSelected([])
+      setBatchGroup(undefined)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 批量绑定代理
+  const batchBindProxy = async () => {
+    if (batchProxy === undefined) {
+      message.warning('请选择目标代理')
+      return
+    }
+    try {
+      const res = await api.post<{ updated: number }>('/api/profiles/batch', {
+        ids: selected.map(Number),
+        action: 'bindProxy',
+        proxyId: batchProxy
+      })
+      message.success(`已为 ${res.updated} 个环境绑定代理（运行中的已跳过）`)
+      setSelected([])
+      setBatchProxy(undefined)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 批量删除（进回收站，可恢复）
+  const batchDelete = async () => {
+    try {
+      const res = await api.post<{ updated: number }>('/api/profiles/batch', {
+        ids: selected.map(Number),
+        action: 'delete'
+      })
+      message.success(`已移入回收站 ${res.updated} 个环境（可恢复）`)
+      setSelected([])
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   const duplicate = async (id: number) => {
     try {
       const res = await api.post<{ migratedAccounts: number }>(`/api/profiles/${id}/duplicate`)
@@ -480,6 +539,28 @@ export default function Environments() {
           </Button>
           {selected.length > 0 && (
             <>
+              <Select
+                placeholder="移动到分组"
+                allowClear
+                style={{ width: 150 }}
+                value={batchGroup}
+                onChange={setBatchGroup}
+                options={groups.map((g) => ({ value: g.id, label: g.name }))}
+              />
+              <Button icon={<SwapOutlined />} onClick={batchMoveGroup}>
+                移动 ({selected.length})
+              </Button>
+              <Select
+                placeholder="绑定代理"
+                allowClear
+                style={{ width: 160 }}
+                value={batchProxy}
+                onChange={setBatchProxy}
+                options={proxies.map((x) => ({ value: x.id, label: `${x.name}（${x.host}:${x.port}）` }))}
+              />
+              <Button icon={<ApiOutlined />} onClick={batchBindProxy}>
+                绑定 ({selected.length})
+              </Button>
               <Button
                 icon={<ThunderboltOutlined />}
                 onClick={randomizeSelected}
@@ -505,6 +586,14 @@ export default function Environments() {
               >
                 批量关闭
               </Button>
+              <Popconfirm
+                title="批量删除后进入回收站，可随时恢复。确定？"
+                onConfirm={batchDelete}
+              >
+                <Button danger icon={<DeleteOutlined />}>
+                  批量删除 ({selected.length})
+                </Button>
+              </Popconfirm>
             </>
           )}
         </Space>

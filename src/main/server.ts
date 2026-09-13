@@ -2690,6 +2690,85 @@ function buildApiRouter(): express.Router {
     res.json({ updated: count })
   })
 
+  // 批量操作：moveGroup / bindProxy / delete（软删除进回收站）/ open
+  // 路由顺序：/profiles/batch 是静态段，与 /profiles/:id/* 不冲突
+  router.post('/profiles/batch', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const ids: unknown[] = req.body?.ids || []
+    const action: string = req.body?.action
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: '请先选择环境' })
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const profiles = await repo.find({ where: { id: In(ids.map(Number)), ...ownerScope(req) } })
+    if (profiles.length === 0) return res.status(404).json({ message: '未找到所选环境' })
+    const now = new Date()
+
+    if (action === 'moveGroup') {
+      const raw = req.body?.groupId
+      const groupId = raw === null || raw === undefined ? null : Number(raw)
+      if (groupId != null) {
+        const g = await AppDataSource.getRepository(GroupEntity).findOne({ where: { id: groupId, teamId: req.tid } })
+        if (!g) return res.status(400).json({ message: '目标分组不存在' })
+      }
+      for (const p of profiles) {
+        p.groupId = groupId
+        await repo.save(p)
+      }
+      await writeLog(req, 'batch_move_group', `批量移动 ${profiles.length} 个环境到分组 #${groupId ?? '无'}`)
+      return res.json({ updated: profiles.length })
+    }
+
+    if (action === 'bindProxy') {
+      const raw = req.body?.proxyId
+      const proxyId = raw === null || raw === undefined ? null : Number(raw)
+      if (proxyId != null) {
+        const pr = await AppDataSource.getRepository(ProxyEntity).findOne({ where: { id: proxyId, ...ownerScope(req) } })
+        if (!pr) return res.status(400).json({ message: '目标代理不存在' })
+      }
+      let updated = 0
+      for (const p of profiles) {
+        if (p.status === 'running') continue // 运行中的环境不改动绑定
+        p.proxyId = proxyId
+        await repo.save(p)
+        updated += 1
+      }
+      await writeLog(req, 'batch_bind_proxy', `批量绑定 ${updated} 个环境到代理 #${proxyId ?? '无'}`)
+      return res.json({ updated })
+    }
+
+    if (action === 'delete') {
+      let updated = 0
+      for (const p of profiles) {
+        if (p.status === 'running') continue
+        if (p.deletedAt) continue
+        p.deletedAt = now
+        await repo.save(p)
+        updated += 1
+      }
+      await writeLog(req, 'batch_delete_profile', `批量删除 ${updated} 个环境（进回收站）`)
+      return res.json({ updated })
+    }
+
+    if (action === 'open') {
+      if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+      let opened = 0
+      for (const p of profiles) {
+        if (p.status === 'running' || p.deletedAt) continue
+        try {
+          await browserBridge.openWindow(p.id)
+          p.status = 'running'
+          p.lastOpenedAt = now
+          await repo.save(p)
+          opened += 1
+        } catch {
+          /* 单个窗口打开失败不影响其他 */
+        }
+      }
+      await writeLog(req, 'batch_open_profile', `批量打开 ${opened} 个环境`)
+      return res.json({ updated: opened })
+    }
+
+    return res.status(400).json({ message: '未知批量操作' })
+  })
+
   // 代理批量导入：支持 host:port:user:pass / url 形式 / CSV
   router.post('/proxies/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const text: string = req.body?.text || ''
