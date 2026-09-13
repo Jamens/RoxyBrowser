@@ -157,7 +157,7 @@ export async function checkCloudStatus(opts: {
     return { reachable: false, baseUrl, model, modelConfigured: false, error: '未配置云端模型名' }
   }
   try {
-    await cloudChat({
+    const probe = await cloudChat({
       provider: opts.provider,
       baseUrl: opts.baseUrl,
       apiKey: opts.apiKey,
@@ -165,6 +165,12 @@ export async function checkCloudStatus(opts: {
       messages: [{ role: 'user', content: 'hi' }],
       maxTokens: 1
     })
+    // 严格判定：不仅要求「未抛错」，还要求确有非空内容返回。
+    // 部分网关 / 中继对无效 Key 仍返回 HTTP 200，但 choices 为空或 content 为空串，
+    // 若不校验会被误判为「连通」。这里把空响应当作不可达，避免错误 Key 检测通过。
+    if (!probe || !probe.trim()) {
+      return { reachable: false, baseUrl, model, modelConfigured: true, error: '云端返回内容为空（可能是 API Key 无效或模型无响应），请检查 Key 与模型名' }
+    }
     return { reachable: true, baseUrl, model, modelConfigured: true }
   } catch (e) {
     return {
