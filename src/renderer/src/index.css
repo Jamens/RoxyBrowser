@@ -4,6 +4,16 @@ html, body, #root {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
+/* 主题背景同步到 body：路由懒加载时 Suspense 兜底会短暂替换页面内容，
+   若 body 无背景会透出浏览器默认白色，暗黑模式下表现为「切页白闪」。
+   色值与 antd 算法一致：浅色 colorBgLayout #f5f5f5 / 暗色 #141414。 */
+body {
+  background: #f5f5f5;
+}
+[data-theme='dark'] body {
+  background: #141414;
+}
+
 /* 卡片统一圆角 + 轻阴影，明暗主题下都更精致 */
 .ant-card {
   border-radius: 10px;

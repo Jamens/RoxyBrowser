@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Layout, Menu, Dropdown, Space, Typography, theme } from 'antd'
+import { useEffect, useState, Suspense } from 'react'
+import { Layout, Menu, Dropdown, Space, Typography, theme, Spin } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import {
   GlobalOutlined,
@@ -128,7 +128,19 @@ export default function AppLayout() {
         </Header>
         <Content style={{ padding: 20, overflow: 'auto', background: token.colorBgLayout }}>
           <ErrorBoundary key={location.pathname}>
-            <Outlet />
+            {/*
+              Suspense 下沉到 Content 内：懒加载页面 chunk 拉取期间只兜底右侧内容区，
+              侧边栏/顶栏保持挂载不再整树卸载（配合 body 主题背景，消除切页白闪）。
+            */}
+            <Suspense
+              fallback={
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                  <Spin size="large" />
+                </div>
+              }
+            >
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </Content>
       </Layout>
