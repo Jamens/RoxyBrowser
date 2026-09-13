@@ -5,10 +5,16 @@ import type { AgentAction } from '../../shared/types'
 export interface DomEl {
   tag: string
   text: string
+  /** 视口中心坐标（与截图像素 1:1，VLM 给出的点击坐标基准） */
   x: number
   y: number
   w: number
   h: number
+  /** 元素左上角坐标（用于换算 RPA 的盒内相对坐标 rx/ry） */
+  left: number
+  top: number
+  /** 稳定 CSS 选择器，用于归一化为 RPA 步骤（点击/输入经 document.querySelector 解析） */
+  sel: string
 }
 
 /** 一次页面感知的 DOM/无障碍树摘要 */

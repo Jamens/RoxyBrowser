@@ -7,6 +7,41 @@ import type { DomSnapshot } from './types'
 // 用字符串函数注入，避免依赖外部作用域；脚本自身带 try/catch 兜底
 const DOM_SCRIPT = `(function(){
   try {
+    // 生成稳定 CSS 选择器：优先 id / name / placeholder / role，否则回退到 nth-of-type 路径。
+    // 用于把 Agent 的视口像素点击归一化为 RPA 步骤（replay 时走 document.querySelector）。
+    function getSel(el){
+      if (!el || el.nodeType !== 1) return '';
+      if (el.id) return '#' + el.id;
+      var segs = [];
+      var node = el;
+      for (var depth=0; depth<4 && node && node.nodeType===1; depth++){
+        var tag = node.tagName.toLowerCase();
+        var attr = '';
+        if (node.getAttribute){
+          var nm = node.getAttribute('name');
+          var tp = node.getAttribute('type');
+          var ph = node.getAttribute('placeholder');
+          var role = node.getAttribute('role');
+          if (nm) attr = '[name="'+nm+'"]';
+          else if (tag==='input' && tp) attr = '[type="'+tp+'"]';
+          else if (ph) attr = '[placeholder="'+ph+'"]';
+          else if (role) attr = '[role="'+role+'"]';
+        }
+        var parent = node.parentNode;
+        var nth = 1;
+        if (parent && parent.children){
+          var same = 0;
+          for (var i=0;i<parent.children.length;i++){
+            var c = parent.children[i];
+            if (c.tagName && c.tagName.toLowerCase()===tag) same++;
+            if (c===node) nth = same;
+          }
+        }
+        segs.unshift(tag + attr + ':nth-of-type(' + nth + ')');
+        node = parent;
+      }
+      return segs.join(' > ');
+    }
     var sel = 'a,button,input,textarea,select,[role=button],[contenteditable=true],label';
     var nodes = Array.prototype.slice.call(document.querySelectorAll(sel));
     var out = [];
@@ -18,7 +53,7 @@ const DOM_SCRIPT = `(function(){
       // 视口外的元素跳过，避免坐标越界误导 VLM
       if (r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) continue;
       var text = (el.textContent||el.value||el.getAttribute('placeholder')||el.getAttribute('aria-label')||'').trim().slice(0,60);
-      out.push({ tag: el.tagName.toLowerCase(), text: text, x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2), w: Math.round(r.width), h: Math.round(r.height) });
+      out.push({ tag: el.tagName.toLowerCase(), text: text, x: Math.round(r.left+r.width/2), y: Math.round(r.top+r.height/2), w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left), top: Math.round(r.top), sel: getSel(el) });
     }
     out.sort(function(a,b){ return (b.w*b.h)-(a.w*a.h); });
     return { url: location.href, title: document.title, vw: vw, vh: vh, els: out.slice(0,80) };

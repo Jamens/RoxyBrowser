@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Typography, Select, Switch, Alert } from 'antd'
-import { RobotOutlined, SendOutlined, ClearOutlined, SettingOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Typography, Select, Switch, Alert, Modal, Form, message } from 'antd'
+import { RobotOutlined, SendOutlined, ClearOutlined, SettingOutlined, PlayCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { DEFAULT_SETTINGS, type AppSettings, type AgentAction } from '@shared/types'
+import { DEFAULT_SETTINGS, type AppSettings, type AgentAction, type RpaStep } from '@shared/types'
 import { useI18n } from '../i18n'
 
 interface ChatMessage {
@@ -45,6 +45,12 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
   const [steps, setSteps] = useState<{ step: number; action: AgentAction; screenshot?: string }[]>([])
   const [status, setStatus] = useState('')
   const [ask, setAsk] = useState<string | null>(null)
+  // 资产化：运行结束后把归一化的 RPA 步骤存为可离线回放的模板
+  const [rpaSteps, setRpaSteps] = useState<RpaStep[]>([])
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [tplName, setTplName] = useState('')
+  const [tplRemark, setTplRemark] = useState('')
   const runIdRef = useRef<string | null>(null)
 
   const loadEnvs = useCallback(() => {
@@ -66,6 +72,7 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
       roxy.agentOnStep((d) => {
         if (d.runId !== runIdRef.current) return
         setSteps((prev) => [...prev, { step: d.step, action: d.action, screenshot: d.screenshot }])
+        if (d.rpaStep) setRpaSteps((prev) => [...prev, d.rpaStep as RpaStep])
       })
     )
     offs.push(
@@ -74,6 +81,7 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         runIdRef.current = null
         setRunning(false)
         setStatus(d.result)
+        if (d.rpaSteps?.length) setRpaSteps(d.rpaSteps)
       })
     )
     offs.push(
@@ -97,6 +105,8 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     if (!envId || !instruction.trim() || running) return
     setStatus('')
     setSteps([])
+    setRpaSteps([])
+    setSaveOpen(false)
     setAsk(null)
     const res = await window.roxy?.agentStart?.({ envId, instruction: instruction.trim(), options: { needApproval } })
     if (!res) {
@@ -120,6 +130,26 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
   const approve = (ok: boolean) => {
     if (runIdRef.current) window.roxy?.agentApprove?.(runIdRef.current, ok)
     setAsk(null)
+  }
+
+  const saveTemplate = async () => {
+    if (!tplName.trim() || !rpaSteps.length) return
+    setSaving(true)
+    try {
+      const res = await api.post<{ id: number }>('/api/rpa', { name: tplName.trim(), remark: tplRemark.trim(), steps: rpaSteps })
+      if (res.id) {
+        message.success(t('aiAgent.agent.saveTemplateOk'))
+        setSaveOpen(false)
+        setTplName('')
+        setTplRemark('')
+      } else {
+        message.error(t('aiAgent.agent.saveTemplateFail'))
+      }
+    } catch (e) {
+      message.error(`${t('aiAgent.agent.saveTemplateFail')}：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -242,6 +272,42 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
           </div>
         </div>
       )}
+      {!running && rpaSteps.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <Button type="dashed" icon={<SaveOutlined />} onClick={() => setSaveOpen(true)}>
+            {t('aiAgent.agent.saveTemplate')}（{rpaSteps.length}）
+          </Button>
+        </div>
+      )}
+      <Modal
+        title={t('aiAgent.agent.saveTemplate')}
+        open={saveOpen}
+        onOk={saveTemplate}
+        confirmLoading={saving}
+        okText={t('aiAgent.agent.saveTemplate')}
+        cancelText={t('aiAgent.agent.cancel')}
+        onCancel={() => setSaveOpen(false)}
+        destroyOnClose
+      >
+        <Form layout="vertical">
+          <Form.Item label={t('aiAgent.agent.templateName')} required>
+            <Input
+              value={tplName}
+              onChange={(e) => setTplName(e.target.value)}
+              placeholder={t('aiAgent.agent.templateNamePlaceholder')}
+              maxLength={128}
+            />
+          </Form.Item>
+          <Form.Item label={t('aiAgent.agent.templateRemark')}>
+            <Input.TextArea
+              value={tplRemark}
+              onChange={(e) => setTplRemark(e.target.value)}
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              maxLength={512}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

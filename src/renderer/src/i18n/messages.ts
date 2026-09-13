@@ -258,7 +258,14 @@ const zhCN = {
   'aiAgent.agent.act.scroll': '滚动',
   'aiAgent.agent.act.wait': '等待',
   'aiAgent.agent.act.finish': '完成',
-  'aiAgent.agent.act.ask': '询问'
+  'aiAgent.agent.act.ask': '询问',
+  'aiAgent.agent.saveTemplate': '存为 RPA 模板',
+  'aiAgent.agent.saveTemplateOk': '已存为 RPA 模板',
+  'aiAgent.agent.saveTemplateFail': '保存 RPA 模板失败',
+  'aiAgent.agent.cancel': '取消',
+  'aiAgent.agent.templateName': '模板名称',
+  'aiAgent.agent.templateNamePlaceholder': '请输入模板名称',
+  'aiAgent.agent.templateRemark': '备注'
 }
 
 export type MessageDict = typeof zhCN
@@ -514,7 +521,14 @@ const enUS: MessageDict = {
   'aiAgent.agent.act.scroll': 'Scroll',
   'aiAgent.agent.act.wait': 'Wait',
   'aiAgent.agent.act.finish': 'Finish',
-  'aiAgent.agent.act.ask': 'Ask'
+  'aiAgent.agent.act.ask': 'Ask',
+  'aiAgent.agent.saveTemplate': 'Save as RPA template',
+  'aiAgent.agent.saveTemplateOk': 'Saved as RPA template',
+  'aiAgent.agent.saveTemplateFail': 'Failed to save RPA template',
+  'aiAgent.agent.cancel': 'Cancel',
+  'aiAgent.agent.templateName': 'Template name',
+  'aiAgent.agent.templateNamePlaceholder': 'Enter a template name',
+  'aiAgent.agent.templateRemark': 'Remark'
 }
 
 const jaJP: MessageDict = {
@@ -768,7 +782,14 @@ const jaJP: MessageDict = {
   'aiAgent.agent.act.scroll': 'スクロール',
   'aiAgent.agent.act.wait': '待機',
   'aiAgent.agent.act.finish': '完了',
-  'aiAgent.agent.act.ask': '質問'
+  'aiAgent.agent.act.ask': '質問',
+  'aiAgent.agent.saveTemplate': 'RPA テンプレートとして保存',
+  'aiAgent.agent.saveTemplateOk': 'RPA テンプレートとして保存しました',
+  'aiAgent.agent.saveTemplateFail': 'RPA テンプレートの保存に失敗',
+  'aiAgent.agent.cancel': 'キャンセル',
+  'aiAgent.agent.templateName': 'テンプレート名',
+  'aiAgent.agent.templateNamePlaceholder': 'テンプレート名を入力',
+  'aiAgent.agent.templateRemark': '備考'
 }
 
 const deDE: MessageDict = {
@@ -1024,7 +1045,14 @@ const deDE: MessageDict = {
   'aiAgent.agent.act.scroll': 'Scrollen',
   'aiAgent.agent.act.wait': 'Warten',
   'aiAgent.agent.act.finish': 'Fertig',
-  'aiAgent.agent.act.ask': 'Fragen'
+  'aiAgent.agent.act.ask': 'Fragen',
+  'aiAgent.agent.saveTemplate': 'Als RPA-Vorlage speichern',
+  'aiAgent.agent.saveTemplateOk': 'Als RPA-Vorlage gespeichert',
+  'aiAgent.agent.saveTemplateFail': 'Speichern der RPA-Vorlage fehlgeschlagen',
+  'aiAgent.agent.cancel': 'Abbrechen',
+  'aiAgent.agent.templateName': 'Vorlagenname',
+  'aiAgent.agent.templateNamePlaceholder': 'Vorlagenname eingeben',
+  'aiAgent.agent.templateRemark': 'Bemerkung'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

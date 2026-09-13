@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentAction } from '../shared/types'
+import type { AgentAction, RpaStep } from '../shared/types'
 
 export interface NetworkProxyConfig {
   mode: 'system' | 'custom'
@@ -33,13 +33,13 @@ contextBridge.exposeInMainWorld('roxy', {
   agentApprove: (runId: string, approved: boolean) =>
     ipcRenderer.invoke('agent:approve', runId, approved) as Promise<{ ok: boolean }>,
   /** 订阅单步事件，返回取消订阅函数 */
-  agentOnStep: (cb: (d: { runId: string; step: number; action: AgentAction; screenshot?: string }) => void) => {
-    const h = (_e: unknown, d: { runId: string; step: number; action: AgentAction; screenshot?: string }) => cb(d)
+  agentOnStep: (cb: (d: { runId: string; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => void) => {
+    const h = (_e: unknown, d: { runId: string; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => cb(d)
     ipcRenderer.on('agent:step', h)
     return () => ipcRenderer.removeListener('agent:step', h)
   },
-  agentOnDone: (cb: (d: { runId: string; result: string }) => void) => {
-    const h = (_e: unknown, d: { runId: string; result: string }) => cb(d)
+  agentOnDone: (cb: (d: { runId: string; result: string; rpaSteps?: RpaStep[] }) => void) => {
+    const h = (_e: unknown, d: { runId: string; result: string; rpaSteps?: RpaStep[] }) => cb(d)
     ipcRenderer.on('agent:done', h)
     return () => ipcRenderer.removeListener('agent:done', h)
   },

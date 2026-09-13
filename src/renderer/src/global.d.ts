@@ -35,8 +35,8 @@ declare global {
       /** 审批结果：approved=true 放行继续，false 等同中止 */
       agentApprove: (runId: string, approved: boolean) => Promise<{ ok: boolean }>
       /** 订阅单步事件，返回取消订阅函数 */
-      agentOnStep: (cb: (d: { runId: string; step: number; action: import('@shared/types').AgentAction; screenshot?: string }) => void) => () => void
-      agentOnDone: (cb: (d: { runId: string; result: string }) => void) => () => void
+      agentOnStep: (cb: (d: { runId: string; step: number; action: import('@shared/types').AgentAction; screenshot?: string; rpaStep?: import('@shared/types').RpaStep | null }) => void) => () => void
+      agentOnDone: (cb: (d: { runId: string; result: string; rpaSteps?: import('@shared/types').RpaStep[] }) => void) => () => void
       agentOnError: (cb: (d: { runId: string; error: string }) => void) => () => void
       agentOnNeedApproval: (cb: (d: { runId: string; question: string }) => void) => () => void
     }
