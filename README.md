@@ -21,7 +21,7 @@
 | 构建   | electron-vite 5 + Vite 7 + pnpm                                                  |
 | 前端   | React 19 + TypeScript + Ant Design 6 + React Router 6                            |
 | 后端   | Express + TypeORM（内嵌在 Electron 主进程，本地 API + 自动化 API）               |
-| 数据库 | MySQL（默认 `127.0.0.1:3307`，`root` / `1234560`，库名 `roxy_browser` 自动创建） |
+| 数据库 | MySQL（**需自备服务**；默认 `127.0.0.1:3307`，`root` / `1234560`，库名 `roxy_browser` 由应用首次启动自动创建） |
 
 ## 快速开始
 
@@ -46,6 +46,57 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 > ```
 
 数据库配置可用环境变量覆盖：`DB_HOST` `DB_PORT` `DB_USER` `DB_PASS` `DB_NAME`。
+
+## 数据库（必读）
+
+本项目**必须依赖 MySQL**（不是内嵌数据库）。后端用 TypeORM 直连 MySQL；MySQL 没启动或连不上时，应用启动会直接报错退出，不会静默降级。拿到代码后**先确保有一个可达的 MySQL 再启动应用**。
+
+### 1. 启动一个 MySQL（任选其一）
+
+最省事的是用 Docker（端口、账号密码已按下方默认值配好，起完直接 `pnpm dev` 即可）：
+
+```bash
+docker run -d --name roxy-mysql \
+  -e MYSQL_ROOT_PASSWORD=1234560 \
+  -p 3307:3306 \
+  mysql:8.0 \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+```
+
+> 容器启动后稍等几秒（MySQL 初始化需要时间），用 `docker logs -f roxy-mysql` 看到 `ready for connections` 后再启动应用。
+> 等价替代：本机安装 MySQL 5.7+ / 8.0 并监听 `3307`，或用 XAMPP、既有 MySQL 实例——只要满足下方连接信息即可。
+
+### 2. 默认连接信息
+
+| 项 | 默认值 | 覆盖环境变量 |
+| -- | -- | -- |
+| 地址 | `127.0.0.1` | `DB_HOST` |
+| 端口 | `3307` | `DB_PORT` |
+| 用户 | `root` | `DB_USER` |
+| 密码 | `1234560` | `DB_PASS` |
+| 库名 | `roxy_browser`（不存在会自动创建） | `DB_NAME` |
+
+### 3. 不用手动建表——应用首次启动自动初始化
+
+执行 `pnpm dev` / `pnpm app` 时，后端 `bootstrap()` 会按顺序完成：
+
+1. 用 root 账号执行 `CREATE DATABASE IF NOT EXISTS roxy_browser`（utf8mb4）；
+2. 用 TypeORM `synchronize: true` 自动创建 / 同步全部数据表；
+3. 创建默认管理员账号 **`admin` / `123456`**（仅首次启动创建一次）。
+
+因此**无需手动执行任何 SQL 即可直接跑起来**：打开应用后用 `admin / 123456` 登录即可。
+
+### 4. 可选：手动建库建表（`db/schema.sql`）
+
+如果你希望「先建好库再启动应用」（例如交给 DBA 评审、或某些环境下 `synchronize` 受限），仓库自带等效建表脚本 `db/schema.sql`（内含 `CREATE DATABASE` 与全部表结构）：
+
+```bash
+mysql -uroot -p1234560 < db/schema.sql
+```
+
+它与自动 `synchronize` **二选一**即可；脚本全是 `IF NOT EXISTS`，重复执行也安全。
+
+> 若 MySQL 未启动，应用启动会弹出错误框：「无法连接数据库或启动服务……请确认 MySQL 已启动（默认 127.0.0.1:3307，root/1234560）」。
 
 ## 目录结构
 
