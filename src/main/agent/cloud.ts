@@ -36,18 +36,21 @@ function resolveEndpoint(provider: AIAgentCloudProvider, baseUrl?: string): stri
 
 /** 发起一次云端对话，返回模型文本回复 */
 export async function cloudChat(opts: CloudChatOptions): Promise<string> {
-  if (!opts.apiKey?.trim()) throw new Error('未配置云端 API Key（请在「设置 → AI Agent」填写）')
-  if (!opts.model?.trim()) throw new Error('未配置云端模型名（请在「设置 → AI Agent」填写）')
+  // 去掉复制粘贴时常带的头尾空白 / 换行，否则 Bearer 里带 \n 或空格会被厂商判为「无效 Key」
+  const apiKey = (opts.apiKey || '').trim()
+  const model = (opts.model || '').trim()
+  if (!apiKey) throw new Error('未配置云端 API Key（请在「设置 → AI Agent」填写）')
+  if (!model) throw new Error('未配置云端模型名（请在「设置 → AI Agent」填写）')
   const url = resolveEndpoint(opts.provider, opts.baseUrl)
   const body: Record<string, unknown> = {
-    model: opts.model,
+    model,
     messages: opts.messages,
     stream: false
   }
   if (typeof opts.maxTokens === 'number') body.max_tokens = opts.maxTokens
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(body),
     signal: opts.signal
   })
