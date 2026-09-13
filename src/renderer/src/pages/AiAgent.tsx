@@ -6,15 +6,7 @@ import { api } from '../api'
 import { DEFAULT_SETTINGS, type AppSettings, type AgentAction, type RpaStep } from '@shared/types'
 import { useI18n } from '../i18n'
 import { useAgentStore, ensureAgentSubscriptions, agentStore, type EnvStatus, type EnvStep } from '../agentStore'
-
-interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
-  /** 该条回复实际走的模式（auto 模式下由 Dispatcher 判定） */
-  mode?: 'chat' | 'support'
-}
-
-type UiMode = 'auto' | 'chat' | 'support' | 'agent'
+import { useAgentChatStore, agentChatStore, type ChatMessage, type UiMode } from '../agentChatStore'
 
 function actionLabel(a: AgentAction, t: (k: string) => string): string {
   switch (a.action) {
@@ -372,10 +364,8 @@ export default function AiAgent() {
   const navigate = useNavigate()
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [loadingSettings, setLoadingSettings] = useState(true)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const [uiMode, setUiMode] = useState<UiMode>('auto')
+  // 对话 UI 态走模块级 store：切到其它页面再切回时，对话内容 / 输入框残值 / 当前标签页都不丢
+  const { uiMode, messages, input, sending } = useAgentChatStore()
   // 对话滚动容器：新消息到达时滚到底部
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -395,23 +385,23 @@ export default function AiAgent() {
     const text = input.trim()
     if (!text || sending) return
     const next = [...messages, { role: 'user' as const, content: text }]
-    setMessages(next)
-    setInput('')
-    setSending(true)
+    agentChatStore.setMessages(next)
+    agentChatStore.setInput('')
+    agentChatStore.setSending(true)
     try {
       const res = await api.post<{ reply: string; mode: 'chat' | 'support' }>('/api/ai-agent/chat', {
         messages: next.map((m) => ({ role: m.role, content: m.content })),
         mode: uiMode === 'agent' ? 'auto' : uiMode
       })
-      setMessages([
+      agentChatStore.setMessages([
         ...next,
         { role: 'assistant', content: res.reply || '（模型返回了空回复）', mode: res.mode }
       ])
     } catch (e) {
       // 失败时保留用户消息，方便改后重发
-      setMessages([...next, { role: 'assistant', content: `⚠️ ${(e as Error).message}` }])
+      agentChatStore.setMessages([...next, { role: 'assistant', content: `⚠️ ${(e as Error).message}` }])
     } finally {
-      setSending(false)
+      agentChatStore.setSending(false)
     }
   }
 
@@ -454,7 +444,7 @@ export default function AiAgent() {
         <Space size={8}>
           <Segmented
             value={uiMode}
-            onChange={(v) => setUiMode(v as UiMode)}
+            onChange={(v) => agentChatStore.setUiMode(v as UiMode)}
             options={[
               { value: 'auto', label: t('aiAgent.modeAuto') },
               { value: 'chat', label: t('aiAgent.modeChat') },
@@ -472,7 +462,7 @@ export default function AiAgent() {
                 size="small"
                 icon={<ClearOutlined />}
                 disabled={!messages.length || sending}
-                onClick={() => setMessages([])}
+                onClick={() => agentChatStore.clear()}
               >
                 {t('aiAgent.chat.clear')}
               </Button>
@@ -547,7 +537,7 @@ export default function AiAgent() {
           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
             <Input.TextArea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => agentChatStore.setInput(e.target.value)}
               onPressEnter={(e) => {
                 if (!e.shiftKey) {
                   e.preventDefault()
