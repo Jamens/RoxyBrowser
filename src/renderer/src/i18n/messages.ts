@@ -265,7 +265,9 @@ const zhCN = {
   'aiAgent.agent.cancel': '取消',
   'aiAgent.agent.templateName': '模板名称',
   'aiAgent.agent.templateNamePlaceholder': '请输入模板名称',
-  'aiAgent.agent.templateRemark': '备注'
+  'aiAgent.agent.templateRemark': '备注',
+  'aiAgent.agent.targetEnvs': '目标环境（可多选）',
+  'aiAgent.agent.matrixDone': '矩阵执行完成：{done} 成功 / {failed} 失败'
 }
 
 export type MessageDict = typeof zhCN
@@ -528,7 +530,9 @@ const enUS: MessageDict = {
   'aiAgent.agent.cancel': 'Cancel',
   'aiAgent.agent.templateName': 'Template name',
   'aiAgent.agent.templateNamePlaceholder': 'Enter a template name',
-  'aiAgent.agent.templateRemark': 'Remark'
+  'aiAgent.agent.templateRemark': 'Remark',
+  'aiAgent.agent.targetEnvs': 'Target environments (multi-select)',
+  'aiAgent.agent.matrixDone': 'Matrix finished: {done} succeeded / {failed} failed'
 }
 
 const jaJP: MessageDict = {
@@ -789,7 +793,9 @@ const jaJP: MessageDict = {
   'aiAgent.agent.cancel': 'キャンセル',
   'aiAgent.agent.templateName': 'テンプレート名',
   'aiAgent.agent.templateNamePlaceholder': 'テンプレート名を入力',
-  'aiAgent.agent.templateRemark': '備考'
+  'aiAgent.agent.templateRemark': '備考',
+  'aiAgent.agent.targetEnvs': '対象環境（複数選択可）',
+  'aiAgent.agent.matrixDone': 'マトリックス実行完了：成功 {done} / 失敗 {failed}'
 }
 
 const deDE: MessageDict = {
@@ -1052,7 +1058,9 @@ const deDE: MessageDict = {
   'aiAgent.agent.cancel': 'Abbrechen',
   'aiAgent.agent.templateName': 'Vorlagenname',
   'aiAgent.agent.templateNamePlaceholder': 'Vorlagenname eingeben',
-  'aiAgent.agent.templateRemark': 'Bemerkung'
+  'aiAgent.agent.templateRemark': 'Bemerkung',
+  'aiAgent.agent.targetEnvs': 'Zielumgebungen (Mehrfachauswahl)',
+  'aiAgent.agent.matrixDone': 'Matrix abgeschlossen: {done} erfolgreich / {failed} fehlgeschlagen'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

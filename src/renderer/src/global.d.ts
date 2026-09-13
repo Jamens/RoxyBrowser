@@ -28,17 +28,19 @@ declare global {
         platform: string
         arch: string
       }>
-      /** AI Agent 执行闭环：启动一次执行，返回 { runId } 或 { error } */
-      agentStart: (payload: { envId: number; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) => Promise<{ runId?: string; error?: string }>
-      /** 中止某次运行 */
+      /** AI Agent 执行闭环：启动一次矩阵运行（可驱动 N 个环境并发），返回 { runId } 或 { error } */
+      agentStart: (payload: { envIds: number[]; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) => Promise<{ runId?: string; error?: string }>
+      /** 中止整次矩阵运行（含所有子会话） */
       agentStop: (runId: string) => void
-      /** 审批结果：approved=true 放行继续，false 等同中止 */
-      agentApprove: (runId: string, approved: boolean) => Promise<{ ok: boolean }>
-      /** 订阅单步事件，返回取消订阅函数 */
-      agentOnStep: (cb: (d: { runId: string; step: number; action: import('@shared/types').AgentAction; screenshot?: string; rpaStep?: import('@shared/types').RpaStep | null }) => void) => () => void
-      agentOnDone: (cb: (d: { runId: string; result: string; rpaSteps?: import('@shared/types').RpaStep[] }) => void) => () => void
-      agentOnError: (cb: (d: { runId: string; error: string }) => void) => () => void
-      agentOnNeedApproval: (cb: (d: { runId: string; question: string }) => void) => () => void
+      /** 审批结果：针对某个具体环境放行（approved=true 继续，false 等同中止该环境） */
+      agentApprove: (runId: string, envId: number, approved: boolean) => Promise<{ ok: boolean }>
+      /** 订阅单步事件（带 envId，按环境分组），返回取消订阅函数 */
+      agentOnStep: (cb: (d: { runId: string; envId: number; step: number; action: import('@shared/types').AgentAction; screenshot?: string; rpaStep?: import('@shared/types').RpaStep | null }) => void) => () => void
+      agentOnDone: (cb: (d: { runId: string; envId: number; result: string; rpaSteps?: import('@shared/types').RpaStep[] }) => void) => () => void
+      agentOnError: (cb: (d: { runId: string; envId: number; error: string }) => void) => () => void
+      agentOnNeedApproval: (cb: (d: { runId: string; envId: number; question: string }) => void) => () => void
+      /** 订阅矩阵汇总事件（全部环境执行完毕时触发一次），返回取消订阅函数 */
+      agentOnAllDone: (cb: (d: { runId: string; results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: import('@shared/types').RpaStep[] }[] }) => void) => () => void
     }
   }
 }

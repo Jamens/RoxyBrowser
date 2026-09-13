@@ -34,19 +34,93 @@ function actionLabel(a: AgentAction, t: (k: string) => string): string {
   }
 }
 
-// Agent 执行闭环面板：选目标环境 → 自然语言指令 → 实时步骤流（含截图缩略）→ 停止 / 人工确认
+type EnvStatus = { status: 'running' | 'done' | 'failed'; result?: string }
+type EnvStep = { step: number; action: AgentAction; screenshot?: string }
+
+// 单个环境在矩阵运行里的进度卡片：各自独立显示状态 / 截图 / 执行轨迹 / 存模板入口
+function EnvCard({
+  envId,
+  title,
+  status,
+  steps,
+  rpaSteps,
+  onSave
+}: {
+  envId: number
+  title: string
+  status?: EnvStatus
+  steps: EnvStep[]
+  rpaSteps: RpaStep[]
+  onSave: (envId: number) => void
+}) {
+  const { t } = useI18n()
+  const last = steps[steps.length - 1]
+  const sColor = !status || status.status === 'running' ? 'green' : status.status === 'done' ? 'blue' : 'red'
+  const sText = !status || status.status === 'running' ? t('aiAgent.agent.running') : status.status === 'done' ? t('aiAgent.agent.done') : t('aiAgent.agent.failed')
+  return (
+    <Card size="small" title={<Space size={6}>{<Tag color={sColor}>{sText}</Tag>}<span>{title}</span></Space>}>
+      {last?.screenshot && (
+        <img
+          src={last.screenshot}
+          alt=""
+          style={{ width: '100%', borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', marginBottom: 8, flexShrink: 0 }}
+        />
+      )}
+      {status && status.status !== 'running' && status.result && (
+        <Typography.Paragraph
+          type={status.status === 'failed' ? 'danger' : 'secondary'}
+          style={{ fontSize: 12, marginTop: 0, whiteSpace: 'pre-wrap' }}
+        >
+          {status.result}
+        </Typography.Paragraph>
+      )}
+      {steps.length > 0 && (
+        <div
+          style={{
+            maxHeight: 220,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }}
+        >
+          {steps.map((s) => (
+            <div key={s.step} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+              <Tag color="blue">#{s.step}</Tag>
+              <Tag>{actionLabel(s.action, t as (k: string) => string)}</Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'pre-wrap', flex: 1, minWidth: 0 }}>
+                {s.action.thought || actionLabel(s.action, t as (k: string) => string)}
+              </Typography.Text>
+            </div>
+          ))}
+        </div>
+      )}
+      {status?.status === 'done' && rpaSteps.length > 0 && (
+        <Button type="dashed" icon={<SaveOutlined />} size="small" block style={{ marginTop: 8 }} onClick={() => onSave(envId)}>
+          {t('aiAgent.agent.saveTemplate')}（{rpaSteps.length}）
+        </Button>
+      )}
+    </Card>
+  )
+}
+
+// Agent 执行闭环面板（矩阵并行）：选 N 个目标环境 → 自然语言指令 → 各环境独立并发执行 → 实时步骤流 → 停止 / 按环境人工确认 / 各环境存为 RPA 模板
 function AgentPanel({ settings }: { settings: AppSettings }) {
   const { t } = useI18n()
   const [envs, setEnvs] = useState<{ id: number; title: string }[]>([])
-  const [envId, setEnvId] = useState<number | null>(null)
+  const [envIds, setEnvIds] = useState<number[]>([])
   const [instruction, setInstruction] = useState('')
   const [running, setRunning] = useState(false)
   const [needApproval, setNeedApproval] = useState(settings.aiAgent.needApprovalByDefault)
-  const [steps, setSteps] = useState<{ step: number; action: AgentAction; screenshot?: string }[]>([])
+  // 按环境分组的状态（每个 envId 独立一份）
+  const [envStatus, setEnvStatus] = useState<Record<number, EnvStatus>>({})
+  const [envSteps, setEnvSteps] = useState<Record<number, EnvStep[]>>({})
+  const [envRpa, setEnvRpa] = useState<Record<number, RpaStep[]>>({})
+  const [ask, setAsk] = useState<{ envId: number; question: string } | null>(null)
+  const [matrix, setMatrix] = useState<{ results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }[] } | null>(null)
   const [status, setStatus] = useState('')
-  const [ask, setAsk] = useState<string | null>(null)
-  // 资产化：运行结束后把归一化的 RPA 步骤存为可离线回放的模板
-  const [rpaSteps, setRpaSteps] = useState<RpaStep[]>([])
+  // 资产化：每个环境运行结束后把归一化的 RPA 步骤存为可离线回放的模板
+  const [saveForEnv, setSaveForEnv] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [tplName, setTplName] = useState('')
@@ -63,7 +137,12 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     loadEnvs()
   }, [loadEnvs])
 
-  // 订阅主进程推送的单步 / 完成 / 出错 / 待审批事件（按 runId 过滤，多 run 互不串扰）
+  const envTitle = (id: number) => {
+    const e = envs.find((x) => x.id === id)
+    return e ? `#${id} ${e.title}` : `#${id}`
+  }
+
+  // 订阅主进程推送的单步 / 完成 / 出错 / 待审批 / 全部完成 事件（按父 runId 过滤，多 run 互不串扰；按 envId 分组）
   useEffect(() => {
     const roxy = window.roxy
     if (!roxy) return
@@ -71,44 +150,57 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     offs.push(
       roxy.agentOnStep((d) => {
         if (d.runId !== runIdRef.current) return
-        setSteps((prev) => [...prev, { step: d.step, action: d.action, screenshot: d.screenshot }])
-        if (d.rpaStep) setRpaSteps((prev) => [...prev, d.rpaStep as RpaStep])
+        const e = d.envId
+        setEnvSteps((prev) => ({ ...prev, [e]: [...(prev[e] || []), { step: d.step, action: d.action, screenshot: d.screenshot }] }))
+        if (d.rpaStep) setEnvRpa((prev) => ({ ...prev, [e]: [...(prev[e] || []), d.rpaStep as RpaStep] }))
       })
     )
     offs.push(
       roxy.agentOnDone((d) => {
         if (d.runId !== runIdRef.current) return
-        runIdRef.current = null
-        setRunning(false)
-        setStatus(d.result)
-        if (d.rpaSteps?.length) setRpaSteps(d.rpaSteps)
+        setEnvStatus((prev) => ({ ...prev, [d.envId]: { status: 'done', result: d.result } }))
+        if (d.rpaSteps?.length) setEnvRpa((prev) => ({ ...prev, [d.envId]: d.rpaSteps! }))
       })
     )
     offs.push(
       roxy.agentOnError((d) => {
         if (d.runId !== runIdRef.current) return
-        runIdRef.current = null
-        setRunning(false)
-        setStatus(`${t('aiAgent.agent.failed')}：${d.error}`)
+        setEnvStatus((prev) => ({ ...prev, [d.envId]: { status: 'failed', result: d.error } }))
       })
     )
     offs.push(
       roxy.agentOnNeedApproval((d) => {
         if (d.runId !== runIdRef.current) return
-        setAsk(d.question)
+        setAsk({ envId: d.envId, question: d.question })
+      })
+    )
+    offs.push(
+      roxy.agentOnAllDone((d) => {
+        if (d.runId !== runIdRef.current) return
+        runIdRef.current = null
+        setRunning(false)
+        setMatrix({ results: d.results })
+        setAsk(null)
       })
     )
     return () => offs.forEach((f) => f())
   }, [t])
 
   const start = async () => {
-    if (!envId || !instruction.trim() || running) return
+    if (!envIds.length || !instruction.trim() || running) return
     setStatus('')
-    setSteps([])
-    setRpaSteps([])
+    const init: Record<number, EnvStatus> = {}
+    envIds.forEach((id) => {
+      init[id] = { status: 'running' }
+    })
+    setEnvStatus(init)
+    setEnvSteps({})
+    setEnvRpa({})
+    setMatrix(null)
     setSaveOpen(false)
+    setSaveForEnv(null)
     setAsk(null)
-    const res = await window.roxy?.agentStart?.({ envId, instruction: instruction.trim(), options: { needApproval } })
+    const res = await window.roxy?.agentStart?.({ envIds, instruction: instruction.trim(), options: { needApproval } })
     if (!res) {
       setStatus(t('aiAgent.agent.noEnv'))
       return
@@ -128,20 +220,30 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     setStatus(t('aiAgent.agent.idle'))
   }
   const approve = (ok: boolean) => {
-    if (runIdRef.current) window.roxy?.agentApprove?.(runIdRef.current, ok)
+    if (runIdRef.current && ask) window.roxy?.agentApprove?.(runIdRef.current, ask.envId, ok)
     setAsk(null)
   }
 
+  const openSave = (envId: number) => {
+    setSaveForEnv(envId)
+    setTplName('')
+    setTplRemark('')
+    setSaveOpen(true)
+  }
+
   const saveTemplate = async () => {
-    if (!tplName.trim() || !rpaSteps.length) return
+    if (saveForEnv == null || !tplName.trim() || !envRpa[saveForEnv]?.length) return
     setSaving(true)
     try {
-      const res = await api.post<{ id: number }>('/api/rpa', { name: tplName.trim(), remark: tplRemark.trim(), steps: rpaSteps })
+      const res = await api.post<{ id: number }>('/api/rpa', {
+        name: tplName.trim(),
+        remark: tplRemark.trim(),
+        steps: envRpa[saveForEnv]
+      })
       if (res.id) {
         message.success(t('aiAgent.agent.saveTemplateOk'))
         setSaveOpen(false)
-        setTplName('')
-        setTplRemark('')
+        setSaveForEnv(null)
       } else {
         message.error(t('aiAgent.agent.saveTemplateFail'))
       }
@@ -152,6 +254,9 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     }
   }
 
+  const doneCount = matrix ? matrix.results.filter((r) => r.status === 'done').length : 0
+  const failCount = matrix ? matrix.results.filter((r) => r.status === 'failed').length : 0
+
   return (
     <div>
       {envs.length === 0 && (
@@ -159,10 +264,13 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
       )}
       <Space wrap size={12} style={{ display: 'flex', marginBottom: 12 }}>
         <Select
-          style={{ width: 280 }}
-          placeholder={envs.length ? t('aiAgent.agent.env') : t('aiAgent.agent.noEnv')}
-          value={envId ?? undefined}
-          onChange={(v: number) => setEnvId(v)}
+          mode="multiple"
+          allowClear
+          maxTagCount="responsive"
+          style={{ minWidth: 320, maxWidth: 560 }}
+          placeholder={t('aiAgent.agent.targetEnvs')}
+          value={envIds}
+          onChange={(v: number[]) => setEnvIds(v)}
           options={envs.map((e) => ({ value: e.id, label: `#${e.id} ${e.title}` }))}
           notFoundContent={t('aiAgent.agent.noEnv')}
         />
@@ -189,7 +297,7 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
             {t('aiAgent.agent.stop')}
           </Button>
         ) : (
-          <Button type="primary" icon={<PlayCircleOutlined />} disabled={!envId || !instruction.trim()} onClick={start}>
+          <Button type="primary" icon={<PlayCircleOutlined />} disabled={!envIds.length || !instruction.trim()} onClick={start}>
             {t('aiAgent.agent.start')}
           </Button>
         )}
@@ -201,8 +309,8 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
           type="warning"
           showIcon
           style={{ marginTop: 12 }}
-          message={t('aiAgent.agent.ask')}
-          description={ask}
+          message={`${t('aiAgent.agent.ask')} · ${envTitle(ask.envId)}`}
+          description={ask.question}
           action={
             <Space>
               <Button size="small" type="primary" onClick={() => approve(true)}>
@@ -225,60 +333,39 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         </Typography.Paragraph>
       )}
 
-      {steps.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <Typography.Text strong>{t('aiAgent.agent.steps')}</Typography.Text>
-          <div
-            style={{
-              maxHeight: 'calc(100vh - 470px)',
-              minHeight: 120,
-              overflowY: 'auto',
-              marginTop: 8,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8
-            }}
-          >
-            {steps.map((s) => (
-              <div
-                key={s.step}
-                style={{
-                  display: 'flex',
-                  gap: 10,
-                  alignItems: 'flex-start',
-                  padding: 8,
-                  borderRadius: 8,
-                  background: 'var(--ant-color-fill-tertiary, rgba(0,0,0,0.04))'
-                }}
-              >
-                {s.screenshot && (
-                  <img
-                    src={s.screenshot}
-                    alt=""
-                    style={{ width: 160, borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)', flexShrink: 0 }}
-                  />
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ marginBottom: 4 }}>
-                    <Tag color="blue">#{s.step}</Tag>
-                    <Tag>{actionLabel(s.action, t as (k: string) => string)}</Tag>
-                  </div>
-                  <Typography.Text type="secondary" style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>
-                    {s.action.thought || actionLabel(s.action, t as (k: string) => string)}
-                  </Typography.Text>
-                </div>
-              </div>
-            ))}
-          </div>
+      {matrix && (
+        <Alert
+          type={failCount > 0 ? 'warning' : 'success'}
+          showIcon
+          style={{ marginTop: 12 }}
+          message={t('aiAgent.agent.matrixDone', { done: doneCount, failed: failCount })}
+        />
+      )}
+
+      {envIds.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gap: 12,
+            alignItems: 'start'
+          }}
+        >
+          {envIds.map((id) => (
+            <EnvCard
+              key={id}
+              envId={id}
+              title={envTitle(id)}
+              status={envStatus[id]}
+              steps={envSteps[id] || []}
+              rpaSteps={envRpa[id] || []}
+              onSave={openSave}
+            />
+          ))}
         </div>
       )}
-      {!running && rpaSteps.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <Button type="dashed" icon={<SaveOutlined />} onClick={() => setSaveOpen(true)}>
-            {t('aiAgent.agent.saveTemplate')}（{rpaSteps.length}）
-          </Button>
-        </div>
-      )}
+
       <Modal
         title={t('aiAgent.agent.saveTemplate')}
         open={saveOpen}
@@ -290,7 +377,7 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         destroyOnClose
       >
         <Form layout="vertical">
-          <Form.Item label={t('aiAgent.agent.templateName')} required>
+          <Form.Item label={`${t('aiAgent.agent.templateName')}${saveForEnv != null ? `（${envTitle(saveForEnv)}）` : ''}`} required>
             <Input
               value={tplName}
               onChange={(e) => setTplName(e.target.value)}

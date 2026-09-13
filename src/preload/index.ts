@@ -24,34 +24,40 @@ contextBridge.exposeInMainWorld('roxy', {
   /** 内核版本信息（应用 / Electron / Chromium / Node / V8 / 平台） */
   getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>,
   // ===== AI Agent 执行闭环（Route A）=====
-  /** 启动一次执行：返回 { runId } 或 { error } */
-  agentStart: (payload: { envId: number; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) =>
+  /** 启动一次矩阵运行（可驱动 N 个环境并发）：返回 { runId } 或 { error } */
+  agentStart: (payload: { envIds: number[]; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) =>
     ipcRenderer.invoke('agent:start', payload) as Promise<{ runId?: string; error?: string }>,
-  /** 中止某次运行 */
+  /** 中止整次矩阵运行（含所有子会话） */
   agentStop: (runId: string) => ipcRenderer.send('agent:stop', runId),
-  /** 审批结果：approved=true 放行继续，false 等同中止 */
-  agentApprove: (runId: string, approved: boolean) =>
-    ipcRenderer.invoke('agent:approve', runId, approved) as Promise<{ ok: boolean }>,
-  /** 订阅单步事件，返回取消订阅函数 */
-  agentOnStep: (cb: (d: { runId: string; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => void) => {
-    const h = (_e: unknown, d: { runId: string; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => cb(d)
+  /** 审批结果：针对某个具体环境放行（approved=true 继续，false 等同中止该环境） */
+  agentApprove: (runId: string, envId: number, approved: boolean) =>
+    ipcRenderer.invoke('agent:approve', runId, envId, approved) as Promise<{ ok: boolean }>,
+  /** 订阅单步事件（带 envId，按环境分组），返回取消订阅函数 */
+  agentOnStep: (cb: (d: { runId: string; envId: number; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => void) => {
+    const h = (_e: unknown, d: { runId: string; envId: number; step: number; action: AgentAction; screenshot?: string; rpaStep?: RpaStep | null }) => cb(d)
     ipcRenderer.on('agent:step', h)
     return () => ipcRenderer.removeListener('agent:step', h)
   },
-  agentOnDone: (cb: (d: { runId: string; result: string; rpaSteps?: RpaStep[] }) => void) => {
-    const h = (_e: unknown, d: { runId: string; result: string; rpaSteps?: RpaStep[] }) => cb(d)
+  agentOnDone: (cb: (d: { runId: string; envId: number; result: string; rpaSteps?: RpaStep[] }) => void) => {
+    const h = (_e: unknown, d: { runId: string; envId: number; result: string; rpaSteps?: RpaStep[] }) => cb(d)
     ipcRenderer.on('agent:done', h)
     return () => ipcRenderer.removeListener('agent:done', h)
   },
-  agentOnError: (cb: (d: { runId: string; error: string }) => void) => {
-    const h = (_e: unknown, d: { runId: string; error: string }) => cb(d)
+  agentOnError: (cb: (d: { runId: string; envId: number; error: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; envId: number; error: string }) => cb(d)
     ipcRenderer.on('agent:error', h)
     return () => ipcRenderer.removeListener('agent:error', h)
   },
-  agentOnNeedApproval: (cb: (d: { runId: string; question: string }) => void) => {
-    const h = (_e: unknown, d: { runId: string; question: string }) => cb(d)
+  agentOnNeedApproval: (cb: (d: { runId: string; envId: number; question: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; envId: number; question: string }) => cb(d)
     ipcRenderer.on('agent:need-approval', h)
     return () => ipcRenderer.removeListener('agent:need-approval', h)
+  },
+  /** 订阅矩阵汇总事件（全部环境执行完毕时触发一次），返回取消订阅函数 */
+  agentOnAllDone: (cb: (d: { runId: string; results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }[] }) => void) => {
+    const h = (_e: unknown, d: { runId: string; results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }[] }) => cb(d)
+    ipcRenderer.on('agent:all-done', h)
+    return () => ipcRenderer.removeListener('agent:all-done', h)
   }
 })
 
