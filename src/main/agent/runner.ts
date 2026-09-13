@@ -9,6 +9,7 @@ import { ipcMain, type WebContents } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { AppSettings, AgentAction, RpaStep } from '../../shared/types'
 import { runAgentSession } from './session'
+import { checkOllamaStatus } from './ollama'
 import type { RunOptions } from './types'
 
 // 矩阵并行默认上限（设计文档 §9 R5 / §11）：超出排队，避免一次性拉起几十个 VLM 会话把机器拖垮。
@@ -62,6 +63,19 @@ export class AgentRunner {
       // 去重，避免同一环境被重复驱动
       const uniq = Array.from(new Set(envIds))
       const settings = await this.deps.getSettings()
+      // 运行前预检视觉模型：Ollama 可达但模型未 pull 时，提前给出可执行提示，
+      // 而不是等执行到第一步才在循环里炸 404（经验证：Chat 用文本模型、Agent 用视觉模型，两套互不相干）。
+      const visionModel = settings.aiAgent.localVisionModel || 'minicpm-v:latest'
+      const st = await checkOllamaStatus({ model: visionModel })
+      if (st.reachable && !st.modelPulled) {
+        const hint = st.models.length
+          ? `，本机已安装：${st.models.join('、')}`
+          : '，本机尚未拉取任何模型'
+        const pull = visionModel.includes(':') ? visionModel.split(':')[0] : visionModel
+        return {
+          error: `视觉模型「${visionModel}」未安装${hint}。请先执行：ollama pull ${pull}（或在 设置 → AI Agent → 视觉模型 中改为已安装的名称）`
+        }
+      }
       const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
       const state: MatrixRunState = {
         runId,
