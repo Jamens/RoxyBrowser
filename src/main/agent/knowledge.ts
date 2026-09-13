@@ -1,6 +1,9 @@
 // Support 模式知识检索（P0：全文检索，零外部依赖、零 token）
-// 知识源 = 项目 README.md，按 markdown 标题切成片段；
+// 知识源 = 项目 README.md（架构/命令）+ FEATURES.md（功能详情），按 markdown 标题切成片段；
 // 用户问题做关键词（CJK 2-gram + 拉丁词）打分，取 top-k 片段拼进 system prompt。
+// 拆分的起因：README 早期同时承载「架构 + 全部功能说明」，越写越长；现在 README 只保留
+// 技术架构 / 目录结构 / 运行命令，功能说明迁到 FEATURES.md，故这里必须同时读两份，
+// 否则「产品客服」会答不了功能类问题。
 // 文档量变大、或答不准时，再升级为 RAG（向量检索，见设计文档 P2）。
 
 import { readFileSync } from 'fs'
@@ -19,21 +22,26 @@ let cachedAt = 0
 /** 缓存 5 分钟：README 不常变，避免每次对话都读盘切分 */
 const CACHE_MS = 5 * 60 * 1000
 
-/** 解析 README.md 路径：打包根 / 应用根 / 进程 cwd 多级回退 */
-function resolveReadmePath(): string {
-  const candidates = [
-    join(app.getAppPath(), 'README.md'),
-    join(process.cwd(), 'README.md')
-  ]
-  for (const p of candidates) {
-    try {
-      readFileSync(p)
-      return p
-    } catch {
-      /* 尝试下一个 */
+/** 知识源文档（顺序即检索时的基础分权重：越靠前越优先） */
+const DOC_FILES = ['README.md', 'FEATURES.md']
+
+/** 解析文档路径：打包根 / 应用根 / 进程 cwd 多级回退，每个文档独立探测、缺失互不影响 */
+function resolveDocPaths(): string[] {
+  const roots = [app.getAppPath(), process.cwd()]
+  const found: string[] = []
+  for (const name of DOC_FILES) {
+    for (const root of roots) {
+      const p = join(root, name)
+      try {
+        readFileSync(p)
+        found.push(p)
+        break
+      } catch {
+        /* 尝试下一个根目录 */
+      }
     }
   }
-  return candidates[0]
+  return found
 }
 
 /** 按 markdown 标题（# ~ ####）切分文档为片段 */
@@ -61,15 +69,18 @@ export function chunkMarkdown(md: string): DocChunk[] {
   return chunks
 }
 
-/** 加载并缓存 README 片段；读不到返回空数组（Support 模式退化为纯对话） */
+/** 加载并缓存知识片段（README + FEATURES）；都读不到返回空数组（Support 退化为纯对话） */
 export function loadKnowledge(): DocChunk[] {
   if (cachedChunks && Date.now() - cachedAt < CACHE_MS) return cachedChunks
-  try {
-    const md = readFileSync(resolveReadmePath(), 'utf-8')
-    cachedChunks = chunkMarkdown(md)
-  } catch {
-    cachedChunks = []
+  const chunks: DocChunk[] = []
+  for (const p of resolveDocPaths()) {
+    try {
+      chunks.push(...chunkMarkdown(readFileSync(p, 'utf-8')))
+    } catch {
+      /* 单个文档读不到就跳过，不影响其它文档 */
+    }
   }
+  cachedChunks = chunks
   cachedAt = Date.now()
   return cachedChunks
 }
