@@ -123,6 +123,12 @@ export function setTrayDisplay(mode: 'icon' | 'name') {
 export function getRunningWindowIds(): number[] {
   return [...windows.keys()]
 }
+
+/** 按环境 id 取运行中的窗口实例（Agent 执行闭环用它直接操作目标窗口的 webContents） */
+export function getWindow(profileId: number): BrowserWindow | undefined {
+  const w = windows.get(profileId)
+  return w && !w.isDestroyed() ? w : undefined
+}
 /** 已打开窗口的详细信息，供 UI 选择同步对象 */
 export function getRunningWindows(): { id: number; title: string }[] {
   return [...windows.entries()]

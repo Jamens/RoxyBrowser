@@ -312,8 +312,10 @@ export type AIAgentCloudProvider = 'deepseek' | 'qwen' | 'glm' | 'openai'
 export interface AIAgentSettings {
   enabled: boolean
   backend: AIAgentBackend
-  // 本地 Ollama 模型名（如 qwen2.5:7b）
+  // 本地 Ollama 文本模型名（Chat/Support/Planner 用，如 qwen2.5:7b）
   localModel: string
+  // 本地 Ollama 视觉模型名（Agent 执行闭环看屏决策用，如 minicpm-v:latest）
+  localVisionModel: string
   // 云端 BYOK（P4 阶段开放实际调用）
   cloudProvider: AIAgentCloudProvider
   cloudBaseUrl: string
@@ -324,6 +326,16 @@ export interface AIAgentSettings {
   // 单次运行最大步数上限
   maxStepsPerRun: number
 }
+
+// ===== Agent 执行闭环动作协议（VLM 输出契约）=====
+// 坐标均为视口像素，与截图 1:1；由主进程经 sendInputEvent 执行
+export type AgentAction =
+  | { thought: string; action: 'click'; x: number; y: number }
+  | { thought: string; action: 'type'; text: string; x?: number; y?: number }
+  | { thought: string; action: 'scroll'; delta: number }
+  | { thought: string; action: 'wait'; ms: number }
+  | { thought: string; action: 'finish' }
+  | { thought: string; action: 'ask'; question?: string }
 
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
@@ -388,6 +400,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     enabled: false,
     backend: 'local',
     localModel: 'qwen2.5:7b',
+    localVisionModel: 'minicpm-v:latest',
     cloudProvider: 'deepseek',
     cloudBaseUrl: '',
     cloudApiKey: '',

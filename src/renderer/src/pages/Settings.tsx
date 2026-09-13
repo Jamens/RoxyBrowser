@@ -335,6 +335,9 @@ export default function Settings() {
               <Form.Item name={['aiAgent', 'localModel']} label={t('aiAgent.localModel')} extra={t('aiAgent.localModelExtra')}>
                 <Input style={{ width: 220 }} placeholder="qwen2.5:7b" />
               </Form.Item>
+              <Form.Item name={['aiAgent', 'localVisionModel']} label={t('aiAgent.visionModel')} extra={t('aiAgent.visionModelExtra')}>
+                <Input style={{ width: 220 }} placeholder="minicpm-v:latest" />
+              </Form.Item>
               <Button loading={checking} onClick={checkAi}>
                 {t('aiAgent.check')}
               </Button>

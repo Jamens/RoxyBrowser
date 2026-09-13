@@ -1,8 +1,9 @@
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, session } from 'electron'
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
-import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider } from './server'
-import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay } from './browserManager'
+import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings } from './server'
+import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow } from './browserManager'
+import { AgentRunner } from './agent/runner'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -64,6 +65,9 @@ ipcMain.handle('app:get-versions', () => ({
   platform: process.platform,
   arch: process.arch
 }))
+
+// ===== AI Agent 执行闭环（Route A）：注册 agent:start/stop/approve IPC =====
+new AgentRunner({ getWindow, getSettings }).registerIpc()
 
 function trayIconPath(): string {
   // 主进程从 out/main 运行，按不同打包形态依序探测图标位置

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { AgentAction } from '../shared/types'
 
 export interface NetworkProxyConfig {
   mode: 'system' | 'custom'
@@ -21,7 +22,37 @@ contextBridge.exposeInMainWorld('roxy', {
   /** 任务栏图标显示：icon = 应用图标；name = 窗口（环境）名称 */
   setTrayDisplay: (mode: 'icon' | 'name') => ipcRenderer.invoke('app:set-tray-display', mode) as Promise<{ ok: boolean }>,
   /** 内核版本信息（应用 / Electron / Chromium / Node / V8 / 平台） */
-  getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>
+  getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>,
+  // ===== AI Agent 执行闭环（Route A）=====
+  /** 启动一次执行：返回 { runId } 或 { error } */
+  agentStart: (payload: { envId: number; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) =>
+    ipcRenderer.invoke('agent:start', payload) as Promise<{ runId?: string; error?: string }>,
+  /** 中止某次运行 */
+  agentStop: (runId: string) => ipcRenderer.send('agent:stop', runId),
+  /** 审批结果：approved=true 放行继续，false 等同中止 */
+  agentApprove: (runId: string, approved: boolean) =>
+    ipcRenderer.invoke('agent:approve', runId, approved) as Promise<{ ok: boolean }>,
+  /** 订阅单步事件，返回取消订阅函数 */
+  agentOnStep: (cb: (d: { runId: string; step: number; action: AgentAction; screenshot?: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; step: number; action: AgentAction; screenshot?: string }) => cb(d)
+    ipcRenderer.on('agent:step', h)
+    return () => ipcRenderer.removeListener('agent:step', h)
+  },
+  agentOnDone: (cb: (d: { runId: string; result: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; result: string }) => cb(d)
+    ipcRenderer.on('agent:done', h)
+    return () => ipcRenderer.removeListener('agent:done', h)
+  },
+  agentOnError: (cb: (d: { runId: string; error: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; error: string }) => cb(d)
+    ipcRenderer.on('agent:error', h)
+    return () => ipcRenderer.removeListener('agent:error', h)
+  },
+  agentOnNeedApproval: (cb: (d: { runId: string; question: string }) => void) => {
+    const h = (_e: unknown, d: { runId: string; question: string }) => cb(d)
+    ipcRenderer.on('agent:need-approval', h)
+    return () => ipcRenderer.removeListener('agent:need-approval', h)
+  }
 })
 
 export interface AppVersions {

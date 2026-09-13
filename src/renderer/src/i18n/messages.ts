@@ -230,7 +230,35 @@ const zhCN = {
   // ---- AI Agent：模式 ----
   'aiAgent.modeAuto': '自动',
   'aiAgent.modeChat': '通用对话',
-  'aiAgent.modeSupport': '产品客服'
+  'aiAgent.modeSupport': '产品客服',
+
+  // ---- AI Agent：执行模式 ----
+  'aiAgent.visionModel': '视觉模型（执行）',
+  'aiAgent.visionModelExtra': 'Agent 用于读取屏幕的视觉模型，例如 minicpm-v:latest（需先执行 ollama pull）',
+  'aiAgent.modeAgent': '执行',
+  'aiAgent.agent.title': 'AI 执行',
+  'aiAgent.agent.env': '目标环境',
+  'aiAgent.agent.instruction': '执行指令',
+  'aiAgent.agent.instructionPlaceholder': '例如：打开 Bing，搜索“RoxyBrowser”，打开第一个结果',
+  'aiAgent.agent.start': '开始',
+  'aiAgent.agent.stop': '停止',
+  'aiAgent.agent.refresh': '刷新环境',
+  'aiAgent.agent.running': '运行中',
+  'aiAgent.agent.idle': '空闲',
+  'aiAgent.agent.needApproval': '不确定时请求确认',
+  'aiAgent.agent.noEnv': '没有运行中的环境，请先在环境列表中打开一个窗口',
+  'aiAgent.agent.steps': '执行轨迹',
+  'aiAgent.agent.ask': '需要人工确认',
+  'aiAgent.agent.continue': '继续',
+  'aiAgent.agent.abort': '中止',
+  'aiAgent.agent.done': '执行完成',
+  'aiAgent.agent.failed': '执行失败',
+  'aiAgent.agent.act.click': '点击',
+  'aiAgent.agent.act.type': '输入',
+  'aiAgent.agent.act.scroll': '滚动',
+  'aiAgent.agent.act.wait': '等待',
+  'aiAgent.agent.act.finish': '完成',
+  'aiAgent.agent.act.ask': '询问'
 }
 
 export type MessageDict = typeof zhCN
@@ -460,7 +488,33 @@ const enUS: MessageDict = {
   // ---- AI Agent: modes ----
   'aiAgent.modeAuto': 'Auto',
   'aiAgent.modeChat': 'General chat',
-  'aiAgent.modeSupport': 'Product support'
+  'aiAgent.modeSupport': 'Product support',
+  'aiAgent.visionModel': 'Vision model (execution)',
+  'aiAgent.visionModelExtra': 'Vision model used by the Agent to read the screen, e.g. minicpm-v:latest (run ollama pull first)',
+  'aiAgent.modeAgent': 'Execute',
+  'aiAgent.agent.title': 'AI Execute',
+  'aiAgent.agent.env': 'Target environment',
+  'aiAgent.agent.instruction': 'Instruction',
+  'aiAgent.agent.instructionPlaceholder': 'e.g. Open Bing, search "RoxyBrowser", open the first result',
+  'aiAgent.agent.start': 'Start',
+  'aiAgent.agent.stop': 'Stop',
+  'aiAgent.agent.refresh': 'Refresh environments',
+  'aiAgent.agent.running': 'Running',
+  'aiAgent.agent.idle': 'Idle',
+  'aiAgent.agent.needApproval': 'Ask for confirmation when unsure',
+  'aiAgent.agent.noEnv': 'No running environment. Open one from the Environments list first',
+  'aiAgent.agent.steps': 'Execution trace',
+  'aiAgent.agent.ask': 'Needs human confirmation',
+  'aiAgent.agent.continue': 'Continue',
+  'aiAgent.agent.abort': 'Abort',
+  'aiAgent.agent.done': 'Run finished',
+  'aiAgent.agent.failed': 'Run failed',
+  'aiAgent.agent.act.click': 'Click',
+  'aiAgent.agent.act.type': 'Type',
+  'aiAgent.agent.act.scroll': 'Scroll',
+  'aiAgent.agent.act.wait': 'Wait',
+  'aiAgent.agent.act.finish': 'Finish',
+  'aiAgent.agent.act.ask': 'Ask'
 }
 
 const jaJP: MessageDict = {
@@ -688,7 +742,33 @@ const jaJP: MessageDict = {
   // ---- AI Agent：モード ----
   'aiAgent.modeAuto': '自動',
   'aiAgent.modeChat': '一般チャット',
-  'aiAgent.modeSupport': '製品サポート'
+  'aiAgent.modeSupport': '製品サポート',
+  'aiAgent.visionModel': '視覚モデル（実行）',
+  'aiAgent.visionModelExtra': 'Agent が画面を読むための視覚モデル（例: minicpm-v:latest、先に ollama pull が必要）',
+  'aiAgent.modeAgent': '実行',
+  'aiAgent.agent.title': 'AI 実行',
+  'aiAgent.agent.env': '対象環境',
+  'aiAgent.agent.instruction': '実行指示',
+  'aiAgent.agent.instructionPlaceholder': '例：Bing を開き「RoxyBrowser」を検索し、最初の結果を開く',
+  'aiAgent.agent.start': '実行開始',
+  'aiAgent.agent.stop': '停止',
+  'aiAgent.agent.refresh': '環境を更新',
+  'aiAgent.agent.running': '実行中',
+  'aiAgent.agent.idle': '待機',
+  'aiAgent.agent.needApproval': '迷ったら確認する',
+  'aiAgent.agent.noEnv': '実行中の環境がありません。「環境」一覧でウィンドウを開いてください',
+  'aiAgent.agent.steps': '実行履歴',
+  'aiAgent.agent.ask': '人間の確認が必要',
+  'aiAgent.agent.continue': '続行',
+  'aiAgent.agent.abort': '中止',
+  'aiAgent.agent.done': '実行終了',
+  'aiAgent.agent.failed': '実行失敗',
+  'aiAgent.agent.act.click': 'クリック',
+  'aiAgent.agent.act.type': '入力',
+  'aiAgent.agent.act.scroll': 'スクロール',
+  'aiAgent.agent.act.wait': '待機',
+  'aiAgent.agent.act.finish': '完了',
+  'aiAgent.agent.act.ask': '質問'
 }
 
 const deDE: MessageDict = {
@@ -916,7 +996,35 @@ const deDE: MessageDict = {
   // ---- AI Agent: Modi ----
   'aiAgent.modeAuto': 'Auto',
   'aiAgent.modeChat': 'Allgemeiner Chat',
-  'aiAgent.modeSupport': 'Produkt-Support'
+  'aiAgent.modeSupport': 'Produkt-Support',
+
+  // ---- AI Agent: Ausführungsmodus ----
+  'aiAgent.visionModel': 'Visuelles Modell (Ausführung)',
+  'aiAgent.visionModelExtra': 'Visuelles Modell, das der Agent zum Lesen des Bildschirms nutzt, z. B. minicpm-v:latest (zuerst ollama pull ausführen)',
+  'aiAgent.modeAgent': 'Ausführen',
+  'aiAgent.agent.title': 'KI-Ausführung',
+  'aiAgent.agent.env': 'Zielumgebung',
+  'aiAgent.agent.instruction': 'Anweisung',
+  'aiAgent.agent.instructionPlaceholder': 'z. B. Bing öffnen, „RoxyBrowser“ suchen, erstes Ergebnis öffnen',
+  'aiAgent.agent.start': 'Starten',
+  'aiAgent.agent.stop': 'Stopp',
+  'aiAgent.agent.refresh': 'Umgebungen aktualisieren',
+  'aiAgent.agent.running': 'Läuft',
+  'aiAgent.agent.idle': 'Bereit',
+  'aiAgent.agent.needApproval': 'Bei Unsicherheit um Bestätigung fragen',
+  'aiAgent.agent.noEnv': 'Keine laufende Umgebung. Bitte zuerst ein Fenster in der Umgebungsliste öffnen',
+  'aiAgent.agent.steps': 'Ausführungsverlauf',
+  'aiAgent.agent.ask': 'Bestätigung durch Menschen erforderlich',
+  'aiAgent.agent.continue': 'Fortfahren',
+  'aiAgent.agent.abort': 'Abbrechen',
+  'aiAgent.agent.done': 'Ausführung beendet',
+  'aiAgent.agent.failed': 'Ausführung fehlgeschlagen',
+  'aiAgent.agent.act.click': 'Klicken',
+  'aiAgent.agent.act.type': 'Eingeben',
+  'aiAgent.agent.act.scroll': 'Scrollen',
+  'aiAgent.agent.act.wait': 'Warten',
+  'aiAgent.agent.act.finish': 'Fertig',
+  'aiAgent.agent.act.ask': 'Fragen'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

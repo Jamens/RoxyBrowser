@@ -302,7 +302,7 @@ async function checkProxy(
 }
 
 // 读取合并后的全局设置（兜底默认值）
-async function getSettings(): Promise<AppSettings> {
+export async function getSettings(): Promise<AppSettings> {
   const repo = AppDataSource.getRepository(AppSettingsEntity)
   const row = await repo.findOne({ where: { key: 'global' } })
   return { ...DEFAULT_SETTINGS, ...((row?.settings as Partial<AppSettings>) || {}) }
