@@ -446,6 +446,7 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 - 接口：`POST /api/ai-agent/chat`（`mode: auto/chat/support`）、`GET /api/ai-agent/status`（探针）
 - 云端 BYOK（自带 Key）仅为可选兜底配置，当前版本尚未开放实际调用
 - **执行闭环**（看屏自动操作浏览器）：Route A「截图 + DOM → 本地视觉模型 → sendInputEvent」，支持**矩阵并行**（多选环境并发执行同一条指令）、执行完成后可把动作序列**存为 RPA 模板**离线回放；`session.ts` / `actions.ts` 带主进程 console 日志便于排查
+- 原子动作：`click` / `type` / `navigate` / `scroll` / `wait` / `finish` / `ask`。其中 **`navigate`** 由主进程直接 `webContents.loadURL` 打开目标网址（与 `BrowserTab.go → env-navigate` 同一底层），用于「打开某网站 / 搜索某词」时直接跳转，避免弱视觉模型在地址栏里输入失败；system prompt 同时约束「指令未完成不得提前 finish」，所以环境窗口不会停在预设起始页不动作
 - **执行日志**：AI 执行的开始 / 完成 / 失败写入操作日志（见 §8），日志页可用 `AI 执行开始 / 完成 / 失败` 标签追溯每次运行的指令、环境与结果
 
 ## 目录结构

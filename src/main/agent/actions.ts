@@ -16,6 +16,7 @@ function actionDebug(a: AgentAction): string {
   if (a.action === 'type') parts.push(`text=${(a as { text?: string }).text ?? ''}`)
   if (a.action === 'scroll') parts.push(`delta=${(a as { delta?: number }).delta ?? 0}`)
   if (a.action === 'wait') parts.push(`ms=${(a as { ms?: number }).ms ?? 0}`)
+  if (a.action === 'navigate') parts.push(`url=${(a as { url?: string }).url ?? ''}`)
   return parts.join(' ')
 }
 
@@ -99,6 +100,24 @@ export async function executeAction(win: BrowserWindow, a: AgentAction): Promise
       if (typeof a.x === 'number' && typeof a.y === 'number') await clickAt(win, a.x, a.y)
       await typeText(win, a.text || '')
       break
+    case 'navigate': {
+      // 直接在主进程侧跳转：与 BrowserTab.go → env-navigate 主进程分支一致（都是
+      // win.webContents.loadURL），但 agent 不挂 did-fail-load 回退起始页——失败就
+      // 停在错误页由 Agent 自己截图判断，避免把上下文刷回起始页丢失进度。
+      // 注意只放行 http(s)，与 env-navigate 的收窄口径保持一致，杜绝 file:/javascript: 注入。
+      const url = a.url || ''
+      if (/^https?:\/\//i.test(url)) {
+        try {
+          await win.webContents.loadURL(url)
+          await sleep(rand(1500, 3000))
+        } catch (e) {
+          console.error('[agent:action] navigate 失败:', e instanceof Error ? e.message : e)
+        }
+      } else {
+        console.warn('[agent:action] navigate 忽略非 http(s) 地址:', url)
+      }
+      break
+    }
     case 'scroll':
       await scrollBy(win, a.delta || 0)
       break

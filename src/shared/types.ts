@@ -332,6 +332,7 @@ export interface AIAgentSettings {
 export type AgentAction =
   | { thought: string; action: 'click'; x: number; y: number }
   | { thought: string; action: 'type'; text: string; x?: number; y?: number }
+  | { thought: string; action: 'navigate'; url: string }
   | { thought: string; action: 'scroll'; delta: number }
   | { thought: string; action: 'wait'; ms: number }
   | { thought: string; action: 'finish' }

@@ -49,6 +49,9 @@ async function buildRpaStep(a: AgentAction, dom: DomSnapshot, win: BrowserWindow
     const el = a.x != null && a.y != null ? findElAt(dom, a.x, a.y) : null
     return { type: 'input', sel: el?.sel || '', value: a.text || '' }
   }
+  if (a.action === 'navigate') {
+    return { type: 'navigate', url: a.url || '' }
+  }
   if (a.action === 'wait') {
     return { type: 'wait', ms: Math.min(60000, Math.max(0, a.ms || 1000)) }
   }

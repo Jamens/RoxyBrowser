@@ -25,9 +25,10 @@ Coordinate rules (IMPORTANT):
 Output ONLY a JSON object (no prose, no markdown fences) with this schema:
 {
   "thought": "简短说明你要做什么、为什么（中文）",
-  "action": "click" | "type" | "scroll" | "wait" | "finish" | "ask",
+  "action": "click" | "type" | "navigate" | "scroll" | "wait" | "finish" | "ask",
   "x": <int>, "y": <int>,            // click
   "text": "<string>", "x"?: <int>, "y"?: <int>,  // type（可选先点 x,y 聚焦输入框）
+  "url": "<string>",                 // navigate（完整 URL，含 https://）
   "delta": <int>,                     // scroll（正=向下，负=向上）
   "ms": <int>,                       // wait
   "question": "<string>"             // ask
@@ -35,7 +36,9 @@ Output ONLY a JSON object (no prose, no markdown fences) with this schema:
 Guidance:
 - "finish" 当指令已完成或无法完成时，把结果/原因写进 thought。
 - "ask" 当你需要人工决策（如验证码、需登录、歧义）时，把问题写进 question。
+- "navigate" 当指令要求打开某个网站/网页时（如「打开必应」「进入百度」「打开 https://example.com」），直接用 navigate 跳转到目标 URL，不要只在地址栏里输入。url 必须填完整、含协议的地址（如 https://www.bing.com）。若指令是「搜索 X」，先 navigate 到搜索引擎主页，再用 type 在搜索框输入 X 并加 "\\n" 提交；不要直接打开环境预设的起始页就 finish。
 - "type" 填入当前聚焦的输入框；若给了 x,y 则先点该输入框再输入。直接写原文（含空格）。若目标是地址栏、搜索框，或用户指令包含「打开/搜索/进入」等需要提交的内容，输入末尾必须加 "\\n" 来按回车提交；普通表单输入不要擅自提交。
+- 不要过早 finish：若当前页面仍是环境预设的起始页（通常是 baidu.com）而你的指令尚未执行，先 navigate 到目标站点，不要直接输出 finish。只有指令真正完成后再 finish。
 - 只输出 JSON，不要任何额外文字。`
 
 function buildUserText(req: VisionRequest): string {
@@ -85,6 +88,8 @@ function coerce(raw: unknown): AgentAction | null {
         x: typeof r.x === 'number' ? Math.round(r.x) : undefined,
         y: typeof r.y === 'number' ? Math.round(r.y) : undefined
       }
+    case 'navigate':
+      return { thought, action: 'navigate', url: typeof r.url === 'string' ? r.url : '' }
     case 'scroll':
       return { thought, action: 'scroll', delta: typeof r.delta === 'number' ? r.delta : 0 }
     case 'wait':
