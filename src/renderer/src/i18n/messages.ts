@@ -16,6 +16,7 @@ const zhCN = {
   'nav.cookies': 'Cookie 管理',
   'nav.extensions': '扩展管理',
   'nav.rpa': 'RPA 脚本',
+  'nav.aiAgent': 'AI Agent',
   'nav.team': '团队空间',
   'nav.logs': '操作日志',
   'nav.settings': '设置',
@@ -213,7 +214,18 @@ const zhCN = {
   'aiAgent.cloudProvider': '云端服务商',
   'aiAgent.cloudBaseUrl': 'API 地址',
   'aiAgent.cloudModel': '模型名',
-  'aiAgent.cloudApiKey': 'API Key'
+  'aiAgent.cloudApiKey': 'API Key',
+
+  // ---- AI Agent：Chat 模式 ----
+  'aiAgent.chat.title': 'AI 助手',
+  'aiAgent.chat.subtitle': '本地模型驱动（零 token），回答完全在本机生成，不上传任何内容',
+  'aiAgent.chat.placeholder': '输入问题，Enter 发送（Shift+Enter 换行）',
+  'aiAgent.chat.send': '发送',
+  'aiAgent.chat.clear': '清空对话',
+  'aiAgent.chat.disabled': 'AI Agent 未启用，请先到设置页开启并选择本地模型',
+  'aiAgent.chat.goSettings': '前往设置',
+  'aiAgent.chat.emptyHistory': '开始对话吧',
+  'aiAgent.chat.thinking': '思考中…'
 }
 
 export type MessageDict = typeof zhCN
@@ -230,6 +242,7 @@ const enUS: MessageDict = {
   'nav.cookies': 'Cookies',
   'nav.extensions': 'Extensions',
   'nav.rpa': 'RPA Scripts',
+  'nav.aiAgent': 'AI Agent',
   'nav.team': 'Team',
   'nav.logs': 'Activity Log',
   'nav.settings': 'Settings',
@@ -426,7 +439,18 @@ const enUS: MessageDict = {
   'aiAgent.cloudProvider': 'Cloud provider',
   'aiAgent.cloudBaseUrl': 'API base URL',
   'aiAgent.cloudModel': 'Model name',
-  'aiAgent.cloudApiKey': 'API Key'
+  'aiAgent.cloudApiKey': 'API Key',
+
+  // ---- AI Agent: Chat mode ----
+  'aiAgent.chat.title': 'AI Assistant',
+  'aiAgent.chat.subtitle': 'Powered by a local model (zero token); answers are generated entirely on this machine, nothing is uploaded',
+  'aiAgent.chat.placeholder': 'Ask anything — Enter to send (Shift+Enter for a new line)',
+  'aiAgent.chat.send': 'Send',
+  'aiAgent.chat.clear': 'Clear chat',
+  'aiAgent.chat.disabled': 'AI Agent is not enabled. Turn it on in Settings and pick a local model first',
+  'aiAgent.chat.goSettings': 'Open Settings',
+  'aiAgent.chat.emptyHistory': 'Start the conversation',
+  'aiAgent.chat.thinking': 'Thinking…'
 }
 
 const jaJP: MessageDict = {
@@ -441,6 +465,7 @@ const jaJP: MessageDict = {
   'nav.cookies': 'Cookie 管理',
   'nav.extensions': '拡張機能',
   'nav.rpa': 'RPA スクリプト',
+  'nav.aiAgent': 'AI Agent',
   'nav.team': 'チーム',
   'nav.logs': '操作ログ',
   'nav.settings': '設定',
@@ -637,7 +662,18 @@ const jaJP: MessageDict = {
   'aiAgent.cloudProvider': 'クラウド事業者',
   'aiAgent.cloudBaseUrl': 'API アドレス',
   'aiAgent.cloudModel': 'モデル名',
-  'aiAgent.cloudApiKey': 'API Key'
+  'aiAgent.cloudApiKey': 'API Key',
+
+  // ---- AI Agent：Chat モード ----
+  'aiAgent.chat.title': 'AI アシスタント',
+  'aiAgent.chat.subtitle': 'ローカルモデル駆動（トークン無料）。回答はすべてこのマシンで生成され、外部へ送信されません',
+  'aiAgent.chat.placeholder': '質問を入力して Enter で送信（Shift+Enter で改行）',
+  'aiAgent.chat.send': '送信',
+  'aiAgent.chat.clear': '会話をクリア',
+  'aiAgent.chat.disabled': 'AI Agent が無効です。設定ページで有効化し、ローカルモデルを選択してください',
+  'aiAgent.chat.goSettings': '設定へ移動',
+  'aiAgent.chat.emptyHistory': '会話を始めましょう',
+  'aiAgent.chat.thinking': '思考中…'
 }
 
 const deDE: MessageDict = {
@@ -652,6 +688,7 @@ const deDE: MessageDict = {
   'nav.cookies': 'Cookies',
   'nav.extensions': 'Erweiterungen',
   'nav.rpa': 'RPA-Skripte',
+  'nav.aiAgent': 'AI Agent',
   'nav.team': 'Team',
   'nav.logs': 'Aktivitätsprotokoll',
   'nav.settings': 'Einstellungen',
@@ -848,7 +885,18 @@ const deDE: MessageDict = {
   'aiAgent.cloudProvider': 'Cloud-Anbieter',
   'aiAgent.cloudBaseUrl': 'API-Adresse',
   'aiAgent.cloudModel': 'Modellname',
-  'aiAgent.cloudApiKey': 'API-Key'
+  'aiAgent.cloudApiKey': 'API-Key',
+
+  // ---- AI Agent: Chat-Modus ----
+  'aiAgent.chat.title': 'AI-Assistent',
+  'aiAgent.chat.subtitle': 'Angetrieben von einem lokalen Modell (tokenfrei); Antworten entstehen vollständig auf diesem Rechner, nichts wird hochgeladen',
+  'aiAgent.chat.placeholder': 'Frage eingeben — Enter zum Senden (Shift+Enter für Zeilenumbruch)',
+  'aiAgent.chat.send': 'Senden',
+  'aiAgent.chat.clear': 'Chat leeren',
+  'aiAgent.chat.disabled': 'AI Agent ist nicht aktiviert. Bitte in den Einstellungen aktivieren und ein lokales Modell wählen',
+  'aiAgent.chat.goSettings': 'Zu den Einstellungen',
+  'aiAgent.chat.emptyHistory': 'Starten Sie das Gespräch',
+  'aiAgent.chat.thinking': 'Denkt nach…'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

@@ -15,7 +15,8 @@ import {
   SnippetsOutlined,
   AppstoreAddOutlined,
   VideoCameraOutlined,
-  DashboardOutlined
+  DashboardOutlined,
+  RobotOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken } from '../api'
@@ -37,6 +38,7 @@ const buildMenus = (t: TranslateFn) => [
   { key: '/cookies', icon: <SnippetsOutlined />, label: t('nav.cookies') },
   { key: '/extensions', icon: <AppstoreAddOutlined />, label: t('nav.extensions') },
   { key: '/rpa', icon: <VideoCameraOutlined />, label: t('nav.rpa') },
+  { key: '/ai-agent', icon: <RobotOutlined />, label: t('nav.aiAgent') },
   { key: '/team', icon: <TeamOutlined />, label: t('nav.team') },
   { key: '/logs', icon: <FileTextOutlined />, label: t('nav.logs') },
   { key: '/settings', icon: <SettingOutlined />, label: t('nav.settings') },

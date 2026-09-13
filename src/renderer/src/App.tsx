@@ -18,6 +18,7 @@ const Accounts = lazy(() => import('./pages/Accounts'))
 const Cookies = lazy(() => import('./pages/Cookies'))
 const Extensions = lazy(() => import('./pages/Extensions'))
 const Rpa = lazy(() => import('./pages/Rpa'))
+const AiAgent = lazy(() => import('./pages/AiAgent'))
 const Team = lazy(() => import('./pages/Team'))
 const Logs = lazy(() => import('./pages/Logs'))
 const ApiDocs = lazy(() => import('./pages/ApiDocs'))
@@ -91,6 +92,7 @@ function AppShell() {
                 <Route path="/cookies" element={<Cookies />} />
                 <Route path="/extensions" element={<Extensions />} />
                 <Route path="/rpa" element={<Rpa />} />
+                <Route path="/ai-agent" element={<AiAgent />} />
                 <Route path="/team" element={<Team />} />
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/settings" element={<Settings />} />

@@ -38,7 +38,7 @@ import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { getSystemStats } from './systemStats'
-import { checkOllamaStatus } from './agent/ollama'
+import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -1869,6 +1869,43 @@ function buildApiRouter(): express.Router {
     const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
     const status = await checkOllamaStatus({ model: a.localModel })
     res.json(status)
+  })
+
+  // ===== AI Agent：Chat 模式对话（本地 Ollama，零 token）=====
+  // body: { messages: [{role:'user'|'assistant'|'system', content}] }
+  router.post('/ai-agent/chat', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const settings = await getSettings()
+    const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
+    if (!a.enabled) {
+      res.status(400).json({ message: 'AI Agent 未启用，请先在「设置 → AI Agent」开启' })
+      return
+    }
+    if (a.backend !== 'local') {
+      res.status(400).json({ message: '云端 BYOK 后端尚未开放，请先在设置页切换为「本地 Ollama」' })
+      return
+    }
+    // 白名单校验消息结构，最多带最近 20 条历史（本地模型上下文有限，防撑爆）
+    const raw = Array.isArray((req.body || {}).messages) ? req.body.messages : []
+    const msgs: OllamaMessage[] = []
+    for (const m of raw.slice(-20)) {
+      const role = (m && m.role) as string
+      const content = typeof (m && m.content) === 'string' ? m.content : ''
+      if ((role === 'user' || role === 'assistant' || role === 'system') && content.trim()) {
+        msgs.push({ role, content })
+      }
+    }
+    if (!msgs.length || msgs[msgs.length - 1].role !== 'user') {
+      res.status(400).json({ message: '消息列表为空或最后一条不是用户消息' })
+      return
+    }
+    try {
+      const reply = await ollamaChat({ model: a.localModel, messages: msgs })
+      res.json({ reply })
+    } catch (e) {
+      // Ollama 未启动 / 模型未拉取等场景给可操作的提示
+      const detail = e instanceof Error ? e.message : String(e)
+      res.status(502).json({ message: `本地模型调用失败：${detail}（请确认 Ollama 已启动且已 pull 模型 ${a.localModel}）` })
+    }
   })
 
   // ===== 自动化 API (v1，令牌鉴权，供脚本调用) =====
