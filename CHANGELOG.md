@@ -9,6 +9,12 @@
 
 ---
 
+## 2026-09-14（五续）· 云端连通性自检严格化
+
+### 修复
+
+- **云端自检误判无效 Key 为连通**（`ceaa5c2`）：`checkCloudStatus`（`src/main/agent/cloud.ts`）原成功判据只看 `cloudChat` 是否抛错。部分网关 / 中继对无效 Key 仍返回 HTTP 200，只是 `choices` 为空或 `content` 为空串，`cloudChat` 返回 `''` 不抛错，于是被误判为「连通」——导致错误 Key（如多打一个字母）检测仍通过。现改为严格判定：探针不仅要「未抛错」，还要求返回**非空内容**，否则判为不可达并提示「API Key 无效或模型无响应」。该判定同时加固「设置页检测连接」与 `runner.ts` 的 `agent:start` 预检（两者都走 `checkCloudStatus`）。
+
 ## 2026-09-14（四续）· 执行 tab 显示后端与模型名
 
 ### 优化
