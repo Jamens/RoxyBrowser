@@ -118,7 +118,10 @@ async function understand(req: VisionRequest, model: string): Promise<AgentActio
       const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, stream: false, format: 'json' })
+        // 不传 format:'json'：structured output 与 vision/images 在多个 Ollama/llama.cpp 构建里
+        // 会冲突，产生不透明的内部错误（如 UnknownVizError）。已用 extractJson 容错解析，
+        // 由 system prompt 强制「只输出 JSON」即可，避免触发该问题。
+        body: JSON.stringify({ model, messages, stream: false })
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
@@ -126,17 +129,30 @@ async function understand(req: VisionRequest, model: string): Promise<AgentActio
         // 500/模型未找到等可重试一次
         continue
       }
-      const data = (await res.json()) as { message?: { content?: string }; error?: string }
-      if (data.error) {
-        lastErr = data.error
+      // 先读原始文本再解析：Ollama 出错时 body 可能不是合法 JSON，直接 res.json() 会吞掉真实错误
+      const raw = await res.text()
+      let data: { message?: { content?: string }; error?: string }
+      try {
+        data = JSON.parse(raw) as { message?: { content?: string }; error?: string }
+      } catch {
+        lastErr = `视觉模型返回非 JSON 响应: ${raw.slice(0, 300)}`
         continue
+      }
+      if (data.error) {
+        // Ollama 在 200 响应里带 error 字段（如 UnknownVizError）。同一请求重试结果必然相同，
+        // 直接把原始错误透传给 UI，不再掩盖成「未 pull 模型」。
+        throw new Error(`视觉模型返回错误：${data.error}（模型：${model}）`)
       }
       const parsed = coerce(extractJson(data.message?.content || ''))
       if (parsed) return parsed
-      lastErr = '视觉模型未返回可解析的动作 JSON'
+      lastErr = `视觉模型未返回可解析的动作 JSON，原始输出：${String(data.message?.content || '').slice(0, 200)}`
     } catch (e) {
+      // 已带「视觉模型返回错误：」前缀的是确定性的模型错误，直接上抛，不进重试
+      if (e instanceof Error && e.message.startsWith('视觉模型返回错误：')) throw e
       lastErr = e instanceof Error ? e.message : String(e)
     }
   }
-  throw new Error(`${lastErr}（请确认已 pull 视觉模型 ${model}，且 Ollama 已启动）`)
+  throw new Error(
+    `${lastErr}\n（请确认：① Ollama 已启动；② 已执行 ollama pull ${model}；③ 该模型支持视觉/多模态，且「设置→AI Agent→视觉模型」名称正确）`
+  )
 }

@@ -69,13 +69,18 @@ async function buildRpaStep(a: AgentAction, dom: DomSnapshot, win: BrowserWindow
   return null
 }
 
-/** 截图：返回给 VLM 的 JPEG base64（视口宽度）与给 UI 的缩略图 dataURL */
+/**
+ * 截图：返回给 VLM 的 JPEG base64 与给 UI 的缩略图 dataURL。
+ * 关键：只截「视口」(capturePage 传 rect)，不是整页——整页可能高达数千 px，
+ * 既违背「坐标是视口像素、与截图 1:1」的约定，又会让超大图触发 Ollama/llama.cpp
+ * 内部视觉错误（如 UnknownVizError）。视口尺寸即有界，坐标也与截图严格对齐。
+ */
 async function capture(win: BrowserWindow): Promise<{ vlm: string; thumb: string }> {
-  const img = await win.webContents.capturePage()
-  const [cw] = win.getContentSize()
-  const resized = img.resize({ width: cw })
-  const vlm = resized.toJPEG(70).toString('base64')
-  const thumb = resized.resize({ width: 360 }).toDataURL()
+  const [cw, ch] = win.getContentSize()
+  const img = await win.webContents.capturePage({ x: 0, y: 0, width: cw, height: ch })
+  // VLM 用视口原分辨率（坐标 1:1 对齐）；UI 缩略图另缩到 360 宽。
+  const vlm = img.toJPEG(70).toString('base64')
+  const thumb = img.resize({ width: 360 }).toDataURL()
   return { vlm, thumb }
 }
 
