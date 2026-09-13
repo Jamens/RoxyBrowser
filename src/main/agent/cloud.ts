@@ -163,7 +163,7 @@ export async function checkCloudStatus(opts: {
       apiKey: opts.apiKey,
       model,
       messages: [{ role: 'user', content: 'hi' }],
-      maxTokens: 1
+      maxTokens: 16
     })
     // 严格判定：不仅要求「未抛错」，还要求确有非空内容返回。
     // 部分网关 / 中继对无效 Key 仍返回 HTTP 200，但 choices 为空或 content 为空串，

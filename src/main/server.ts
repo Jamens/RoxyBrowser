@@ -1983,9 +1983,14 @@ function buildApiRouter(): express.Router {
   })
 
   // ===== AI Agent：连通性探针（本地 Ollama 或 云端 BYOK）=====
-  router.get('/ai-agent/status', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+  router.post('/ai-agent/status', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const settings = await getSettings()
-    const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
+    // 优先用前端表单（可能尚未保存）传入的 aiAgent 配置做检测：避免「选了云端、没保存就点检测」
+    // 却用旧的已保存后端配置（本地）探活，误报为「本地已连接」。
+    const override = (req.body && (req.body as { aiAgent?: Partial<AIAgentSettings> }).aiAgent) || null
+    const a = override
+      ? { ...(settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)), ...override }
+      : (settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings))
     // 探活需同时校验「文本模型（对话用）」与「视觉模型（Agent 执行闭环看屏用）」，
     // 与 runner.ts 的 agent:start 预检保持一致：避免出现「状态显示正常、真正执行才报错」。
     if (a.backend === 'cloud') {

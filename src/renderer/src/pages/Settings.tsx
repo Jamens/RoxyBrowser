@@ -109,7 +109,9 @@ export default function Settings() {
   const checkAi = async () => {
     setChecking(true)
     try {
-      const s = await api.get<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string }>('/api/ai-agent/status')
+      // 用表单当前值（可能未保存）做检测，避免选了云端却按已保存的旧后端探活
+      const aiAgentForm = (form.getFieldValue('aiAgent') as Record<string, unknown>) || {}
+      const s = await api.post<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string }>('/api/ai-agent/status', { aiAgent: aiAgentForm })
       setAiStatus(s)
       if (!s.reachable) message.warning(s.error || t('aiAgent.statusUnreachable'))
       else if (s.error) message.warning(s.error)
@@ -368,41 +370,31 @@ export default function Settings() {
           </>
         )}
         {backend === 'cloud' && (
-          <>
-            <Space wrap size={12}>
-              <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
-                <Select
-                  style={{ width: 160 }}
-                  options={[
-                    { value: 'deepseek', label: 'DeepSeek' },
-                    { value: 'qwen', label: 'Qwen' },
-                    { value: 'glm', label: 'GLM' },
-                    { value: 'openai', label: 'OpenAI' }
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
-                <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
-              </Form.Item>
-              <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
-                <Input style={{ width: 200 }} placeholder="deepseek-chat" />
-              </Form.Item>
-              <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
-                <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
-              </Form.Item>
-              <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
-                <Input.Password style={{ width: 260 }} placeholder="sk-..." />
-              </Form.Item>
-            </Space>
-            {/* 云端同样需要「检测连接」：之前只有本地 backend 有该按钮，
-                导致填错视觉模型时状态探活显示正常、要到真正执行才报错。 */}
-            <Form.Item>
-              <Button loading={checking} onClick={checkAi}>
-                {t('aiAgent.check')}
-              </Button>
+          <Space wrap size={12}>
+            <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
+              <Select
+                style={{ width: 160 }}
+                options={[
+                  { value: 'deepseek', label: 'DeepSeek' },
+                  { value: 'qwen', label: 'Qwen' },
+                  { value: 'glm', label: 'GLM' },
+                  { value: 'openai', label: 'OpenAI' }
+                ]}
+              />
             </Form.Item>
-            {renderAiStatus()}
-          </>
+            <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
+              <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
+              <Input style={{ width: 200 }} placeholder="deepseek-chat" />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
+              <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
+              <Input.Password style={{ width: 260 }} placeholder="sk-..." />
+            </Form.Item>
+          </Space>
         )}
 
         <Form.Item>

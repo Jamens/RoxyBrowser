@@ -9,6 +9,14 @@
 
 ---
 
+## 2026-09-14（六续）· 检测连接修复（表单覆盖 / 探针 token / 云端隐藏按钮）
+
+### 修复
+
+- **检测连接误报「本地模型已连接」**（本次提交）：设置页选了云端 backend 但未保存就点「检测连接」时，原 `GET /ai-agent/status` 只读已保存配置，会用旧的本地后端探活并误报「本地模型已连接」。现端点改为 `POST`，接收前端表单当前值 `req.body.aiAgent` 做覆盖（`src/main/server.ts` + `src/renderer/src/pages/Settings.tsx` 的 `checkAi` 改为 `api.post` 并带上 `form.getFieldValue('aiAgent')`），与页面选中状态一致。
+- **云端正确配置被误报「返回内容为空」**（本次提交）：`checkCloudStatus`（`src/main/agent/cloud.ts`）的探针原 `maxTokens: 1`，`deepseek-flash` 在 1 token 上限下会返回空 `content`（真实对话用正常上限所以正常）。现改为 `maxTokens: 16`；非空内容的严格判定（防无效 Key 返回空 200）予以保留。
+- **检测连接按钮云端隐藏**（本次提交）：按需求「只在本地 backend 出现」，云端区块移除「检测连接」按钮与状态展示，仅本地渲染；云端配置错误改由 `agent:start` 运行时预检暴露。
+
 ## 2026-09-14（五续）· 云端连通性自检严格化
 
 ### 修复
