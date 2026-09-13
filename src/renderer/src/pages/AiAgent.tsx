@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { DEFAULT_SETTINGS, type AppSettings, type AgentAction, type RpaStep } from '@shared/types'
 import { useI18n } from '../i18n'
+import { useAgentStore, ensureAgentSubscriptions, agentStore, type EnvStatus, type EnvStep } from '../agentStore'
 
 interface ChatMessage {
   role: 'user' | 'assistant'
@@ -34,8 +35,7 @@ function actionLabel(a: AgentAction, t: (k: string) => string): string {
   }
 }
 
-type EnvStatus = { status: 'running' | 'done' | 'failed'; result?: string }
-type EnvStep = { step: number; action: AgentAction; screenshot?: string }
+// EnvStatus / EnvStep 类型见 ./agentStore（与 AgentPanel 共用同一份执行态定义）
 
 // 单个环境在矩阵运行里的进度卡片：各自独立显示状态 / 截图 / 执行轨迹 / 存模板入口
 function EnvCard({
@@ -105,29 +105,20 @@ function EnvCard({
 }
 
 // Agent 执行闭环面板（矩阵并行）：选 N 个目标环境 → 自然语言指令 → 各环境独立并发执行 → 实时步骤流 → 停止 / 按环境人工确认 / 各环境存为 RPA 模板
+// 注意：执行态全部走模块级 agentStore（见 agentStore.ts），切到其它标签（路由卸载重建）后数据不丢，
+// 切回时通过 useSyncExternalStore 立即拿到最新进度；IPC 订阅在 ensureAgentSubscriptions 里只注册一次。
 function AgentPanel({ settings }: { settings: AppSettings }) {
   const { t } = useI18n()
+  const s = useAgentStore()
   const [envs, setEnvs] = useState<{ id: number; title: string }[]>([])
-  const [envIds, setEnvIds] = useState<number[]>([])
-  const [instruction, setInstruction] = useState('')
-  const [running, setRunning] = useState(false)
-  const [needApproval, setNeedApproval] = useState(settings.aiAgent.needApprovalByDefault)
-  // 按环境分组的状态（每个 envId 独立一份）
-  const [envStatus, setEnvStatus] = useState<Record<number, EnvStatus>>({})
-  const [envSteps, setEnvSteps] = useState<Record<number, EnvStep[]>>({})
-  const [envRpa, setEnvRpa] = useState<Record<number, RpaStep[]>>({})
-  const [ask, setAsk] = useState<{ envId: number; question: string } | null>(null)
-  const [matrix, setMatrix] = useState<{ results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }[] } | null>(null)
-  const [status, setStatus] = useState('')
   // 当前登录用户：随执行一起传给主进程，用于把 AI 执行写进操作日志（归属到操作人）
   const [actor, setActor] = useState<{ userId: number; username: string } | null>(null)
-  // 资产化：每个环境运行结束后把归一化的 RPA 步骤存为可离线回放的模板
+  // 资产化：每个环境运行结束后把归一化的 RPA 步骤存为可离线回放的模板（弹窗态，非执行数据，可随卸载重置）
   const [saveForEnv, setSaveForEnv] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [tplName, setTplName] = useState('')
   const [tplRemark, setTplRemark] = useState('')
-  const runIdRef = useRef<string | null>(null)
 
   const loadEnvs = useCallback(() => {
     api
@@ -147,96 +138,50 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
       .catch(() => {})
   }, [])
 
+  // 注册 IPC 订阅（只一次，进程级常驻）+ 空闲时把审批默认开关同步进 store
+  useEffect(() => {
+    ensureAgentSubscriptions()
+    if (!s.runId) agentStore.setNeedApproval(settings.aiAgent.needApprovalByDefault)
+    // 仅挂载时执行一次：t 稳定，避免重复写入
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const envTitle = (id: number) => {
     const e = envs.find((x) => x.id === id)
     return e ? `#${id} ${e.title}` : `#${id}`
   }
 
-  // 订阅主进程推送的单步 / 完成 / 出错 / 待审批 / 全部完成 事件（按父 runId 过滤，多 run 互不串扰；按 envId 分组）
-  useEffect(() => {
-    const roxy = window.roxy
-    if (!roxy) return
-    const offs: Array<() => void> = []
-    offs.push(
-      roxy.agentOnStep((d) => {
-        if (d.runId !== runIdRef.current) return
-        const e = d.envId
-        setEnvSteps((prev) => ({ ...prev, [e]: [...(prev[e] || []), { step: d.step, action: d.action, screenshot: d.screenshot }] }))
-        if (d.rpaStep) setEnvRpa((prev) => ({ ...prev, [e]: [...(prev[e] || []), d.rpaStep as RpaStep] }))
-      })
-    )
-    offs.push(
-      roxy.agentOnDone((d) => {
-        if (d.runId !== runIdRef.current) return
-        setEnvStatus((prev) => ({ ...prev, [d.envId]: { status: 'done', result: d.result } }))
-        if (d.rpaSteps?.length) setEnvRpa((prev) => ({ ...prev, [d.envId]: d.rpaSteps! }))
-      })
-    )
-    offs.push(
-      roxy.agentOnError((d) => {
-        if (d.runId !== runIdRef.current) return
-        setEnvStatus((prev) => ({ ...prev, [d.envId]: { status: 'failed', result: d.error } }))
-      })
-    )
-    offs.push(
-      roxy.agentOnNeedApproval((d) => {
-        if (d.runId !== runIdRef.current) return
-        setAsk({ envId: d.envId, question: d.question })
-      })
-    )
-    offs.push(
-      roxy.agentOnAllDone((d) => {
-        if (d.runId !== runIdRef.current) return
-        runIdRef.current = null
-        setRunning(false)
-        setMatrix({ results: d.results })
-        setAsk(null)
-      })
-    )
-    return () => offs.forEach((f) => f())
-  }, [t])
-
   const start = async () => {
-    if (!envIds.length || !instruction.trim() || running) return
-    setStatus('')
-    const init: Record<number, EnvStatus> = {}
-    envIds.forEach((id) => {
-      init[id] = { status: 'running' }
-    })
-    setEnvStatus(init)
-    setEnvSteps({})
-    setEnvRpa({})
-    setMatrix(null)
+    if (!s.envIds.length || !s.instruction.trim() || s.running) return
+    agentStore.setStatus('')
+    agentStore.start(s.envIds, s.instruction.trim(), s.needApproval)
     setSaveOpen(false)
     setSaveForEnv(null)
-    setAsk(null)
     const res = await window.roxy?.agentStart?.({
-      envIds,
-      instruction: instruction.trim(),
-      options: { needApproval },
+      envIds: s.envIds,
+      instruction: s.instruction.trim(),
+      options: { needApproval: s.needApproval },
       actor: actor || undefined
     })
     if (!res) {
-      setStatus(t('aiAgent.agent.noEnv'))
+      agentStore.setStatus(t('aiAgent.agent.noEnv'))
+      agentStore.setRunning(false)
       return
     }
     if (res.error) {
-      setStatus(res.error)
+      agentStore.setStatus(res.error)
+      agentStore.setRunning(false)
       return
     }
-    if (res.runId) {
-      runIdRef.current = res.runId
-      setRunning(true)
-    }
+    if (res.runId) agentStore.setRunId(res.runId)
   }
   const stop = () => {
-    if (runIdRef.current) window.roxy?.agentStop?.(runIdRef.current)
-    setRunning(false)
-    setStatus(t('aiAgent.agent.idle'))
+    if (s.runId) window.roxy?.agentStop?.(s.runId)
+    agentStore.stop()
   }
   const approve = (ok: boolean) => {
-    if (runIdRef.current && ask) window.roxy?.agentApprove?.(runIdRef.current, ask.envId, ok)
-    setAsk(null)
+    if (s.runId && s.ask) window.roxy?.agentApprove?.(s.runId, s.ask.envId, ok)
+    agentStore.setAsk(null)
   }
 
   const openSave = (envId: number) => {
@@ -247,13 +192,13 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
   }
 
   const saveTemplate = async () => {
-    if (saveForEnv == null || !tplName.trim() || !envRpa[saveForEnv]?.length) return
+    if (saveForEnv == null || !tplName.trim() || !s.envRpa[saveForEnv]?.length) return
     setSaving(true)
     try {
       const res = await api.post<{ id: number }>('/api/rpa', {
         name: tplName.trim(),
         remark: tplRemark.trim(),
-        steps: envRpa[saveForEnv]
+        steps: s.envRpa[saveForEnv]
       })
       if (res.id) {
         message.success(t('aiAgent.agent.saveTemplateOk'))
@@ -269,8 +214,8 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     }
   }
 
-  const doneCount = matrix ? matrix.results.filter((r) => r.status === 'done').length : 0
-  const failCount = matrix ? matrix.results.filter((r) => r.status === 'failed').length : 0
+  const doneCount = s.matrix ? s.matrix.results.filter((r) => r.status === 'done').length : 0
+  const failCount = s.matrix ? s.matrix.results.filter((r) => r.status === 'failed').length : 0
 
   return (
     <div>
@@ -284,8 +229,8 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
           maxTagCount="responsive"
           style={{ minWidth: 320, maxWidth: 560 }}
           placeholder={t('aiAgent.agent.targetEnvs')}
-          value={envIds}
-          onChange={(v: number[]) => setEnvIds(v)}
+          value={s.envIds}
+          onChange={(v: number[]) => agentStore.setEnvIds(v)}
           options={envs.map((e) => ({ value: e.id, label: `#${e.id} ${e.title}` }))}
           notFoundContent={t('aiAgent.agent.noEnv')}
         />
@@ -293,39 +238,39 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
           {t('aiAgent.agent.refresh')}
         </Button>
         <Space size={6}>
-          <Switch checked={needApproval} onChange={(v) => setNeedApproval(v)} />
+          <Switch checked={s.needApproval} onChange={(v) => agentStore.setNeedApproval(v)} />
           <Typography.Text type="secondary">{t('aiAgent.agent.needApproval')}</Typography.Text>
         </Space>
       </Space>
 
       <Input.TextArea
-        value={instruction}
-        onChange={(e) => setInstruction(e.target.value)}
+        value={s.instruction}
+        onChange={(e) => agentStore.setInstruction(e.target.value)}
         placeholder={t('aiAgent.agent.instructionPlaceholder')}
         autoSize={{ minRows: 2, maxRows: 5 }}
-        disabled={running}
+        disabled={s.running}
       />
 
       <Space style={{ marginTop: 12 }}>
-        {running ? (
+        {s.running ? (
           <Button danger icon={<ClearOutlined />} onClick={stop}>
             {t('aiAgent.agent.stop')}
           </Button>
         ) : (
-          <Button type="primary" icon={<PlayCircleOutlined />} disabled={!envIds.length || !instruction.trim()} onClick={start}>
+          <Button type="primary" icon={<PlayCircleOutlined />} disabled={!s.envIds.length || !s.instruction.trim()} onClick={start}>
             {t('aiAgent.agent.start')}
           </Button>
         )}
-        <Tag color={running ? 'green' : 'default'}>{running ? t('aiAgent.agent.running') : t('aiAgent.agent.idle')}</Tag>
+        <Tag color={s.running ? 'green' : 'default'}>{s.running ? t('aiAgent.agent.running') : t('aiAgent.agent.idle')}</Tag>
       </Space>
 
-      {ask && (
+      {s.ask && (
         <Alert
           type="warning"
           showIcon
           style={{ marginTop: 12 }}
-          message={`${t('aiAgent.agent.ask')} · ${envTitle(ask.envId)}`}
-          description={ask.question}
+          message={`${t('aiAgent.agent.ask')} · ${envTitle(s.ask.envId)}`}
+          description={s.ask.question}
           action={
             <Space>
               <Button size="small" type="primary" onClick={() => approve(true)}>
@@ -339,22 +284,22 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         />
       )}
 
-      {status && (
+      {s.status && (
         <Typography.Paragraph
           style={{ marginTop: 12 }}
-          type={status.startsWith(t('aiAgent.agent.failed')) ? 'danger' : 'secondary'}
+          type={s.status.startsWith(t('aiAgent.agent.failed')) ? 'danger' : 'secondary'}
         >
-          {status}
+          {s.status}
         </Typography.Paragraph>
       )}
 
-      {running && envIds.length > 0 && Object.values(envSteps).every((arr) => !arr.length) && (
+      {s.running && s.envIds.length > 0 && Object.values(s.envSteps).every((arr) => !arr.length) && (
         <div style={{ marginTop: 12 }}>
           <Spin tip={t('aiAgent.agent.thinking')} />
         </div>
       )}
 
-      {matrix && (
+      {s.matrix && (
         <Alert
           type={failCount > 0 ? 'warning' : 'success'}
           showIcon
@@ -363,7 +308,7 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         />
       )}
 
-      {envIds.length > 0 && (
+      {s.envIds.length > 0 && (
         <div
           style={{
             marginTop: 12,
@@ -373,14 +318,14 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
             alignItems: 'start'
           }}
         >
-          {envIds.map((id) => (
+          {s.envIds.map((id) => (
             <EnvCard
               key={id}
               envId={id}
               title={envTitle(id)}
-              status={envStatus[id]}
-              steps={envSteps[id] || []}
-              rpaSteps={envRpa[id] || []}
+              status={s.envStatus[id]}
+              steps={s.envSteps[id] || []}
+              rpaSteps={s.envRpa[id] || []}
               onSave={openSave}
             />
           ))}
