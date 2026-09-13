@@ -9,6 +9,12 @@
 
 ---
 
+## 2026-09-14（再续）· Agent 执行闭环支持云端 BYOK 视觉模型
+
+### 新增
+
+- **Agent 执行闭环云端视觉模型**（`e2873a7`）：视觉适配器 `src/main/agent/vision.ts` 按 `backend` 分支——本地走 Ollama 视觉模型，云端走 BYOK 多模态模型（`cloudVisionChat`，OpenAI 兼容 chat/completions 多模态消息，截图以 `image_url` 传入）。新增「视觉模型（云端）」设置项 `AIAgentSettings.cloudVisionModel`（`src/shared/types.ts`），与文本对话的 `cloudModel` 分开配置；设置页（Settings.tsx）与四语 i18n 同步补充，提示文案引导用户到各厂商官网确认可用的多模态模型名。`runner.ts` 的 `agent:start` 预检在云端后端下改为校验 `cloudVisionModel` 的连通性与多模态支持。FEATURES §13 同步更新。
+
 ## 2026-09-14（续）· 对话保活 / 云端 BYOK / UI 修复 / 文档重构（11 commits）
 
 ### 新增
