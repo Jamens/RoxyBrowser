@@ -9,6 +9,29 @@
 
 ---
 
+## 2026-09-14（续）· 对话保活 / 云端 BYOK / UI 修复 / 文档重构（11 commits）
+
+### 新增
+
+- **云端 BYOK 对话链路**（`c56b03c`）：新增 `src/main/agent/cloud.ts`，统一 DeepSeek / 通义千问 / 智谱 GLM / OpenAI 的 OpenAI 兼容 `chat/completions`（Bearer 鉴权，base URL 可自定义覆盖代理 / 私有部署）；`/ai-agent/chat` 与 `/ai-agent/status` 在 `backend=cloud` 时走云端，本地 Ollama 仍为默认零费路径（FEATURES §13 同步更新，`741b0d0`）。
+- **对话态模块级 store**（`45171b4`）：新增 `src/renderer/src/agentChatStore.ts`，把对话内容 / 输入框残值 / 当前标签页（自动 / 对话 / 客服 / 执行）提到模块作用域（`useSyncExternalStore`），切到其它页面再切回不再清空对话、也不会回落到默认 auto 标签。
+
+### 修复
+
+- **云端调用 Key 去空白**（`15056fd`）：发送前对 API Key / 模型名统一 `trim()`，避免复制粘贴带入的空格 / 换行被 DeepSeek 等厂商判为「无效 Key」(401)。
+- **看板底部卡片不等高 / 暗色暂无数据黑字 / 设置按钮贴死**（`ec018bd`）。
+- **AiAgent 执行截图边框硬编码暗色值不可见**（`1eaa4c8`）：改用主题色 `colorBorderSecondary`。
+- **看板代理到期提醒文案未走 i18n**（`4028fa1`）：新增 `dashboard.proxyExpiring` 多语言 key（中英日德）。
+
+### 文档 / 其它
+
+- **知识源改为多文档**（`785f399`）：Support 客服检索 README + FEATURES，不再只读 README，避免 README 精简后答不了功能类问题。
+- **文档结构重构**（`adec312`）：新增本 CHANGELOG.md 与 FEATURES.md，README 精简为「架构 · 文件作用 · 运行命令」。
+- **设计文档归档**（`125a842`）：`AI_AGENT_FREE_DESIGN.md` 的设计参考并入 FEATURES.md 附录，原文件移入 `.workbuddy/archive/` 本地留存。
+- **仓库清理**（`e88a1fd`）：`.gitignore` 忽略 `.workbuddy/`（本地记忆 / 数据不再入库），并取消已误跟踪的内存文件。
+
+---
+
 ## 2026-09-14 · AI Agent 执行链路稳定性（4 commits）
 
 ### 新增
