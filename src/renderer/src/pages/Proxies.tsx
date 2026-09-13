@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, InputNumber, Typography, Upload,
-  Row, Col, Statistic, DatePicker
+  Row, Col, Statistic, DatePicker, Alert
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import {
@@ -13,6 +13,7 @@ import dayjs from 'dayjs'
 import QRCode from 'qrcode'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
+import { expiryWarn, expiryLabel } from '../utils/expiry'
 import type { ProxyDTO } from '@shared/types'
 
 const emptyForm = { name: '', type: 'http', host: '', port: 1080, username: '', password: '', remark: '' }
@@ -71,6 +72,14 @@ export default function Proxies() {
   useEffect(() => {
     load()
   }, [load])
+
+  // 即将到期 / 已过期预警：3 天内到期（含当日）或已过期都算
+  const expiring = useMemo(() => {
+    return list
+      .map((p) => ({ p, info: expiryWarn(p.expiresAt, 3) }))
+      .filter((x) => x.info.level)
+      .sort((a, b) => (a.info.days ?? 0) - (b.info.days ?? 0))
+  }, [list])
 
   const openAllocate = async () => {
     try {
@@ -264,8 +273,21 @@ export default function Proxies() {
     {
       title: '到期',
       dataIndex: 'expiresAt',
-      width: 100,
-      render: (v) => (v ? dayjs(v).format('YY-MM-DD') : '长期')
+      width: 130,
+      render: (v, r) => {
+        const info = expiryWarn(r.expiresAt, 3)
+        const label = expiryLabel(info)
+        return (
+          <Space direction="vertical" size={2}>
+            <span>{v ? dayjs(v).format('YY-MM-DD') : '长期'}</span>
+            {label && (
+              <Tag color={info.level === 'expired' ? 'error' : 'warning'} style={{ marginInlineEnd: 0 }}>
+                {label}
+              </Tag>
+            )}
+          </Space>
+        )
+      }
     },
     {
       title: '最后检测',
@@ -373,6 +395,25 @@ export default function Proxies() {
           </Card>
         </Col>
       </Row>
+
+      {expiring.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${expiring.length} 个代理即将到期或已过期，请及时续费或更换`}
+          description={
+            <div style={{ maxHeight: 96, overflowY: 'auto' }}>
+              {expiring.map(({ p, info }) => (
+                <div key={p.id} style={{ lineHeight: 1.8 }}>
+                  <Tag color={info.level === 'expired' ? 'error' : 'warning'}>{expiryLabel(info)}</Tag>
+                  {p.name}（{p.host}:{p.port}）
+                </div>
+              ))}
+            </div>
+          }
+        />
+      )}
 
       <Typography.Paragraph type="secondary">
         支持 HTTP / HTTPS / SOCKS5 协议，检测后会自动记录出口 IP、国家 / 地区 / 城市 / 运营商与匿名度（高匿 / 匿名 / 透明）。绑定到环境后，环境窗口流量全部走此代理。「分配到环境」可从 IP 池一键挑选空闲代理并绑定，支持按地区筛选。

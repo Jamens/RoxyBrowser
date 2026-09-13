@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Row, Col, Spin, Button, Statistic, Typography, Space, theme } from 'antd'
+import { Card, Row, Col, Spin, Button, Statistic, Typography, Space, theme, Alert, Tag } from 'antd'
 import {
   ReloadOutlined,
   AppstoreOutlined,
@@ -12,7 +12,8 @@ import {
 } from '@ant-design/icons'
 import { api } from '../api'
 import { useI18n } from '../i18n'
-import type { ProfileDTO, AccountDTO, ExtensionDTO, RpaScriptDTO, LogDTO } from '@shared/types'
+import { expiryWarn, expiryLabel } from '../utils/expiry'
+import type { ProfileDTO, AccountDTO, ExtensionDTO, RpaScriptDTO, LogDTO, ProxyDTO } from '@shared/types'
 import { TrendLine, Donut, HBar, cap, PALETTE, STATUS_COLORS } from '../components/charts'
 
 interface PoolStats {
@@ -33,9 +34,10 @@ interface DashData {
   extensions: ExtensionDTO[]
   rpa: RpaScriptDTO[]
   logs: LogDTO[]
+  proxies: ProxyDTO[]
 }
 
-const EMPTY: DashData = { profiles: [], pool: null, accounts: [], extensions: [], rpa: [], logs: [] }
+const EMPTY: DashData = { profiles: [], pool: null, accounts: [], extensions: [], rpa: [], logs: [], proxies: [] }
 
 export default function Dashboard() {
   const { t } = useI18n()
@@ -51,13 +53,14 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [profiles, pool, accounts, extensions, rpa, logs] = await Promise.all([
+      const [profiles, pool, accounts, extensions, rpa, logs, proxies] = await Promise.all([
         api.get<ProfileDTO[]>('/api/profiles'),
         api.get<PoolStats>('/api/proxies/pool-stats').catch(() => null),
         api.get<AccountDTO[]>('/api/accounts'),
         api.get<ExtensionDTO[]>('/api/extensions'),
         api.get<RpaScriptDTO[]>('/api/rpa'),
-        api.get<LogDTO[]>('/api/logs')
+        api.get<LogDTO[]>('/api/logs'),
+        api.get<ProxyDTO[]>('/api/proxies').catch(() => [])
       ])
       setData({
         profiles: profiles ?? [],
@@ -65,7 +68,8 @@ export default function Dashboard() {
         accounts: accounts ?? [],
         extensions: extensions ?? [],
         rpa: rpa ?? [],
-        logs: logs ?? []
+        logs: logs ?? [],
+        proxies: proxies ?? []
       })
       setUpdatedAt(new Date())
     } catch {
@@ -149,6 +153,14 @@ export default function Dashboard() {
   const envRunning = (data.profiles || []).filter((p) => p.status === 'running').length
   const noData = (arr: unknown[]) => arr.length === 0
 
+  // 代理到期预警：3 天内到期（含当日）或已过期
+  const expiringProxies = useMemo(() => {
+    return (data.proxies || [])
+      .map((p) => ({ p, info: expiryWarn(p.expiresAt, 3) }))
+      .filter((x) => x.info.level)
+      .sort((a, b) => (a.info.days ?? 0) - (b.info.days ?? 0))
+  }, [data.proxies])
+
   const metrics = [
     { title: t('dashboard.envTotal'), value: (data.profiles || []).length, icon: <AppstoreOutlined />, color: '#1677ff', bg: 'rgba(22,119,255,0.12)' },
     { title: t('dashboard.envRunning'), value: envRunning, icon: <PlayCircleOutlined />, color: '#52c41a', bg: 'rgba(82,196,26,0.12)' },
@@ -214,6 +226,25 @@ export default function Dashboard() {
             </Col>
           ))}
         </Row>
+
+        {expiringProxies.length > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 16 }}
+            message={`${expiringProxies.length} 个代理即将到期或已过期`}
+            description={
+              <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                {expiringProxies.map(({ p, info }) => (
+                  <div key={p.id} style={{ lineHeight: 1.9 }}>
+                    <Tag color={info.level === 'expired' ? 'error' : 'warning'}>{expiryLabel(info)}</Tag>
+                    {p.name}（{p.type} {p.host}:{p.port}）
+                  </div>
+                ))}
+              </div>
+            }
+          />
+        )}
 
         <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
           <Col xs={24} lg={15}>
