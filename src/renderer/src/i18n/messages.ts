@@ -49,6 +49,7 @@ const zhCN = {
   'dashboard.statusInvalid': '无效',
   'dashboard.statusUnknown': '未知',
   'dashboard.ungrouped': '未分组',
+  'dashboard.proxyExpiring': '{count} 个代理即将到期或已过期',
 
   // ---- 主题 ----
   'theme.light': '白天',
@@ -318,6 +319,7 @@ const enUS: MessageDict = {
   'dashboard.statusInvalid': 'Invalid',
   'dashboard.statusUnknown': 'Unknown',
   'dashboard.ungrouped': 'Ungrouped',
+  'dashboard.proxyExpiring': '{count} proxies are expiring or expired',
 
   'theme.light': 'Light',
   'theme.dark': 'Dark',
@@ -582,6 +584,7 @@ const jaJP: MessageDict = {
   'dashboard.statusInvalid': '無効',
   'dashboard.statusUnknown': '不明',
   'dashboard.ungrouped': 'グループなし',
+  'dashboard.proxyExpiring': '{count} 件のプロキシが期限間近または期限切れです',
 
   'theme.light': 'ライト',
   'theme.dark': 'ダーク',
@@ -846,6 +849,7 @@ const deDE: MessageDict = {
   'dashboard.statusInvalid': 'Ungültig',
   'dashboard.statusUnknown': 'Unbekannt',
   'dashboard.ungrouped': 'Ohne Gruppe',
+  'dashboard.proxyExpiring': '{count} Proxys laufen bald ab oder sind abgelaufen',
 
   'theme.light': 'Hell',
   'theme.dark': 'Dunkel',

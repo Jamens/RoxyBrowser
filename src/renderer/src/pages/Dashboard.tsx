@@ -234,7 +234,7 @@ export default function Dashboard() {
             type="warning"
             showIcon
             style={{ marginTop: 16 }}
-            message={`${expiringProxies.length} 个代理即将到期或已过期`}
+            message={t('dashboard.proxyExpiring', { count: expiringProxies.length })}
             description={
               <div style={{ maxHeight: 120, overflowY: 'auto' }}>
                 {expiringProxies.map(({ p, info }) => (
