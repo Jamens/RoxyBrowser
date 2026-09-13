@@ -49,9 +49,11 @@ export async function checkOllamaStatus(opts: { baseUrl?: string; model?: string
   const model = opts.model
   try {
     const models = await listOllamaModels(baseUrl)
-    // 配置名可能是 "qwen2.5:7b" 也可能省略 tag 如 "qwen2.5"：两者都算已拉取
+    // 配置名可能是 "qwen2.5:7b"，已安装名可能是 "qwen2.5:latest" 或省略 tag 的 "qwen2.5"：
+    // 按 base 名（去掉 :tag）归一化比较，只要 base 一致即视为已拉取。
+    const baseOf = (m: string) => m.split(':')[0]
     const pulled = model
-      ? models.includes(model) || models.some((m) => m === model || m.startsWith(`${model}:`))
+      ? models.some((m) => baseOf(m) === baseOf(model))
       : false
     return { reachable: true, baseUrl, model, modelPulled: pulled, models }
   } catch (e) {

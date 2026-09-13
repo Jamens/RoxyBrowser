@@ -63,15 +63,22 @@ export class AgentRunner {
       // 去重，避免同一环境被重复驱动
       const uniq = Array.from(new Set(envIds))
       const settings = await this.deps.getSettings()
-      // 运行前预检视觉模型：Ollama 可达但模型未 pull 时，提前给出可执行提示，
-      // 而不是等执行到第一步才在循环里炸 404（经验证：Chat 用文本模型、Agent 用视觉模型，两套互不相干）。
+      // 运行前预检视觉模型：提前给出可执行提示，而不是等执行到第一步才在循环里炸 404。
+      // 经验证：Chat 用文本模型、Agent 用视觉模型，两套互不相干；且预检必须同时覆盖
+      // 「Ollama 没启动」与「模型没 pull」两种情况——31c8d7c 只覆盖了后者，导致 Ollama 未运行时不报错、
+      // 直接进循环才炸 404「model not found」，用户完全看不到下载提示（正是本 bug 的起点）。
       const visionModel = settings.aiAgent.localVisionModel || 'minicpm-v:latest'
+      const pull = visionModel.includes(':') ? visionModel.split(':')[0] : visionModel
       const st = await checkOllamaStatus({ model: visionModel })
-      if (st.reachable && !st.modelPulled) {
+      if (!st.reachable) {
+        return {
+          error: `未能连接本地 Ollama（${st.baseUrl} 无响应）。请先启动 Ollama，再执行：ollama pull ${pull}（或在「设置 → AI Agent → 视觉模型」中改为已安装的名称）`
+        }
+      }
+      if (!st.modelPulled) {
         const hint = st.models.length
           ? `，本机已安装：${st.models.join('、')}`
           : '，本机尚未拉取任何模型'
-        const pull = visionModel.includes(':') ? visionModel.split(':')[0] : visionModel
         return {
           error: `视觉模型「${visionModel}」未安装${hint}。请先执行：ollama pull ${pull}（或在 设置 → AI Agent → 视觉模型 中改为已安装的名称）`
         }
@@ -144,6 +151,17 @@ export class AgentRunner {
       const childRunId = `${state.runId}-${envId}`
       const child: ChildRun = { envId, childRunId, aborted: false }
       state.children.set(envId, child)
+
+      // 把目标窗口提到前台并聚焦，让用户看到执行过程，更关键的是让 sendInputEvent 的
+      // 键盘事件可靠投递（复现：窗口在后台时，type 动作的按键会落到别的窗口，
+      // 表现为「窗口没真正执行」——用户报告的核心现象）。
+      try {
+        if (win.isMinimized()) win.restore()
+        if (!win.isVisible()) win.show()
+        win.focus()
+      } catch {
+        /* 窗口可能正在销毁，忽略 */
+      }
 
       const send = (type: string, payloadObj: object) => {
         if (!state.webContents.isDestroyed()) {

@@ -7,6 +7,21 @@ import type { AgentAction } from '../../shared/types'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const rand = (a: number, b: number) => Math.floor(a + Math.random() * (b - a))
 
+/**
+ * 每次输入前确保目标窗口聚焦：webContents.sendInputEvent 的键盘事件依赖窗口焦点，
+ * 否则按键会落到当前真正聚焦的窗口（通常是别的程序或别的 Agent 环境窗口），
+ * 表现为「窗口没真正执行」。鼠标/滚轮事件是按窗口坐标系投递的，不依赖焦点，但为稳妥起见也一并聚焦。
+ */
+function ensureFocused(win: BrowserWindow): void {
+  try {
+    if (win.isMinimized()) win.restore()
+    if (!win.isVisible()) win.show()
+    win.focus()
+  } catch {
+    /* 窗口可能正在销毁，忽略 */
+  }
+}
+
 /** 把单个字符映射成 sendInputEvent 的 keyCode 字符串 */
 function mapKey(ch: string): string {
   if (ch === '\n' || ch === '\r') return 'Enter'
@@ -61,9 +76,12 @@ async function scrollBy(win: BrowserWindow, delta: number): Promise<void> {
 export async function executeAction(win: BrowserWindow, a: AgentAction): Promise<void> {
   switch (a.action) {
     case 'click':
+      ensureFocused(win)
       await clickAt(win, a.x, a.y)
       break
     case 'type':
+      // 先聚焦窗口，再点进输入框并键入——保证键盘事件落到正确目标
+      ensureFocused(win)
       if (typeof a.x === 'number' && typeof a.y === 'number') await clickAt(win, a.x, a.y)
       await typeText(win, a.text || '')
       break
