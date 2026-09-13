@@ -159,6 +159,7 @@ export class AgentRunner {
         if (win.isMinimized()) win.restore()
         if (!win.isVisible()) win.show()
         win.focus()
+        win.webContents.focus()
       } catch {
         /* 窗口可能正在销毁，忽略 */
       }

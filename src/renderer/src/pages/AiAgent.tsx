@@ -333,6 +333,12 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
         </Typography.Paragraph>
       )}
 
+      {running && envIds.length > 0 && Object.values(envSteps).every((arr) => !arr.length) && (
+        <div style={{ marginTop: 12 }}>
+          <Spin tip={t('aiAgent.agent.thinking')} />
+        </div>
+      )}
+
       {matrix && (
         <Alert
           type={failCount > 0 ? 'warning' : 'success'}

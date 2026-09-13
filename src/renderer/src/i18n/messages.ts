@@ -267,7 +267,8 @@ const zhCN = {
   'aiAgent.agent.templateNamePlaceholder': '请输入模板名称',
   'aiAgent.agent.templateRemark': '备注',
   'aiAgent.agent.targetEnvs': '目标环境（可多选）',
-  'aiAgent.agent.matrixDone': '矩阵执行完成：{done} 成功 / {failed} 失败'
+  'aiAgent.agent.matrixDone': '矩阵执行完成：{done} 成功 / {failed} 失败',
+  'aiAgent.agent.thinking': '视觉模型思考中，首次响应可能需要数秒…'
 }
 
 export type MessageDict = typeof zhCN
@@ -532,7 +533,8 @@ const enUS: MessageDict = {
   'aiAgent.agent.templateNamePlaceholder': 'Enter a template name',
   'aiAgent.agent.templateRemark': 'Remark',
   'aiAgent.agent.targetEnvs': 'Target environments (multi-select)',
-  'aiAgent.agent.matrixDone': 'Matrix finished: {done} succeeded / {failed} failed'
+  'aiAgent.agent.matrixDone': 'Matrix finished: {done} succeeded / {failed} failed',
+  'aiAgent.agent.thinking': 'Vision model is thinking, first response may take a few seconds…'
 }
 
 const jaJP: MessageDict = {
@@ -795,7 +797,8 @@ const jaJP: MessageDict = {
   'aiAgent.agent.templateNamePlaceholder': 'テンプレート名を入力',
   'aiAgent.agent.templateRemark': '備考',
   'aiAgent.agent.targetEnvs': '対象環境（複数選択可）',
-  'aiAgent.agent.matrixDone': 'マトリックス実行完了：成功 {done} / 失敗 {failed}'
+  'aiAgent.agent.matrixDone': 'マトリックス実行完了：成功 {done} / 失敗 {failed}',
+  'aiAgent.agent.thinking': '視覚モデルが考え中です。初回応答には数秒かかる場合があります…'
 }
 
 const deDE: MessageDict = {
@@ -1060,7 +1063,8 @@ const deDE: MessageDict = {
   'aiAgent.agent.templateNamePlaceholder': 'Vorlagenname eingeben',
   'aiAgent.agent.templateRemark': 'Bemerkung',
   'aiAgent.agent.targetEnvs': 'Zielumgebungen (Mehrfachauswahl)',
-  'aiAgent.agent.matrixDone': 'Matrix abgeschlossen: {done} erfolgreich / {failed} fehlgeschlagen'
+  'aiAgent.agent.matrixDone': 'Matrix abgeschlossen: {done} erfolgreich / {failed} fehlgeschlagen',
+  'aiAgent.agent.thinking': 'Visionsmodell denkt, erste Antwort kann einige Sekunden dauern…'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

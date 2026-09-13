@@ -7,6 +7,18 @@ import type { AgentAction } from '../../shared/types'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const rand = (a: number, b: number) => Math.floor(a + Math.random() * (b - a))
 
+/** 调试日志：把动作安全地转成单行描述（避免访问不存在的字段触发 TS 窄化报错） */
+function actionDebug(a: AgentAction): string {
+  const parts: string[] = [a.action]
+  if (a.action === 'click' || a.action === 'type') {
+    parts.push(`(${(a as { x?: number }).x ?? '-'},${(a as { y?: number }).y ?? '-'})`)
+  }
+  if (a.action === 'type') parts.push(`text=${(a as { text?: string }).text ?? ''}`)
+  if (a.action === 'scroll') parts.push(`delta=${(a as { delta?: number }).delta ?? 0}`)
+  if (a.action === 'wait') parts.push(`ms=${(a as { ms?: number }).ms ?? 0}`)
+  return parts.join(' ')
+}
+
 /**
  * 每次输入前确保目标窗口聚焦：webContents.sendInputEvent 的键盘事件依赖窗口焦点，
  * 否则按键会落到当前真正聚焦的窗口（通常是别的程序或别的 Agent 环境窗口），
@@ -17,6 +29,7 @@ function ensureFocused(win: BrowserWindow): void {
     if (win.isMinimized()) win.restore()
     if (!win.isVisible()) win.show()
     win.focus()
+    win.webContents.focus()
   } catch {
     /* 窗口可能正在销毁，忽略 */
   }
@@ -74,6 +87,7 @@ async function scrollBy(win: BrowserWindow, delta: number): Promise<void> {
 
 /** 执行单个原子动作（click/type/scroll/wait）；finish/ask 由上层处理 */
 export async function executeAction(win: BrowserWindow, a: AgentAction): Promise<void> {
+  console.log(`[agent:action] ${actionDebug(a)}`)
   switch (a.action) {
     case 'click':
       ensureFocused(win)

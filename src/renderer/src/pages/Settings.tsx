@@ -345,7 +345,7 @@ export default function Settings() {
             {aiStatus && (
               <Typography.Paragraph
                 type={aiStatus.reachable && aiStatus.modelPulled ? 'success' : 'warning'}
-                style={{ marginTop: -8 }}
+                style={{ marginTop: 8 }}
               >
                 {!aiStatus.reachable
                   ? t('aiAgent.statusUnreachable')

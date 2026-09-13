@@ -114,9 +114,11 @@ export async function runAgentSession(opts: {
       // —— PERCEIVE ——
       const { vlm, thumb } = await capture(win)
       const dom = await extractDom(win)
+      console.log(`[agent] step ${step + 1} perceive: ${dom.title} | ${dom.url} | ${dom.els.length} elements`)
       // —— DECIDE ——
       const action = await vision.understand({ imageBase64: vlm, instruction, dom, history })
       step++
+      console.log(`[agent] step ${step} decide: ${action.action}${action.thought ? ' | ' + action.thought : ''}`)
       // —— FINISH / ASK（不执行动作，仅下发结果）——
       if (action.action === 'finish') {
         emit.step({ step, action, screenshot: thumb, rpaStep: null })
@@ -135,6 +137,7 @@ export async function runAgentSession(opts: {
         continue
       }
       // —— ACT ——
+      console.log(`[agent] step ${step} execute: ${action.action}`)
       await executeAction(win, action)
       const rpaStep = await buildRpaStep(action, dom, win)
       if (rpaStep) recordedSteps.push(rpaStep)
@@ -148,6 +151,8 @@ export async function runAgentSession(opts: {
       rpaSteps: recordedSteps
     })
   } catch (e) {
-    emit.error({ error: e instanceof Error ? e.message : String(e) })
+    const err = e instanceof Error ? e.message : String(e)
+    console.error('[agent] session error:', err)
+    emit.error({ error: err })
   }
 }

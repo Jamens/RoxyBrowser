@@ -35,7 +35,7 @@ Output ONLY a JSON object (no prose, no markdown fences) with this schema:
 Guidance:
 - "finish" 当指令已完成或无法完成时，把结果/原因写进 thought。
 - "ask" 当你需要人工决策（如验证码、需登录、歧义）时，把问题写进 question。
-- "type" 填入当前聚焦的输入框；若给了 x,y 则先点该输入框再输入。直接写原文（含空格），除非用户要求提交，否则不要按回车。
+- "type" 填入当前聚焦的输入框；若给了 x,y 则先点该输入框再输入。直接写原文（含空格）。若目标是地址栏、搜索框，或用户指令包含「打开/搜索/进入」等需要提交的内容，输入末尾必须加 "\\n" 来按回车提交；普通表单输入不要擅自提交。
 - 只输出 JSON，不要任何额外文字。`
 
 function buildUserText(req: VisionRequest): string {
