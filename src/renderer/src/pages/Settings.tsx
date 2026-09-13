@@ -43,7 +43,7 @@ export default function Settings() {
   const [form] = Form.useForm<AppSettings>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[] } | null>(null)
+  const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string } | null>(null)
   const [checking, setChecking] = useState(false)
   const { t, setLocale } = useI18n()
 
@@ -109,16 +109,33 @@ export default function Settings() {
   const checkAi = async () => {
     setChecking(true)
     try {
-      const s = await api.get<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[] }>('/api/ai-agent/status')
+      const s = await api.get<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string }>('/api/ai-agent/status')
       setAiStatus(s)
-      if (!s.reachable) message.warning(t('aiAgent.statusUnreachable'))
-      else if (!s.modelPulled) message.warning(t('aiAgent.statusModelMissing'))
-      else message.success(t('aiAgent.statusReachable'))
+      if (!s.reachable) message.warning(s.error || t('aiAgent.statusUnreachable'))
+      else if (s.error) message.warning(s.error)
+      else message.success(s.backend === 'cloud' ? t('aiAgent.statusCloudReachable') : t('aiAgent.statusReachable'))
     } catch (e) {
       message.error((e as Error).message)
     } finally {
       setChecking(false)
     }
+  }
+
+  // 状态文案：优先展示服务端回传的具体错误；两端（本地 / 云端）共用，
+  // 同时覆盖「文本模型」与「视觉模型」两类失败，避免视觉模型填错却显示正常。
+  const renderAiStatus = () => {
+    if (!aiStatus) return null
+    const ok = aiStatus.reachable && !aiStatus.error
+    const text = !aiStatus.reachable
+      ? (aiStatus.error || t('aiAgent.statusUnreachable'))
+      : aiStatus.error
+        ? aiStatus.error
+        : t(aiStatus.backend === 'cloud' ? 'aiAgent.statusCloudReachable' : 'aiAgent.statusReachable')
+    return (
+      <Typography.Paragraph type={ok ? 'success' : 'warning'} style={{ marginTop: 0 }}>
+        {text}
+      </Typography.Paragraph>
+    )
   }
 
   return (
@@ -347,46 +364,45 @@ export default function Settings() {
                 {t('aiAgent.check')}
               </Button>
             </Form.Item>
-            {aiStatus && (
-              <Typography.Paragraph
-                type={aiStatus.reachable && aiStatus.modelPulled ? 'success' : 'warning'}
-                style={{ marginTop: 0 }}
-              >
-                {!aiStatus.reachable
-                  ? t('aiAgent.statusUnreachable')
-                  : !aiStatus.modelPulled
-                    ? `${t('aiAgent.statusModelMissing')} — ${t('aiAgent.pullHint', { model: aiStatus.model || '' })}`
-                    : t('aiAgent.statusReachable')}
-              </Typography.Paragraph>
-            )}
+            {renderAiStatus()}
           </>
         )}
         {backend === 'cloud' && (
-          <Space wrap size={12}>
-            <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
-              <Select
-                style={{ width: 160 }}
-                options={[
-                  { value: 'deepseek', label: 'DeepSeek' },
-                  { value: 'qwen', label: 'Qwen' },
-                  { value: 'glm', label: 'GLM' },
-                  { value: 'openai', label: 'OpenAI' }
-                ]}
-              />
+          <>
+            <Space wrap size={12}>
+              <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
+                <Select
+                  style={{ width: 160 }}
+                  options={[
+                    { value: 'deepseek', label: 'DeepSeek' },
+                    { value: 'qwen', label: 'Qwen' },
+                    { value: 'glm', label: 'GLM' },
+                    { value: 'openai', label: 'OpenAI' }
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
+                <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
+                <Input style={{ width: 200 }} placeholder="deepseek-chat" />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
+                <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
+                <Input.Password style={{ width: 260 }} placeholder="sk-..." />
+              </Form.Item>
+            </Space>
+            {/* 云端同样需要「检测连接」：之前只有本地 backend 有该按钮，
+                导致填错视觉模型时状态探活显示正常、要到真正执行才报错。 */}
+            <Form.Item>
+              <Button loading={checking} onClick={checkAi}>
+                {t('aiAgent.check')}
+              </Button>
             </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
-              <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
-              <Input style={{ width: 200 }} placeholder="deepseek-chat" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
-              <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
-              <Input.Password style={{ width: 260 }} placeholder="sk-..." />
-            </Form.Item>
-          </Space>
+            {renderAiStatus()}
+          </>
         )}
 
         <Form.Item>

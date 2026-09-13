@@ -1986,26 +1986,60 @@ function buildApiRouter(): express.Router {
   router.get('/ai-agent/status', authMiddleware, async (_req: AuthedRequest, res: Response) => {
     const settings = await getSettings()
     const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
-    // 云端：自检 Key/模型是否就绪，并发一次极小调用确认鉴权与可达
+    // 探活需同时校验「文本模型（对话用）」与「视觉模型（Agent 执行闭环看屏用）」，
+    // 与 runner.ts 的 agent:start 预检保持一致：避免出现「状态显示正常、真正执行才报错」。
     if (a.backend === 'cloud') {
-      const s = await checkCloudStatus({
-        provider: a.cloudProvider,
-        baseUrl: a.cloudBaseUrl,
-        apiKey: a.cloudApiKey,
-        model: a.cloudModel
+      const text = await checkCloudStatus({
+        provider: a.cloudProvider, baseUrl: a.cloudBaseUrl, apiKey: a.cloudApiKey, model: a.cloudModel
       })
+      const vision = await checkCloudStatus({
+        provider: a.cloudProvider, baseUrl: a.cloudBaseUrl, apiKey: a.cloudApiKey, model: a.cloudVisionModel
+      })
+      const reachable = text.reachable && vision.reachable
+      const error = !text.reachable
+        ? `文本模型自检失败（${text.model || '未配置'}）：${text.error || '未知错误'}`
+        : !vision.reachable
+          ? `视觉模型自检失败（${vision.model || '未配置'}）：${vision.error || '未知错误'}`
+          : undefined
       res.json({
-        reachable: s.reachable,
-        baseUrl: s.baseUrl,
-        model: s.model,
-        modelPulled: s.reachable,
+        backend: 'cloud',
+        reachable,
+        baseUrl: text.baseUrl,
+        model: text.model,
+        modelPulled: text.reachable,
         models: [],
-        error: s.error
+        error,
+        visionModel: vision.model,
+        visionReachable: vision.reachable,
+        visionError: !vision.reachable ? vision.error : undefined
       })
       return
     }
-    const status = await checkOllamaStatus({ model: a.localModel })
-    res.json(status)
+    // 本地：文本模型与视觉模型都走本机 Ollama，需各自确认已拉取
+    const visionModel = a.localVisionModel || 'minicpm-v:latest'
+    const text = await checkOllamaStatus({ model: a.localModel })
+    const vision = await checkOllamaStatus({ model: visionModel })
+    const reachable = text.reachable
+    const modelPulled = text.modelPulled && vision.modelPulled
+    const error = !text.reachable
+      ? text.error
+      : !text.modelPulled
+        ? `文本模型「${a.localModel}」未安装（本机已安装：${text.models.join('、') || '无'}）`
+        : !vision.modelPulled
+          ? `视觉模型「${visionModel}」未安装（本机已安装：${vision.models.join('、') || '无'}）`
+          : undefined
+    res.json({
+      backend: 'local',
+      reachable,
+      baseUrl: text.baseUrl,
+      model: text.model,
+      modelPulled,
+      models: text.models,
+      error,
+      visionModel,
+      visionReachable: vision.reachable,
+      visionError: !vision.reachable ? vision.error : (!vision.modelPulled ? '视觉模型未安装' : undefined)
+    })
   })
 
   // ===== AI Agent：Chat/Support 对话（本地 Ollama，零 token）=====
