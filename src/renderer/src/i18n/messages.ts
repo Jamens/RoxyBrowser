@@ -193,7 +193,27 @@ const zhCN = {
 
   // ---- 设置：起始页搜索引擎 ----
   'settings.searchEngine': '起始页搜索引擎',
-  'settings.searchEngineExtra': '环境起始页输入关键词时使用的搜索引擎；大陆网络下 Google / DuckDuckGo 需挂代理可达'
+  'settings.searchEngineExtra': '环境起始页输入关键词时使用的搜索引擎；大陆网络下 Google / DuckDuckGo 需挂代理可达',
+
+  // ---- AI Agent ----
+  'aiAgent.section': 'AI Agent',
+  'aiAgent.enabled': '启用 AI Agent',
+  'aiAgent.enabledExtra': '开启后在「AI Agent」面板用本地模型对话、充当产品客服（零 token，本地运行）',
+  'aiAgent.backend': '模型后端',
+  'aiAgent.backendExtra': '本地 Ollama 完全离线、零按量费用；云端 BYOK 需自备 Key（后续阶段开放实际调用）',
+  'aiAgent.backendLocal': '本地 Ollama（零 token）',
+  'aiAgent.backendCloud': '云端 BYOK（需 Key）',
+  'aiAgent.localModel': '本地模型名',
+  'aiAgent.localModelExtra': 'Ollama 已拉取的模型名，如 qwen2.5:7b',
+  'aiAgent.check': '检测连接',
+  'aiAgent.statusReachable': 'Ollama 已连接，模型就绪',
+  'aiAgent.statusModelMissing': 'Ollama 已连接，但所选模型未拉取',
+  'aiAgent.statusUnreachable': '未检测到 Ollama（请先安装并启动）',
+  'aiAgent.pullHint': '运行命令拉取模型：ollama pull {model}',
+  'aiAgent.cloudProvider': '云端服务商',
+  'aiAgent.cloudBaseUrl': 'API 地址',
+  'aiAgent.cloudModel': '模型名',
+  'aiAgent.cloudApiKey': 'API Key'
 }
 
 export type MessageDict = typeof zhCN
@@ -386,7 +406,27 @@ const enUS: MessageDict = {
 
   // ---- Settings: start-page search engine ----
   'settings.searchEngine': 'Start-page search engine',
-  'settings.searchEngineExtra': 'Engine used for keyword searches on environment start pages; Google / DuckDuckGo need a proxy in mainland China'
+  'settings.searchEngineExtra': 'Engine used for keyword searches on environment start pages; Google / DuckDuckGo need a proxy in mainland China',
+
+  // ---- AI Agent ----
+  'aiAgent.section': 'AI Agent',
+  'aiAgent.enabled': 'Enable AI Agent',
+  'aiAgent.enabledExtra': 'Once enabled, use local models to chat and act as a product assistant in the AI Agent panel (zero token, runs locally)',
+  'aiAgent.backend': 'Model backend',
+  'aiAgent.backendExtra': 'Local Ollama runs fully offline with zero per-call cost; cloud BYOK needs your own key (actual calls open in a later phase)',
+  'aiAgent.backendLocal': 'Local Ollama (zero token)',
+  'aiAgent.backendCloud': 'Cloud BYOK (needs key)',
+  'aiAgent.localModel': 'Local model name',
+  'aiAgent.localModelExtra': 'An Ollama-pulled model name, e.g. qwen2.5:7b',
+  'aiAgent.check': 'Test connection',
+  'aiAgent.statusReachable': 'Ollama connected, model ready',
+  'aiAgent.statusModelMissing': 'Ollama connected, but the selected model is not pulled',
+  'aiAgent.statusUnreachable': 'Ollama not detected (install and start it first)',
+  'aiAgent.pullHint': 'Pull the model: ollama pull {model}',
+  'aiAgent.cloudProvider': 'Cloud provider',
+  'aiAgent.cloudBaseUrl': 'API base URL',
+  'aiAgent.cloudModel': 'Model name',
+  'aiAgent.cloudApiKey': 'API Key'
 }
 
 const jaJP: MessageDict = {
@@ -577,7 +617,27 @@ const jaJP: MessageDict = {
 
   // ---- 設定：スタートページの検索エンジン ----
   'settings.searchEngine': 'スタートページの検索エンジン',
-  'settings.searchEngineExtra': 'スタートページでキーワード検索に使うエンジン。Google / DuckDuckGo は中国本土ではプロキシが必要です'
+  'settings.searchEngineExtra': 'スタートページでキーワード検索に使うエンジン。Google / DuckDuckGo は中国本土ではプロキシが必要です',
+
+  // ---- AI Agent ----
+  'aiAgent.section': 'AI Agent',
+  'aiAgent.enabled': 'AI Agent を有効化',
+  'aiAgent.enabledExtra': '有効にすると、AI Agent パネルでローカルモデルと会話・製品案内ができます（トークン無料・ローカル実行）',
+  'aiAgent.backend': 'モデルバックエンド',
+  'aiAgent.backendExtra': 'ローカル Ollama は完全オフラインで従量無料。クラウド BYOK は自前の Key が必要（実際の呼び出しは今後のフェーズ）',
+  'aiAgent.backendLocal': 'ローカル Ollama（トークン無料）',
+  'aiAgent.backendCloud': 'クラウド BYOK（Key 必要）',
+  'aiAgent.localModel': 'ローカルモデル名',
+  'aiAgent.localModelExtra': 'Ollama で取得済みのモデル名（例: qwen2.5:7b）',
+  'aiAgent.check': '接続テスト',
+  'aiAgent.statusReachable': 'Ollama 接続済み、モデル準備完了',
+  'aiAgent.statusModelMissing': 'Ollama 接続済みですが、選択モデルが未取得です',
+  'aiAgent.statusUnreachable': 'Ollama が見つかりません（先にインストールして起動してください）',
+  'aiAgent.pullHint': 'モデルを取得: ollama pull {model}',
+  'aiAgent.cloudProvider': 'クラウド事業者',
+  'aiAgent.cloudBaseUrl': 'API アドレス',
+  'aiAgent.cloudModel': 'モデル名',
+  'aiAgent.cloudApiKey': 'API Key'
 }
 
 const deDE: MessageDict = {
@@ -768,7 +828,27 @@ const deDE: MessageDict = {
 
   // ---- Einstellungen: Suchmaschine der Startseite ----
   'settings.searchEngine': 'Suchmaschine der Startseite',
-  'settings.searchEngineExtra': 'Suchmaschine für Keyword-Suchen auf Umgebungs-Startseiten; Google / DuckDuckGo brauchen in Festlandchina einen Proxy'
+  'settings.searchEngineExtra': 'Suchmaschine für Keyword-Suchen auf Umgebungs-Startseiten; Google / DuckDuckGo brauchen in Festlandchina einen Proxy',
+
+  // ---- AI Agent ----
+  'aiAgent.section': 'AI Agent',
+  'aiAgent.enabled': 'AI Agent aktivieren',
+  'aiAgent.enabledExtra': 'Wenn aktiv, können Sie im AI-Agent-Panel mit lokalen Modellen chatten und als Produktassistent agieren (tokenfrei, lokal)',
+  'aiAgent.backend': 'Modell-Backend',
+  'aiAgent.backendExtra': 'Lokales Ollama läuft vollständig offline ohne Nutzungskosten; Cloud-BYOK benötigt einen eigenen Key (tatsächliche Aufrufe in späterer Phase)',
+  'aiAgent.backendLocal': 'Lokales Ollama (tokenfrei)',
+  'aiAgent.backendCloud': 'Cloud BYOK (Key nötig)',
+  'aiAgent.localModel': 'Lokaler Modellname',
+  'aiAgent.localModelExtra': 'Ein von Ollama gepullter Modellname, z. B. qwen2.5:7b',
+  'aiAgent.check': 'Verbindung testen',
+  'aiAgent.statusReachable': 'Ollama verbunden, Modell bereit',
+  'aiAgent.statusModelMissing': 'Ollama verbunden, aber das gewählte Modell ist nicht gepullt',
+  'aiAgent.statusUnreachable': 'Ollama nicht gefunden (bitte zuerst installieren und starten)',
+  'aiAgent.pullHint': 'Modell pullen: ollama pull {model}',
+  'aiAgent.cloudProvider': 'Cloud-Anbieter',
+  'aiAgent.cloudBaseUrl': 'API-Adresse',
+  'aiAgent.cloudModel': 'Modellname',
+  'aiAgent.cloudApiKey': 'API-Key'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

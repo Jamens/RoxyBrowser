@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined } from '@ant-design/icons'
 import { api } from '../api'
@@ -43,6 +43,8 @@ export default function Settings() {
   const [form] = Form.useForm<AppSettings>()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[] } | null>(null)
+  const [checking, setChecking] = useState(false)
   const { t, setLocale } = useI18n()
 
   // 让「当地时间 / UTC 偏移 / 是否夏令时」每 30 秒自刷新一次
@@ -60,6 +62,7 @@ export default function Settings() {
 
   const country = Form.useWatch('country', form) || DEFAULT_SETTINGS.country
   const networkMode = Form.useWatch('networkMode', form) || DEFAULT_SETTINGS.networkMode
+  const backend = Form.useWatch(['aiAgent', 'backend'], form) || 'local'
   const tz = countryTimezone(country)
   const tzInfo = describeTimeZone(tz, now)
 
@@ -100,6 +103,21 @@ export default function Settings() {
       message.error((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  const checkAi = async () => {
+    setChecking(true)
+    try {
+      const s = await api.get<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[] }>('/api/ai-agent/status')
+      setAiStatus(s)
+      if (!s.reachable) message.warning(t('aiAgent.statusUnreachable'))
+      else if (!s.modelPulled) message.warning(t('aiAgent.statusModelMissing'))
+      else message.success(t('aiAgent.statusReachable'))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setChecking(false)
     }
   }
 
@@ -297,6 +315,68 @@ export default function Settings() {
             ]}
           />
         </Form.Item>
+
+        <Divider>{t('aiAgent.section')}</Divider>
+        <Form.Item name={['aiAgent', 'enabled']} label={t('aiAgent.enabled')} extra={t('aiAgent.enabledExtra')} valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item name={['aiAgent', 'backend']} label={t('aiAgent.backend')} extra={t('aiAgent.backendExtra')}>
+          <Select
+            style={{ width: 280 }}
+            options={[
+              { value: 'local', label: t('aiAgent.backendLocal') },
+              { value: 'cloud', label: t('aiAgent.backendCloud') }
+            ]}
+          />
+        </Form.Item>
+        {backend === 'local' && (
+          <>
+            <Space wrap size={12} style={{ display: 'flex' }}>
+              <Form.Item name={['aiAgent', 'localModel']} label={t('aiAgent.localModel')} extra={t('aiAgent.localModelExtra')}>
+                <Input style={{ width: 220 }} placeholder="qwen2.5:7b" />
+              </Form.Item>
+              <Button loading={checking} onClick={checkAi}>
+                {t('aiAgent.check')}
+              </Button>
+            </Space>
+            {aiStatus && (
+              <Typography.Paragraph
+                type={aiStatus.reachable && aiStatus.modelPulled ? 'success' : 'warning'}
+                style={{ marginTop: -8 }}
+              >
+                {!aiStatus.reachable
+                  ? t('aiAgent.statusUnreachable')
+                  : !aiStatus.modelPulled
+                    ? `${t('aiAgent.statusModelMissing')} — ${t('aiAgent.pullHint', { model: aiStatus.model || '' })}`
+                    : t('aiAgent.statusReachable')}
+              </Typography.Paragraph>
+            )}
+          </>
+        )}
+        {backend === 'cloud' && (
+          <Space wrap size={12}>
+            <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
+              <Select
+                style={{ width: 160 }}
+                options={[
+                  { value: 'deepseek', label: 'DeepSeek' },
+                  { value: 'qwen', label: 'Qwen' },
+                  { value: 'glm', label: 'GLM' },
+                  { value: 'openai', label: 'OpenAI' }
+                ]}
+              />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
+              <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
+              <Input style={{ width: 200 }} placeholder="deepseek-chat" />
+            </Form.Item>
+            <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
+              <Input.Password style={{ width: 260 }} placeholder="sk-..." />
+            </Form.Item>
+          </Space>
+        )}
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

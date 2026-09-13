@@ -35,9 +35,10 @@ import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normaliz
 import { substituteSteps } from '../shared/rpa'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
-import type { Fingerprint, AppSettings, OSKind, RpaStep } from '../shared/types'
+import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { getSystemStats } from './systemStats'
+import { checkOllamaStatus } from './agent/ollama'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -1849,6 +1850,10 @@ function buildApiRouter(): express.Router {
     merged.language = language
     // 搜索引擎同样走白名单：脏值会让起始页拼出错误的搜索 URL
     merged.searchEngine = normalizeSearchEngine(merged.searchEngine) || DEFAULT_SETTINGS.searchEngine
+    // AI Agent 子对象深合并默认值：UI 仅暴露部分字段，避免未展示字段被覆盖成 undefined
+    if (merged.aiAgent && typeof merged.aiAgent === 'object') {
+      merged.aiAgent = { ...DEFAULT_SETTINGS.aiAgent, ...(merged.aiAgent as Record<string, unknown>) }
+    }
     let row = await repo.findOne({ where: { key: 'global' } })
     if (!row) row = repo.create({ key: 'global', settings: merged })
     else row.settings = merged
@@ -1856,6 +1861,14 @@ function buildApiRouter(): express.Router {
     // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
     startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
     res.json({ ok: true, settings: merged })
+  })
+
+  // ===== AI Agent：本地 Ollama 连通性探针（零 token）=====
+  router.get('/ai-agent/status', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    const settings = await getSettings()
+    const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
+    const status = await checkOllamaStatus({ model: a.localModel })
+    res.json(status)
   })
 
   // ===== 自动化 API (v1，令牌鉴权，供脚本调用) =====

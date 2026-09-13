@@ -303,6 +303,27 @@ export function normalizeTarget(raw: string, engine: SearchEngine): string {
   return searchUrlFor(engine, s)
 }
 
+// ===== AI Agent 设置 =====
+// 模型后端：本地 Ollama（零 token，默认）/ 云端 BYOK（用户自带 Key，后续阶段开放）
+export type AIAgentBackend = 'local' | 'cloud'
+export type AIAgentCloudProvider = 'deepseek' | 'qwen' | 'glm' | 'openai'
+
+export interface AIAgentSettings {
+  enabled: boolean
+  backend: AIAgentBackend
+  // 本地 Ollama 模型名（如 qwen2.5:7b）
+  localModel: string
+  // 云端 BYOK（P4 阶段开放实际调用）
+  cloudProvider: AIAgentCloudProvider
+  cloudBaseUrl: string
+  cloudApiKey: string
+  cloudModel: string
+  // 执行闭环（P1+）默认是否要求人工审批
+  needApprovalByDefault: boolean
+  // 单次运行最大步数上限
+  maxStepsPerRun: number
+}
+
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
   // 新建环境随机指纹时的默认操作系统
@@ -338,6 +359,8 @@ export interface AppSettings {
   customProxyPassword: string
   // 任务栏图标显示：icon = 应用图标；name = 显示窗口（环境）名称，多窗口并行时便于定位
   trayDisplay: 'icon' | 'name'
+  // AI Agent（本地 Ollama / 云端 BYOK）
+  aiAgent: AIAgentSettings
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -359,5 +382,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customProxyPort: 8080,
   customProxyUsername: '',
   customProxyPassword: '',
-  trayDisplay: 'icon'
+  trayDisplay: 'icon',
+  aiAgent: {
+    enabled: false,
+    backend: 'local',
+    localModel: 'qwen2.5:7b',
+    cloudProvider: 'deepseek',
+    cloudBaseUrl: '',
+    cloudApiKey: '',
+    cloudModel: '',
+    needApprovalByDefault: false,
+    maxStepsPerRun: 30
+  }
 }
