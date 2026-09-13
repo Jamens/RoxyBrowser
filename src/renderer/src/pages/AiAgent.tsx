@@ -452,21 +452,25 @@ export default function AiAgent() {
               { value: 'agent', label: t('aiAgent.modeAgent') }
             ]}
           />
+          {/* 所有 tab 都展示后端与模型名：对话/客服/自动用文本模型，
+              执行(agent) tab 用其实际看屏决策的「视觉模型」，避免显示成文本模型造成误导 */}
+          <Tag color={a.backend === 'local' ? 'green' : 'blue'}>
+            {a.backend === 'local' ? t('aiAgent.backendLocal') : t('aiAgent.backendCloud')}
+          </Tag>
+          <Tag>
+            {uiMode === 'agent'
+              ? (a.backend === 'local' ? a.localVisionModel : a.cloudVisionModel) || '-'
+              : (a.backend === 'local' ? a.localModel : a.cloudModel) || '-'}
+          </Tag>
           {uiMode !== 'agent' && (
-            <>
-              <Tag color={a.backend === 'local' ? 'green' : 'blue'}>
-                {a.backend === 'local' ? t('aiAgent.backendLocal') : t('aiAgent.backendCloud')}
-              </Tag>
-              <Tag>{a.backend === 'local' ? a.localModel : a.cloudModel || '-'}</Tag>
-              <Button
-                size="small"
-                icon={<ClearOutlined />}
-                disabled={!messages.length || sending}
-                onClick={() => agentChatStore.clear()}
-              >
-                {t('aiAgent.chat.clear')}
-              </Button>
-            </>
+            <Button
+              size="small"
+              icon={<ClearOutlined />}
+              disabled={!messages.length || sending}
+              onClick={() => agentChatStore.clear()}
+            >
+              {t('aiAgent.chat.clear')}
+            </Button>
           )}
         </Space>
       }
