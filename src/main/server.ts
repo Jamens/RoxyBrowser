@@ -39,6 +39,7 @@ import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from 
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
+import { buildSupportSystemPrompt } from './agent/knowledge'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -618,6 +619,21 @@ function normalizeRelPath(p: string): string {
 }
 
 // ---------- API 路由 ----------
+// AI Agent Dispatcher（P0 关键词版）：判定一条消息走 Chat（通用对话）还是 Support（产品客服）。
+// 规则来自设计文档 §3.5：问「XX 功能是什么 / 怎么用 / 怎么做」→ Support；其余 → Chat。
+// Agent 执行模式（操作动词 + @窗口）属 P1，届时在此扩展第三个分支。
+const AI_PRODUCT_TERMS = [
+  '环境', '窗口', '指纹', '代理', 'proxy', 'ip', '账号', 'cookie', '扩展', '插件',
+  'rpa', '模板', '分组', '团队', '日志', '设置', '看板', 'api', '自动化', '登录', '注册',
+  '起始页', '搜索引擎', '任务栏', '网络', '同步', '迁移', '导入', '导出', '检测', '巡检'
+]
+function aiAgentDispatch(question: string): 'chat' | 'support' {
+  const q = question.toLowerCase()
+  // 命中产品相关词 → 产品客服；纯闲聊 / 通用问题 → 通用对话。
+  // 疑问句式（怎么/是什么…）不单独触发路由，避免「怎么写 Python」这类通用问题被误路由。
+  return AI_PRODUCT_TERMS.some((term) => q.includes(term)) ? 'support' : 'chat'
+}
+
 function buildApiRouter(): express.Router {
   const router = express.Router()
 
@@ -1871,8 +1887,9 @@ function buildApiRouter(): express.Router {
     res.json(status)
   })
 
-  // ===== AI Agent：Chat 模式对话（本地 Ollama，零 token）=====
-  // body: { messages: [{role:'user'|'assistant'|'system', content}] }
+  // ===== AI Agent：Chat/Support 对话（本地 Ollama，零 token）=====
+  // body: { messages: [{role,content}], mode?: 'chat' | 'support' | 'auto' }
+  // mode=auto 时由 Dispatcher 做轻量意图路由（P0 用关键词规则，见 aiAgentDispatch）
   router.post('/ai-agent/chat', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const settings = await getSettings()
     const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
@@ -1898,9 +1915,19 @@ function buildApiRouter(): express.Router {
       res.status(400).json({ message: '消息列表为空或最后一条不是用户消息' })
       return
     }
+    // 模式路由：显式指定优先；auto 走 Dispatcher 关键词规则
+    const reqMode = (req.body || {}).mode
+    const lastQuestion = msgs[msgs.length - 1].content
+    const mode: 'chat' | 'support' =
+      reqMode === 'support' || reqMode === 'chat' ? reqMode : aiAgentDispatch(lastQuestion)
+    // Support 模式：检索产品文档片段，作为 system 消息注入（不透传历史里的旧 system）
+    const finalMsgs: OllamaMessage[] =
+      mode === 'support'
+        ? [{ role: 'system', content: buildSupportSystemPrompt(lastQuestion) }, ...msgs.filter((m) => m.role !== 'system')]
+        : msgs
     try {
-      const reply = await ollamaChat({ model: a.localModel, messages: msgs })
-      res.json({ reply })
+      const reply = await ollamaChat({ model: a.localModel, messages: finalMsgs })
+      res.json({ reply, mode })
     } catch (e) {
       // Ollama 未启动 / 模型未拉取等场景给可操作的提示
       const detail = e instanceof Error ? e.message : String(e)

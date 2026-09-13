@@ -225,7 +225,12 @@ const zhCN = {
   'aiAgent.chat.disabled': 'AI Agent 未启用，请先到设置页开启并选择本地模型',
   'aiAgent.chat.goSettings': '前往设置',
   'aiAgent.chat.emptyHistory': '开始对话吧',
-  'aiAgent.chat.thinking': '思考中…'
+  'aiAgent.chat.thinking': '思考中…',
+
+  // ---- AI Agent：模式 ----
+  'aiAgent.modeAuto': '自动',
+  'aiAgent.modeChat': '通用对话',
+  'aiAgent.modeSupport': '产品客服'
 }
 
 export type MessageDict = typeof zhCN
@@ -450,7 +455,12 @@ const enUS: MessageDict = {
   'aiAgent.chat.disabled': 'AI Agent is not enabled. Turn it on in Settings and pick a local model first',
   'aiAgent.chat.goSettings': 'Open Settings',
   'aiAgent.chat.emptyHistory': 'Start the conversation',
-  'aiAgent.chat.thinking': 'Thinking…'
+  'aiAgent.chat.thinking': 'Thinking…',
+
+  // ---- AI Agent: modes ----
+  'aiAgent.modeAuto': 'Auto',
+  'aiAgent.modeChat': 'General chat',
+  'aiAgent.modeSupport': 'Product support'
 }
 
 const jaJP: MessageDict = {
@@ -673,7 +683,12 @@ const jaJP: MessageDict = {
   'aiAgent.chat.disabled': 'AI Agent が無効です。設定ページで有効化し、ローカルモデルを選択してください',
   'aiAgent.chat.goSettings': '設定へ移動',
   'aiAgent.chat.emptyHistory': '会話を始めましょう',
-  'aiAgent.chat.thinking': '思考中…'
+  'aiAgent.chat.thinking': '思考中…',
+
+  // ---- AI Agent：モード ----
+  'aiAgent.modeAuto': '自動',
+  'aiAgent.modeChat': '一般チャット',
+  'aiAgent.modeSupport': '製品サポート'
 }
 
 const deDE: MessageDict = {
@@ -896,7 +911,12 @@ const deDE: MessageDict = {
   'aiAgent.chat.disabled': 'AI Agent ist nicht aktiviert. Bitte in den Einstellungen aktivieren und ein lokales Modell wählen',
   'aiAgent.chat.goSettings': 'Zu den Einstellungen',
   'aiAgent.chat.emptyHistory': 'Starten Sie das Gespräch',
-  'aiAgent.chat.thinking': 'Denkt nach…'
+  'aiAgent.chat.thinking': 'Denkt nach…',
+
+  // ---- AI Agent: Modi ----
+  'aiAgent.modeAuto': 'Auto',
+  'aiAgent.modeChat': 'Allgemeiner Chat',
+  'aiAgent.modeSupport': 'Produkt-Support'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

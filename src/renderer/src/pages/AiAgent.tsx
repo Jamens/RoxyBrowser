@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Input, Space, Spin, Tag, Typography } from 'antd'
+import { Button, Card, Empty, Input, Segmented, Space, Spin, Tag, Typography } from 'antd'
 import { RobotOutlined, SendOutlined, ClearOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
@@ -9,7 +9,11 @@ import { useI18n } from '../i18n'
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  /** 该条回复实际走的模式（auto 模式下由 Dispatcher 判定） */
+  mode?: 'chat' | 'support'
 }
+
+type UiMode = 'auto' | 'chat' | 'support'
 
 export default function AiAgent() {
   const { t } = useI18n()
@@ -19,6 +23,7 @@ export default function AiAgent() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [uiMode, setUiMode] = useState<UiMode>('auto')
   // 对话滚动容器：新消息到达时滚到底部
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -42,10 +47,14 @@ export default function AiAgent() {
     setInput('')
     setSending(true)
     try {
-      const res = await api.post<{ reply: string }>('/api/ai-agent/chat', {
-        messages: next.map((m) => ({ role: m.role, content: m.content }))
+      const res = await api.post<{ reply: string; mode: 'chat' | 'support' }>('/api/ai-agent/chat', {
+        messages: next.map((m) => ({ role: m.role, content: m.content })),
+        mode: uiMode
       })
-      setMessages([...next, { role: 'assistant', content: res.reply || '（模型返回了空回复）' }])
+      setMessages([
+        ...next,
+        { role: 'assistant', content: res.reply || '（模型返回了空回复）', mode: res.mode }
+      ])
     } catch (e) {
       // 失败时保留用户消息，方便改后重发
       setMessages([...next, { role: 'assistant', content: `⚠️ ${(e as Error).message}` }])
@@ -90,6 +99,15 @@ export default function AiAgent() {
       }
       extra={
         <Space size={8}>
+          <Segmented
+            value={uiMode}
+            onChange={(v) => setUiMode(v as UiMode)}
+            options={[
+              { value: 'auto', label: t('aiAgent.modeAuto') },
+              { value: 'chat', label: t('aiAgent.modeChat') },
+              { value: 'support', label: t('aiAgent.modeSupport') }
+            ]}
+          />
           <Tag color={a.backend === 'local' ? 'green' : 'blue'}>
             {a.backend === 'local' ? t('aiAgent.backendLocal') : t('aiAgent.backendCloud')}
           </Tag>
@@ -139,6 +157,13 @@ export default function AiAgent() {
                     : 'var(--ant-color-fill-tertiary, rgba(0,0,0,0.06))'
               }}
             >
+              {m.role === 'assistant' && m.mode === 'support' && (
+                <div style={{ marginBottom: 4 }}>
+                  <Tag color="geekblue" style={{ marginRight: 0 }}>
+                    {t('aiAgent.modeSupport')}
+                  </Tag>
+                </div>
+              )}
               {m.content}
             </div>
           </div>
