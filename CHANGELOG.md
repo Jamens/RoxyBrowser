@@ -9,6 +9,13 @@
 
 ---
 
+## 2026-09-14（三续）· 状态探活覆盖视觉模型 + 云端可测
+
+### 修复
+
+- **状态探活覆盖视觉模型**（`ee036de`）：`GET /ai-agent/status` 此前只校验文本模型（云端 `cloudModel` / 本地 `localModel`），导致视觉模型（云端 `cloudVisionModel`）填错时状态仍显示正常、只有真正点「开始执行」才报错。现与 `runner.ts` 的 `agent:start` 预检对齐——云端并发校验 `cloudModel` + `cloudVisionModel` 两次多模态自检，本地校验 `localModel` + `localVisionModel` 两个 Ollama 模型是否已拉取；响应新增 `visionModel` / `visionReachable` / `visionError` 字段，失败时回传具体中文错误。
+- **云端后端开放「检测连接」**（`ee036de`）：设置页 AI Agent 区块原先只有本地 backend 渲染「检测连接」按钮与状态文案，云端用户无法在保存前预检。现两个 backend 共用 `renderAiStatus()`，云端也展示检测按钮与（文本 + 视觉）连通结果；新增 `aiAgent.statusCloudReachable` 四语 key。
+
 ## 2026-09-14（再续）· Agent 执行闭环支持云端 BYOK 视觉模型
 
 ### 新增
