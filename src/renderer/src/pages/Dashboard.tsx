@@ -269,19 +269,21 @@ export default function Dashboard() {
           </Col>
         </Row>
 
-        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        {/* align="stretch" + 卡片 height:100% + body flex：让三张卡片等高——
+            否则某张「暂无数据」(定高) 与其它 HBar(内容高度) 不一致，底部参差不齐。 */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }} align="stretch">
           <Col xs={24} lg={8}>
-            <Card title={t('dashboard.platformTitle')} size="small" styles={{ body: { padding: 12 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <Card title={t('dashboard.platformTitle')} size="small" styles={{ body: { padding: 12, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%', display: 'flex', flexDirection: 'column' }}>
               {noData(platformBars) ? <EmptyHint text={t('dashboard.noData')} /> : <HBar items={platformBars} grid={fill} axis={token.colorTextSecondary} />}
             </Card>
           </Col>
           <Col xs={24} lg={8}>
-            <Card title={t('dashboard.groupTitle')} size="small" styles={{ body: { padding: 12 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <Card title={t('dashboard.groupTitle')} size="small" styles={{ body: { padding: 12, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%', display: 'flex', flexDirection: 'column' }}>
               {noData(groupBars) ? <EmptyHint text={t('dashboard.noData')} /> : <HBar items={groupBars} grid={fill} axis={token.colorTextSecondary} />}
             </Card>
           </Col>
           <Col xs={24} lg={8}>
-            <Card title={t('dashboard.countryTitle')} size="small" styles={{ body: { padding: 12 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+            <Card title={t('dashboard.countryTitle')} size="small" styles={{ body: { padding: 12, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%', display: 'flex', flexDirection: 'column' }}>
               {noData(countryBars) ? <EmptyHint text={t('dashboard.noData')} /> : <HBar items={countryBars} grid={fill} axis={token.colorTextSecondary} />}
             </Card>
           </Col>
@@ -292,8 +294,19 @@ export default function Dashboard() {
 }
 
 function EmptyHint({ text }: { text: string }) {
+  // 用主题 token 而非硬编码黑色：暗色模式下 rgba(0,0,0,0.35) 会看不见
+  const { token } = theme.useToken()
   return (
-    <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(0,0,0,0.35)' }}>
+    <div
+      style={{
+        minHeight: 200,
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: token.colorTextSecondary
+      }}
+    >
       {text}
     </div>
   )

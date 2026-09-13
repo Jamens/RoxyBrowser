@@ -331,21 +331,26 @@ export default function Settings() {
         </Form.Item>
         {backend === 'local' && (
           <>
-            <Space wrap size={12} style={{ display: 'flex' }}>
+            <Space wrap size={12}>
               <Form.Item name={['aiAgent', 'localModel']} label={t('aiAgent.localModel')} extra={t('aiAgent.localModelExtra')}>
                 <Input style={{ width: 220 }} placeholder="qwen2.5:7b" />
               </Form.Item>
               <Form.Item name={['aiAgent', 'localVisionModel']} label={t('aiAgent.visionModel')} extra={t('aiAgent.visionModelExtra')}>
                 <Input style={{ width: 220 }} placeholder="minicpm-v:latest" />
               </Form.Item>
+            </Space>
+            {/* 「检测连接」单独成行：放进上面那个 Space 里，窄窗口下换行后会紧贴下方的
+                「保存设置」，两个按钮上下挨在一起（见报障截图）。放进 Form.Item 以获得
+                与其它表单项一致的标准行距（上下各 24px）。 */}
+            <Form.Item>
               <Button loading={checking} onClick={checkAi}>
                 {t('aiAgent.check')}
               </Button>
-            </Space>
+            </Form.Item>
             {aiStatus && (
               <Typography.Paragraph
                 type={aiStatus.reachable && aiStatus.modelPulled ? 'success' : 'warning'}
-                style={{ marginTop: 8 }}
+                style={{ marginTop: 0 }}
               >
                 {!aiStatus.reachable
                   ? t('aiAgent.statusUnreachable')
