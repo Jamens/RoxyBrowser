@@ -25,8 +25,12 @@ contextBridge.exposeInMainWorld('roxy', {
   getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>,
   // ===== AI Agent 执行闭环（Route A）=====
   /** 启动一次矩阵运行（可驱动 N 个环境并发）：返回 { runId } 或 { error } */
-  agentStart: (payload: { envIds: number[]; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) =>
-    ipcRenderer.invoke('agent:start', payload) as Promise<{ runId?: string; error?: string }>,
+  agentStart: (payload: {
+    envIds: number[]
+    instruction: string
+    options?: { needApproval?: boolean; maxSteps?: number }
+    actor?: { userId: number; username: string }
+  }) => ipcRenderer.invoke('agent:start', payload) as Promise<{ runId?: string; error?: string }>,
   /** 中止整次矩阵运行（含所有子会话） */
   agentStop: (runId: string) => ipcRenderer.send('agent:stop', runId),
   /** 审批结果：针对某个具体环境放行（approved=true 继续，false 等同中止该环境） */

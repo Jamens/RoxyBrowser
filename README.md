@@ -219,6 +219,8 @@ curl -X POST http://127.0.0.1:39100/api/rpa/import \
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。
 
+**AI 执行同样记入日志**：每次 Agent 运行写一条「AI 执行开始」（指令 + 目标环境），每个环境结束各写一条「AI 执行完成 / 失败」（步数 + 结果 / 失败原因）。操作人为触发执行的登录用户，未取到时回落为 `ai-agent`；日志按目标环境所属团队隔离，不产生无归属的孤儿记录。
+
 ### 9. 自动化 API（v1）
 
 本地 HTTP API + 令牌鉴权，可对接调度器与脚本：
@@ -442,7 +444,9 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 - 模型适配层 `src/main/agent/ollama.ts`：`/api/tags` 连通探针 + `/api/chat` 对话，纯 `fetch` 零额外依赖；对话接口只携带最近 20 条历史（本地模型上下文有限）
 - 知识检索 `src/main/agent/knowledge.ts`：README 按标题切片（5 分钟缓存），中文 2-gram + 拉丁词打分取 top-6 片段拼入 system prompt，总长 ≤7000 字符
 - 接口：`POST /api/ai-agent/chat`（`mode: auto/chat/support`）、`GET /api/ai-agent/status`（探针）
-- 云端 BYOK（自带 Key）仅为可选兜底配置，当前版本尚未开放实际调用；Agent 执行闭环（看屏自动操作浏览器）规划中
+- 云端 BYOK（自带 Key）仅为可选兜底配置，当前版本尚未开放实际调用
+- **执行闭环**（看屏自动操作浏览器）：Route A「截图 + DOM → 本地视觉模型 → sendInputEvent」，支持**矩阵并行**（多选环境并发执行同一条指令）、执行完成后可把动作序列**存为 RPA 模板**离线回放；`session.ts` / `actions.ts` 带主进程 console 日志便于排查
+- **执行日志**：AI 执行的开始 / 完成 / 失败写入操作日志（见 §8），日志页可用 `AI 执行开始 / 完成 / 失败` 标签追溯每次运行的指令、环境与结果
 
 ## 目录结构
 

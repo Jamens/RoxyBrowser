@@ -119,6 +119,8 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
   const [ask, setAsk] = useState<{ envId: number; question: string } | null>(null)
   const [matrix, setMatrix] = useState<{ results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }[] } | null>(null)
   const [status, setStatus] = useState('')
+  // 当前登录用户：随执行一起传给主进程，用于把 AI 执行写进操作日志（归属到操作人）
+  const [actor, setActor] = useState<{ userId: number; username: string } | null>(null)
   // 资产化：每个环境运行结束后把归一化的 RPA 步骤存为可离线回放的模板
   const [saveForEnv, setSaveForEnv] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -136,6 +138,14 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
   useEffect(() => {
     loadEnvs()
   }, [loadEnvs])
+
+  // 拉取当前登录用户（操作日志的操作人），失败则留空、日志回落为 ai-agent
+  useEffect(() => {
+    api
+      .get<{ id: number; username: string }>('/api/auth/me')
+      .then((u) => setActor({ userId: u.id, username: u.username }))
+      .catch(() => {})
+  }, [])
 
   const envTitle = (id: number) => {
     const e = envs.find((x) => x.id === id)
@@ -200,7 +210,12 @@ function AgentPanel({ settings }: { settings: AppSettings }) {
     setSaveOpen(false)
     setSaveForEnv(null)
     setAsk(null)
-    const res = await window.roxy?.agentStart?.({ envIds, instruction: instruction.trim(), options: { needApproval } })
+    const res = await window.roxy?.agentStart?.({
+      envIds,
+      instruction: instruction.trim(),
+      options: { needApproval },
+      actor: actor || undefined
+    })
     if (!res) {
       setStatus(t('aiAgent.agent.noEnv'))
       return

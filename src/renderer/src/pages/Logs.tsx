@@ -19,7 +19,10 @@ const ACTION_COLORS: Record<string, string> = {
   create_account: 'green',
   add_member: 'purple',
   create_token: 'orange',
-  clone_template: 'geekblue'
+  clone_template: 'geekblue',
+  agent_start: 'purple',
+  agent_done: 'green',
+  agent_failed: 'red'
 }
 const ACTION_LABELS: Record<string, string> = {
   create_profile: '创建环境',
@@ -35,7 +38,10 @@ const ACTION_LABELS: Record<string, string> = {
   update_member: '修改成员',
   remove_member: '移除成员',
   create_token: '创建令牌',
-  clone_template: '套用模板'
+  clone_template: '套用模板',
+  agent_start: 'AI 执行开始',
+  agent_done: 'AI 执行完成',
+  agent_failed: 'AI 执行失败'
 }
 
 export default function Logs() {

@@ -19,7 +19,17 @@ export interface AgentStartPayload {
   envIds: number[]
   instruction: string
   options?: RunOptions
+  /** 触发者（当前登录用户），用于写操作日志；缺省时日志记为 ai-agent */
+  actor?: { userId: number; username: string }
 }
+
+/** 写 Agent 操作日志的注入依赖（由 server 提供，避免 agent 层直接依赖数据源） */
+export type WriteAgentLog = (input: {
+  profileId?: number
+  action: string
+  detail: string
+  actor?: { userId: number; username: string }
+}) => Promise<void>
 
 /** 单个子会话的运行态（按 envId 索引） */
 interface ChildRun {
@@ -40,6 +50,8 @@ interface MatrixRunState {
   children: Map<number, ChildRun>
   /** envId → 该环境的最终结果（done / failed 都会写入） */
   results: Record<number, { status: 'done' | 'failed'; result: string; rpaSteps?: RpaStep[] }>
+  /** 触发者，用于写操作日志 */
+  actor?: { userId: number; username: string }
 }
 
 export class AgentRunner {
@@ -49,6 +61,7 @@ export class AgentRunner {
     private deps: {
       getWindow: (id: number) => BrowserWindow | undefined
       getSettings: () => Promise<AppSettings>
+      writeAgentLog?: WriteAgentLog
     }
   ) {}
 
@@ -91,7 +104,8 @@ export class AgentRunner {
         aborted: false,
         opts: payload.options || {},
         children: new Map(),
-        results: {}
+        results: {},
+        actor: payload.actor
       }
       this.runs.set(runId, state)
 
@@ -127,6 +141,13 @@ export class AgentRunner {
 
   /** 逐批启动子会话（每批最多 MAX_CONCURRENT 个并发） */
   private async launchAll(state: MatrixRunState, envIds: number[], settings: AppSettings): Promise<void> {
+    // 整次矩阵运行落一条开始日志（teamId 取首个目标环境所属团队）
+    void this.deps.writeAgentLog?.({
+      profileId: envIds[0],
+      action: 'agent_start',
+      detail: `AI 执行开始：「${state.instruction}」· 目标环境 ${envIds.map((id) => `#${id}`).join('、')}`,
+      actor: state.actor
+    })
     const runOne = async (envId: number) => {
       if (state.aborted) return
       await this.launchOne(state, envId, settings)
@@ -142,9 +163,14 @@ export class AgentRunner {
   /** 启动单个环境的子会话，并把它的事件转发到渲染进程（统一带 envId + 父 runId） */
   private launchOne(state: MatrixRunState, envId: number, settings: AppSettings): Promise<void> {
     return new Promise<void>((resolve) => {
+      // 每个环境结束/失败各落一条日志，便于在日志页按环境追溯
+      const logEnv = (action: string, detail: string) => {
+        void this.deps.writeAgentLog?.({ profileId: envId, action, detail, actor: state.actor })
+      }
       const win = this.deps.getWindow(envId)
       if (!win || win.isDestroyed()) {
         state.results[envId] = { status: 'failed', result: '该环境窗口未运行，请先在「环境」列表打开它' }
+        logEnv('agent_failed', `AI 执行失败：「${state.instruction}」· 环境 #${envId} · 该环境窗口未运行`)
         resolve()
         return
       }
@@ -182,10 +208,15 @@ export class AgentRunner {
           needApproval: (p: { question: string }) => send('need-approval', p),
           done: (p: { result: string; rpaSteps?: RpaStep[] }) => {
             state.results[envId] = { status: 'done', result: p.result, rpaSteps: p.rpaSteps }
+            logEnv(
+              'agent_done',
+              `AI 执行完成：「${state.instruction}」· 环境 #${envId} · ${p.rpaSteps?.length || 0} 步 · ${p.result}`
+            )
             send('done', p)
           },
           error: (p: { error: string }) => {
             state.results[envId] = { status: 'failed', result: p.error }
+            logEnv('agent_failed', `AI 执行失败：「${state.instruction}」· 环境 #${envId} · ${p.error}`)
             send('error', p)
           }
         },

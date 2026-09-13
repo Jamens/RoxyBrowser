@@ -29,7 +29,12 @@ declare global {
         arch: string
       }>
       /** AI Agent 执行闭环：启动一次矩阵运行（可驱动 N 个环境并发），返回 { runId } 或 { error } */
-      agentStart: (payload: { envIds: number[]; instruction: string; options?: { needApproval?: boolean; maxSteps?: number } }) => Promise<{ runId?: string; error?: string }>
+      agentStart: (payload: {
+        envIds: number[]
+        instruction: string
+        options?: { needApproval?: boolean; maxSteps?: number }
+        actor?: { userId: number; username: string }
+      }) => Promise<{ runId?: string; error?: string }>
       /** 中止整次矩阵运行（含所有子会话） */
       agentStop: (runId: string) => void
       /** 审批结果：针对某个具体环境放行（approved=true 继续，false 等同中止该环境） */

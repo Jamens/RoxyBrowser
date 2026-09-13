@@ -174,6 +174,42 @@ async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
   )
 }
 
+/**
+ * AI Agent 执行日志：与 writeLog 同一张表，但没有 HTTP 请求上下文（Agent 由主进程 IPC 驱动，
+ * 拿不到 req.tid/req.uid）。teamId 取自目标环境所属团队；操作人由渲染进程传入当前登录用户，
+ * 缺省记为 0 / 'ai-agent'。
+ */
+export async function writeAgentLog(input: {
+  profileId?: number
+  action: string
+  detail: string
+  actor?: { userId: number; username: string }
+}): Promise<void> {
+  try {
+    if (!AppDataSource?.isInitialized) return
+    let teamId = 0
+    if (input.profileId) {
+      const p = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: input.profileId } })
+      teamId = p?.teamId || 0
+    }
+    // 无明确团队归属就不落库，避免出现 teamId=0 的孤儿日志
+    if (!teamId) return
+    const repo = AppDataSource.getRepository(OperationLogEntity)
+    await repo.save(
+      repo.create({
+        teamId,
+        userId: input.actor?.userId ?? 0,
+        username: input.actor?.username || 'ai-agent',
+        action: input.action,
+        detail: input.detail,
+        sensitive: isSensitiveAction(input.action)
+      })
+    )
+  } catch (e) {
+    console.error('[agent-log] 写入失败:', e instanceof Error ? e.message : e)
+  }
+}
+
 function mapProfile(p: ProfileEntity, groupName?: string | null, proxy?: ProxyEntity | null) {
   return {
     id: p.id,
