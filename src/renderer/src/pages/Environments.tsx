@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload
+  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined
+  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined
 } from '@ant-design/icons'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
@@ -122,8 +122,50 @@ export default function Environments() {
   const remove = async (id: number) => {
     try {
       await api.del(`/api/profiles/${id}`)
-      message.success('已删除')
+      message.success('已移入回收站（可恢复）')
       load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // ===== 回收站（软删除恢复 / 彻底删除）=====
+  const [trashOpen, setTrashOpen] = useState(false)
+  const [trashList, setTrashList] = useState<{ id: number; name: string; seq: number; platform: string; deletedAt: string }[]>([])
+  const [trashLoading, setTrashLoading] = useState(false)
+
+  const loadTrash = useCallback(async () => {
+    setTrashLoading(true)
+    try {
+      setTrashList(await api.get('/api/profiles/trash'))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTrashLoading(false)
+    }
+  }, [])
+
+  const openTrash = () => {
+    setTrashOpen(true)
+    loadTrash()
+  }
+
+  const restore = async (id: number) => {
+    try {
+      await api.post(`/api/profiles/${id}/restore`)
+      message.success('已恢复')
+      loadTrash()
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const purge = async (id: number) => {
+    try {
+      await api.del(`/api/profiles/${id}/purge`)
+      message.success('已彻底删除')
+      loadTrash()
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -349,7 +391,7 @@ export default function Environments() {
           <Tooltip title="复制环境（含账号资料迁移）">
             <Button size="small" icon={<CopyOutlined />} onClick={() => duplicate(r.id)} />
           </Tooltip>
-          <Popconfirm title="确定删除该环境？" onConfirm={() => remove(r.id)}>
+          <Popconfirm title="删除后进入回收站，可随时恢复。确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
@@ -426,6 +468,9 @@ export default function Environments() {
           </Button>
           <Button icon={<ReloadOutlined />} onClick={() => load()}>
             刷新
+          </Button>
+          <Button icon={<RestOutlined />} onClick={openTrash}>
+            回收站
           </Button>
           <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
             导入
@@ -516,6 +561,62 @@ export default function Environments() {
           onChange={(e) => setImportText(e.target.value)}
         />
       </Modal>
+
+      {/* 回收站：软删除的环境可恢复或彻底删除（彻底删除将清理关联账号与 Cookie） */}
+      <Drawer
+        title="回收站"
+        width={520}
+        open={trashOpen}
+        onClose={() => setTrashOpen(false)}
+      >
+        {trashLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}>
+            <ReloadOutlined spin style={{ fontSize: 20 }} />
+          </div>
+        ) : !trashList.length ? (
+          <Empty description="回收站是空的" />
+        ) : (
+          <Table
+            rowKey="id"
+            size="small"
+            dataSource={trashList}
+            pagination={false}
+            columns={[
+              { title: '环境', dataIndex: 'name', key: 'name', ellipsis: true },
+              { title: '平台', dataIndex: 'platform', key: 'platform', width: 90, ellipsis: true },
+              {
+                title: '删除时间',
+                dataIndex: 'deletedAt',
+                key: 'deletedAt',
+                width: 150,
+                render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm')
+              },
+              {
+                title: '操作',
+                key: 'actions',
+                width: 170,
+                render: (_: unknown, r: { id: number; name: string }) => (
+                  <Space>
+                    <Button size="small" icon={<UndoOutlined />} onClick={() => restore(r.id)}>
+                      恢复
+                    </Button>
+                    <Popconfirm
+                      title="彻底删除不可恢复"
+                      description={`将同时删除「${r.name}」关联的账号与 Cookie，确定？`}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => purge(r.id)}
+                    >
+                      <Button size="small" danger icon={<DeleteOutlined />}>
+                        彻底删除
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                )
+              }
+            ]}
+          />
+        )}
+      </Drawer>
     </div>
   )
 }

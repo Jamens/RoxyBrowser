@@ -220,6 +220,10 @@ export class ProfileEntity {
 
   @UpdateDateColumn({ type: 'datetime' })
   updatedAt: Date
+
+  // 软删除时间：null = 正常；非 null = 已进回收站（到期自动清理可后续加定时任务）
+  @Column({ type: 'datetime', nullable: true })
+  deletedAt: Date | null
 }
 
 @Entity('cookies')

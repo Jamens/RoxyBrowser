@@ -9,7 +9,7 @@ import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import mysql from 'mysql2/promise'
-import { DataSource, In } from 'typeorm'
+import { DataSource, In, IsNull } from 'typeorm'
 import { HttpProxyAgent } from 'http-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { SocksProxyAgent } from 'socks-proxy-agent'
@@ -791,6 +791,8 @@ function buildApiRouter(): express.Router {
       .createQueryBuilder('p')
       .where('p.teamId = :tid', { tid: req.tid })
       .andWhere('p.isTemplate = :tpl', { tpl: isTemplate ? 1 : 0 })
+      // 回收站（软删除）的环境不出现在常规列表；templates 查询同样排除
+      .andWhere('p.deletedAt IS NULL')
       .orderBy('p.seq', 'ASC')
     if (req.query.groupId) qb.andWhere('p.groupId = :gid', { gid: Number(req.query.groupId) })
     if (req.query.keyword) qb.andWhere('(p.name LIKE :kw OR p.remark LIKE :kw OR p.platform LIKE :kw)', { kw: `%${req.query.keyword}%` })
@@ -818,7 +820,11 @@ function buildApiRouter(): express.Router {
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0)
-    const qb = repo.createQueryBuilder('p').where('p.teamId = :tid', { tid }).andWhere('p.isTemplate = 0')
+    const qb = repo
+      .createQueryBuilder('p')
+      .where('p.teamId = :tid', { tid })
+      .andWhere('p.isTemplate = 0')
+      .andWhere('p.deletedAt IS NULL')
     if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
     ownerAndWhere(qb, req)
     const list = await qb.orderBy('p.seq', 'ASC').getMany()
@@ -884,6 +890,57 @@ function buildApiRouter(): express.Router {
     await writeLog(req, 'quick_create_profile', `快速创建环境「${p.name}」(#${p.id})`)
     res.json(mapProfile(p))
   })
+  // ===== 回收站（软删除）：列表 / 恢复 / 彻底删除 =====
+  // 注意路由顺序：静态段 /trash 必须排在参数段 /:id 之前
+  router.get('/profiles/trash', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const qb = repo
+      .createQueryBuilder('p')
+      .where('p.teamId = :tid', { tid: req.tid })
+      .andWhere('p.isTemplate = 0')
+      .andWhere('p.deletedAt IS NOT NULL')
+      .orderBy('p.deletedAt', 'DESC')
+    ownerAndWhere(qb, req)
+    const list = await qb.getMany()
+    res.json(
+      list.map((p) => ({
+        id: p.id,
+        name: p.name,
+        seq: p.seq,
+        platform: p.platform,
+        proxyId: p.proxyId,
+        deletedAt: p.deletedAt
+      }))
+    )
+  })
+
+  router.post('/profiles/:id/restore', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (!p.deletedAt) return res.status(400).json({ message: '该环境不在回收站中' })
+    p.deletedAt = null
+    await repo.save(p)
+    await writeLog(req, 'restore_profile', `从回收站恢复环境「${p.name}」(#${p.id})`)
+    res.json({ ok: true })
+  })
+
+  router.delete('/profiles/:id/purge', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (!p.deletedAt) return res.status(400).json({ message: '仅回收站中的环境可彻底删除' })
+    if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口' })
+    // 彻底删除：级联清理关联账号与 Cookie，并把绑定该代理的其他环境解绑（沿用旧删除语义）
+    await repo.remove(p)
+    const accRepo = AppDataSource.getRepository(AccountEntity)
+    await accRepo.delete({ profileId: p.id })
+    const cookieRepo = AppDataSource.getRepository(CookieEntity)
+    await cookieRepo.delete({ profileId: p.id })
+    await writeLog(req, 'purge_profile', `彻底删除环境「${p.name}」(#${p.id})（含账号与 Cookie）`)
+    res.json({ ok: true })
+  })
+
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
@@ -1037,17 +1094,18 @@ function buildApiRouter(): express.Router {
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口' })
-    await repo.remove(p)
-    const accRepo = AppDataSource.getRepository(AccountEntity)
-    await accRepo.delete({ profileId: p.id })
-    await writeLog(req, 'delete_profile', `删除环境「${p.name}」(#${p.id})`)
-    res.json({ ok: true })
+    // 软删除：进回收站，关联账号 / Cookie 原样保留，恢复即完整还原
+    p.deletedAt = new Date()
+    await repo.save(p)
+    await writeLog(req, 'delete_profile', `删除环境「${p.name}」(#${p.id})（已进回收站）`)
+    res.json({ ok: true, trashed: true })
   })
 
   router.post('/profiles/:id/open', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
     if (p.status === 'running') return res.status(400).json({ message: '窗口已在运行中' })
     if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
     try {
@@ -1941,7 +1999,8 @@ function buildApiRouter(): express.Router {
 
   v1.get('/profiles', async (req: Request, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
-    const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid, isTemplate: false } })
+    // 排除回收站中的环境（软删除）：TypeORM 需显式用 IsNull() 表达 IS NULL
+    const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid, isTemplate: false, deletedAt: IsNull() } })
     res.json({ code: 0, data: list.map((p) => ({ id: p.id, name: p.name, seq: p.seq, status: p.status })) })
   })
 
