@@ -508,6 +508,7 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 - 原子动作：`click` / `type` / `navigate` / `scroll` / `wait` / `finish` / `ask`。其中 **`navigate`** 由主进程直接 `webContents.loadURL` 打开目标网址（与 `BrowserTab.go → env-navigate` 同一底层），用于「打开某网站 / 搜索某词」时直接跳转，避免弱视觉模型在地址栏里输入失败；system prompt 同时约束「指令未完成不得提前 finish」，所以环境窗口不会停在预设起始页不动作
 - **执行日志**：AI 执行的开始 / 完成 / 失败写入操作日志（见 §8），日志页可用 `AI 执行开始 / 完成 / 失败` 标签追溯每次运行的指令、环境与结果
 - **对话态跨页保活**：对话内容、输入框残值、当前标签页（自动 / 对话 / 客服 / 执行）通过模块级 `src/renderer/src/agentChatStore.ts`（`useSyncExternalStore` 单例）持久化。切到其它页面再切回不会清空对话，也不会回落到默认的「自动」标签，停留在离开前的标签继续对话（提交 `45171b4`）
+- **AI 定时自动化**：把执行闭环升级为无人值守的定时任务。设置页「AI 定时自动化」可增删改多条任务（自然语言指令 + 目标环境 + 触发间隔 + 单次最大步数 + 沉淀 RPA 开关），`AgentRunner.startAutoTaskScheduler()` 每 60s 重读 `AppSettings.aiAutoTasks` 按 `intervalMin` 去抖触发；触发时复用 `agent:start` 同款视觉预检、仅驱动运行态环境（未运行自动跳过、绝不自动开窗），跑完若开启「沉淀为 RPA 模板」则把动作序列（`rpaSteps`）落库为新的 RPA 脚本（默认关闭定时）供离线零 token 回放。调度与执行逻辑集中在 `src/main/agent/runner.ts` 的 `runScheduledTask()` / `tickAutoTasks()`，RPA 落库走 `server.ts` 的 `saveRpaFromSteps()`（按源环境取团队 / 创建者）。
 
 ## 运行时验证（真实窗口 E2E）
 

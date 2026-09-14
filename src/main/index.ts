@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, session } from 'electron'
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
-import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings, writeAgentLog } from './server'
+import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings, writeAgentLog, saveRpaFromSteps } from './server'
 import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint } from './browserManager'
 import { AgentRunner } from './agent/runner'
 
@@ -66,8 +66,10 @@ ipcMain.handle('app:get-versions', () => ({
   arch: process.arch
 }))
 
-// ===== AI Agent 执行闭环（Route A）：注册 agent:start/stop/approve IPC =====
-new AgentRunner({ getWindow, getSettings, writeAgentLog }).registerIpc()
+// ===== AI Agent 执行闭环（Route A）：注册 agent:start/stop/approve IPC + 定时自动化调度 =====
+const agentRunner = new AgentRunner({ getWindow, getSettings, writeAgentLog, saveRpaScript: saveRpaFromSteps })
+agentRunner.registerIpc()
+agentRunner.startAutoTaskScheduler()
 
 function trayIconPath(): string {
   // 主进程从 out/main 运行，按不同打包形态依序探测图标位置

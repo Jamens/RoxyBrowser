@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
 import { readTextFile } from '../utils/download'
-import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings, type AiAutoTask } from '@shared/types'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
@@ -47,6 +47,44 @@ export default function Settings() {
   const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string } | null>(null)
   const [checking, setChecking] = useState(false)
   const { t, setLocale } = useI18n()
+
+  // AI 定时自动化：任务列表管理与编辑
+  const [profiles, setProfiles] = useState<{ id: number; name: string }[]>([])
+  const [editing, setEditing] = useState<{ index: number; open: boolean } | null>(null)
+  const [taskForm] = Form.useForm<AiAutoTask>()
+  useEffect(() => {
+    api
+      .get<{ id: number; name: string }[]>('/api/profiles')
+      .then((p) => setProfiles(Array.isArray(p) ? p : []))
+      .catch(() => {})
+  }, [])
+
+  const genTaskId = () => `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+
+  const openTaskEditor = (index: number) => {
+    const task = (form.getFieldValue(['aiAutoTasks', index]) as AiAutoTask) || {
+      id: genTaskId(),
+      name: '',
+      instruction: '',
+      envIds: [],
+      intervalMin: 60,
+      enabled: true,
+      saveRpa: true,
+      maxSteps: 0
+    }
+    taskForm.setFieldsValue(task)
+    setEditing({ index, open: true })
+  }
+
+  const onTaskOk = async () => {
+    try {
+      const v = await taskForm.validateFields()
+      if (editing) form.setFieldValue(['aiAutoTasks', editing.index], v)
+      setEditing(null)
+    } catch {
+      /* 校验未通过，保持弹窗 */
+    }
+  }
 
   // 让「当地时间 / UTC 偏移 / 是否夏令时」每 30 秒自刷新一次
   const [now, setNow] = useState(() => new Date())
@@ -453,6 +491,102 @@ export default function Settings() {
         <Form.Item name="snapshotBackupIntervalH" label={t('snapshot.backupInterval')} extra={t('snapshot.backupIntervalExtra')} rules={[{ required: true }]}>
           <InputNumber min={1} max={8760} addonAfter={t('common.hours')} style={{ width: 180 }} />
         </Form.Item>
+
+        <Divider>{t('aiAuto.section')}</Divider>
+        <Typography.Paragraph type="secondary">{t('aiAuto.desc')}</Typography.Paragraph>
+        <Form.List name="aiAutoTasks">
+          {(_fields, { add, remove }) => (
+              <>
+                {_fields.length === 0 && (
+                  <Typography.Paragraph type="secondary">{t('aiAuto.noTasks')}</Typography.Paragraph>
+                )}
+                {_fields.map((field) => {
+                  const task = (form.getFieldValue(['aiAutoTasks', field.name]) as AiAutoTask) || ({} as AiAutoTask)
+                  return (
+                    <Card
+                      key={field.key}
+                      size="small"
+                      style={{ marginBottom: 12 }}
+                      title={task.name || t('aiAuto.untitled')}
+                      extra={
+                        <Space>
+                          <Tag color={task.enabled ? 'green' : 'default'}>{task.enabled ? t('aiAuto.enabled') : t('aiAuto.disabled')}</Tag>
+                          <Button size="small" icon={<EditOutlined />} onClick={() => openTaskEditor(field.name)}>
+                            {t('aiAuto.edit')}
+                          </Button>
+                          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                        </Space>
+                      }
+                    >
+                      <Typography.Paragraph type="secondary" style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
+                        {task.instruction || '-'}
+                      </Typography.Paragraph>
+                      <Space size="small" wrap>
+                        <Tag>{t('aiAuto.envCount', { n: task.envIds?.length || 0 })}</Tag>
+                        <Tag>{t('aiAuto.interval', { n: task.intervalMin || 0 })}</Tag>
+                        {task.saveRpa && <Tag color="blue">{t('aiAuto.saveRpa')}</Tag>}
+                      </Space>
+                    </Card>
+                  )
+                })}
+                <Button
+                  type="dashed"
+                  block
+                  icon={<PlusOutlined />}
+                  onClick={() =>
+                    add({ id: genTaskId(), name: '', instruction: '', envIds: [], intervalMin: 60, enabled: true, saveRpa: true, maxSteps: 0 })
+                  }
+                >
+                  {t('aiAuto.add')}
+                </Button>
+              </>
+            )}
+          </Form.List>
+        <Typography.Paragraph type="warning" style={{ marginTop: 12, marginBottom: 0 }}>
+          {t('aiAuto.notRunningHint')}
+        </Typography.Paragraph>
+
+        <Modal
+          open={!!editing?.open}
+          title={t('aiAuto.edit')}
+          okText={t('settings.save')}
+          onOk={onTaskOk}
+          onCancel={() => setEditing(null)}
+        >
+          <Form form={taskForm} layout="vertical">
+            <Form.Item name="name" label={t('aiAuto.name')} rules={[{ required: true }]}>
+              <Input placeholder={t('aiAuto.name')} />
+            </Form.Item>
+            <Form.Item name="instruction" label={t('aiAuto.instruction')} rules={[{ required: true }]}>
+              <Input.TextArea rows={3} placeholder={t('aiAuto.instructionPlaceholder')} />
+            </Form.Item>
+            <Form.Item name="envIds" label={t('aiAuto.envIds')}>
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder={t('aiAuto.envIds')}
+                style={{ width: '100%' }}
+                options={profiles.map((p) => ({ value: p.id, label: `#${p.id} ${p.name}` }))}
+              />
+            </Form.Item>
+            <Space wrap size="large">
+              <Form.Item name="intervalMin" label={t('aiAuto.intervalMin')} rules={[{ required: true }]}>
+                <InputNumber min={1} max={10080} addonAfter={t('common.minutes')} style={{ width: 180 }} />
+              </Form.Item>
+              <Form.Item name="maxSteps" label={t('aiAuto.maxSteps')} extra={t('aiAuto.maxStepsExtra')}>
+                <InputNumber min={0} max={100} style={{ width: 140 }} />
+              </Form.Item>
+            </Space>
+            <Space wrap size="large">
+              <Form.Item name="enabled" label={t('aiAuto.enabled')} valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item name="saveRpa" label={t('aiAuto.saveRpa')} valuePropName="checked" extra={t('aiAuto.saveRpaExtra')}>
+                <Switch />
+              </Form.Item>
+            </Space>
+          </Form>
+        </Modal>
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

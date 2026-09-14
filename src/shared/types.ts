@@ -340,6 +340,28 @@ export type AgentAction =
   | { thought: string; action: 'finish' }
   | { thought: string; action: 'ask'; question?: string }
 
+// ===== AI 定时自动化任务 =====
+// 自然语言指令 + 定时触发 agent 闭环：调度器按 intervalMin 触发，仅驱动运行态环境（未运行自动跳过，绝不自动开窗）；
+// 跑完后若 saveRpa=true，则把动作序列沉淀为 RPA 模板，下次可离线回放（零 token）。
+export interface AiAutoTask {
+  /** 稳定 id（前端生成），用于调度器去抖，避免同一条任务被重复触发 */
+  id: string
+  /** 任务名（展示用） */
+  name: string
+  /** 自然语言执行指令 */
+  instruction: string
+  /** 目标环境 id 列表（仅运行态会被驱动） */
+  envIds: number[]
+  /** 触发间隔（分钟），最小 1 */
+  intervalMin: number
+  /** 是否启用 */
+  enabled: boolean
+  /** 跑完是否把动作序列沉淀为 RPA 模板 */
+  saveRpa: boolean
+  /** 单次最大步数（0 = 跟随全局默认 maxStepsPerRun） */
+  maxSteps: number
+}
+
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
   // 新建环境随机指纹时的默认操作系统
@@ -383,6 +405,8 @@ export interface AppSettings {
   snapshotBackupDir: string
   // 备份间隔（小时），最小 1，默认 24
   snapshotBackupIntervalH: number
+  // AI 定时自动化任务列表（自然语言指令 + 定时触发 agent 闭环 + 跑完沉淀 RPA 模板）
+  aiAutoTasks: AiAutoTask[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -420,5 +444,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   snapshotBackupEnabled: false,
   snapshotBackupDir: '',
-  snapshotBackupIntervalH: 24
+  snapshotBackupIntervalH: 24,
+  aiAutoTasks: []
 }

@@ -225,6 +225,33 @@ export async function writeAgentLog(input: {
   }
 }
 
+// 把 agent 执行闭环跑出的动作序列落库为 RPA 脚本（零 token 离线回放），供 AI 定时自动化调用。
+// 脚本默认关闭定时（避免沉淀出来的模板又被自动调度），归属取源环境的团队与创建者。
+export async function saveRpaFromSteps(input: {
+  sourceEnvId: number
+  name: string
+  steps: RpaStep[]
+  instruction?: string
+}): Promise<{ id: number; name: string }> {
+  const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: input.sourceEnvId } })
+  if (!profile) throw new Error(`环境 #${input.sourceEnvId} 不存在`)
+  const repo = AppDataSource.getRepository(RpaScriptEntity)
+  const saved = await repo.save(
+    repo.create({
+      teamId: profile.teamId,
+      ownerId: profile.ownerId ?? 0,
+      name: String(input.name).slice(0, 128),
+      remark: `由 AI 定时任务沉淀 · 源指令：${(input.instruction || '').slice(0, 480)}`,
+      steps: input.steps as Record<string, unknown>[],
+      variables: null,
+      scheduleEnabled: false,
+      scheduleIntervalMin: 30,
+      scheduleProfileId: null
+    })
+  )
+  return { id: saved.id, name: saved.name }
+}
+
 function mapProfile(p: ProfileEntity, groupName?: string | null, proxy?: ProxyEntity | null) {
   return {
     id: p.id,

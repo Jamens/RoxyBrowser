@@ -291,7 +291,27 @@ const zhCN = {
   'snapshot.backupDirExtra': '本地已存在的可写目录（绝对路径）。目录不存在或不可写时备份会被跳过。',
   'snapshot.backupDirPlaceholder': '例如 D:\\roxy-backup 或 /Users/you/roxy-backup',
   'snapshot.backupInterval': '备份间隔（小时）',
-  'snapshot.backupIntervalExtra': '每隔多少小时执行一次全空间快照备份，最小 1 小时。'
+  'snapshot.backupIntervalExtra': '每隔多少小时执行一次全空间快照备份，最小 1 小时。',
+  'aiAuto.section': 'AI 定时自动化',
+  'aiAuto.desc': '用自然语言指令 + 定时触发 AI Agent 在运行态环境自动执行；跑完可将动作序列沉淀为 RPA 模板，下次离线零 token 回放。',
+  'aiAuto.add': '新增定时任务',
+  'aiAuto.edit': '编辑',
+  'aiAuto.enabled': '启用',
+  'aiAuto.disabled': '停用',
+  'aiAuto.untitled': '未命名任务',
+  'aiAuto.name': '任务名',
+  'aiAuto.instruction': '执行指令',
+  'aiAuto.instructionPlaceholder': '例如：打开 Bing，搜索“RoxyBrowser”，打开第一个结果',
+  'aiAuto.envIds': '目标环境（可多选）',
+  'aiAuto.envCount': '目标环境 {n} 个',
+  'aiAuto.interval': '间隔 {n} 分钟',
+  'aiAuto.intervalMin': '触发间隔（分钟）',
+  'aiAuto.saveRpa': '沉淀为 RPA 模板',
+  'aiAuto.saveRpaExtra': '跑完后把动作序列存为 RPA 模板，下次可离线回放（零 token）',
+  'aiAuto.maxSteps': '单次最大步数',
+  'aiAuto.maxStepsExtra': '0 = 跟随全局默认（设置 → AI Agent）',
+  'aiAuto.noTasks': '还没有定时任务，点「新增定时任务」创建一个。',
+  'aiAuto.notRunningHint': '注意：仅运行态的环境会被驱动；未打开的环境自动跳过，绝不自动开窗。'
 }
 
 export type MessageDict = typeof zhCN
@@ -580,7 +600,27 @@ const enUS: MessageDict = {
   'snapshot.backupDirExtra': 'An existing writable local directory (absolute path). Backups are skipped if the directory is missing or not writable.',
   'snapshot.backupDirPlaceholder': 'e.g. D:\\roxy-backup or /Users/you/roxy-backup',
   'snapshot.backupInterval': 'Backup interval (hours)',
-  'snapshot.backupIntervalExtra': 'How often to run a full-space snapshot backup, minimum 1 hour.'
+  'snapshot.backupIntervalExtra': 'How often to run a full-space snapshot backup, minimum 1 hour.',
+  'aiAuto.section': 'AI Scheduled Automation',
+  'aiAuto.desc': 'Trigger the AI Agent on a schedule with natural-language instructions on running environments; after a run, the action sequence can be saved as an RPA template for offline replay (zero token) next time.',
+  'aiAuto.add': 'New scheduled task',
+  'aiAuto.edit': 'Edit',
+  'aiAuto.enabled': 'Enabled',
+  'aiAuto.disabled': 'Disabled',
+  'aiAuto.untitled': 'Untitled task',
+  'aiAuto.name': 'Task name',
+  'aiAuto.instruction': 'Instruction',
+  'aiAuto.instructionPlaceholder': 'e.g. Open Bing, search "RoxyBrowser", open the first result',
+  'aiAuto.envIds': 'Target environments (multi-select)',
+  'aiAuto.envCount': '{n} target environment(s)',
+  'aiAuto.interval': 'Every {n} min',
+  'aiAuto.intervalMin': 'Trigger interval (minutes)',
+  'aiAuto.saveRpa': 'Save as RPA template',
+  'aiAuto.saveRpaExtra': 'After a run, store the action sequence as an RPA template for offline replay (zero token).',
+  'aiAuto.maxSteps': 'Max steps per run',
+  'aiAuto.maxStepsExtra': '0 = follow the global default (Settings → AI Agent)',
+  'aiAuto.noTasks': 'No scheduled tasks yet. Click "New scheduled task" to create one.',
+  'aiAuto.notRunningHint': 'Note: only running environments are driven; environments that are not open are skipped automatically — windows are never opened automatically.'
 }
 
 const jaJP: MessageDict = {
@@ -867,7 +907,27 @@ const jaJP: MessageDict = {
   'snapshot.backupDirExtra': '存在し書き込み可能なローカルディレクトリ（絶対パス）。存在しない・書き込めない場合はスキップされます。',
   'snapshot.backupDirPlaceholder': '例：D:\\roxy-backup または /Users/you/roxy-backup',
   'snapshot.backupInterval': 'バックアップ間隔（時間）',
-  'snapshot.backupIntervalExtra': '全空間スナップショットを実行する間隔（最小 1 時間）。'
+  'snapshot.backupIntervalExtra': '全空間スナップショットを実行する間隔（最小 1 時間）。',
+  'aiAuto.section': 'AI 定期自動化',
+  'aiAuto.desc': '自然言語の指示で、実行中の環境に対して AI Agent を定期実行します。実行後は動作系列を RPA テンプレートとして保存でき、次回はオフラインでトークン無料に再生できます。',
+  'aiAuto.add': '定期タスクを追加',
+  'aiAuto.edit': '編集',
+  'aiAuto.enabled': '有効',
+  'aiAuto.disabled': '無効',
+  'aiAuto.untitled': '名称未設定のタスク',
+  'aiAuto.name': 'タスク名',
+  'aiAuto.instruction': '実行指示',
+  'aiAuto.instructionPlaceholder': '例：Bing を開き「RoxyBrowser」を検索し、最初の結果を開く',
+  'aiAuto.envIds': '対象環境（複数選択可）',
+  'aiAuto.envCount': '対象環境 {n} 件',
+  'aiAuto.interval': '間隔 {n} 分',
+  'aiAuto.intervalMin': '実行間隔（分）',
+  'aiAuto.saveRpa': 'RPA テンプレートとして保存',
+  'aiAuto.saveRpaExtra': '実行後に動作系列を RPA テンプレートとして保存し、次回はオフライン再生（トークン無料）できます。',
+  'aiAuto.maxSteps': '1回の最大ステップ数',
+  'aiAuto.maxStepsExtra': '0 = 全体デフォルトに従う（設定 → AI Agent）',
+  'aiAuto.noTasks': '定期タスクはまだありません。「定期タスクを追加」で作成してください。',
+  'aiAuto.notRunningHint': '注意：実行中の環境のみ駆動されます。開いていない環境は自動でスキップされ、ウィンドウが勝手に開くことはありません。'
 }
 
 const deDE: MessageDict = {
@@ -1156,7 +1216,27 @@ const deDE: MessageDict = {
   'snapshot.backupDirExtra': 'Ein vorhandenes, beschreibbares lokales Verzeichnis (absoluter Pfad). Fehlt es oder ist es nicht beschreibbar, wird die Sicherung übersprungen.',
   'snapshot.backupDirPlaceholder': 'z. B. D:\\roxy-backup oder /Users/you/roxy-backup',
   'snapshot.backupInterval': 'Sicherungsintervall (Stunden)',
-  'snapshot.backupIntervalExtra': 'Wie oft ein vollständiger Bereichs-Snapshot erstellt wird, mindestens 1 Stunde.'
+  'snapshot.backupIntervalExtra': 'Wie oft ein vollständiger Bereichs-Snapshot erstellt wird, mindestens 1 Stunde.',
+  'aiAuto.section': 'KI-zeitgesteuerte Automatisierung',
+  'aiAuto.desc': 'Löst den KI-Agenten zeitgesteuert mit natürlichsprachigen Anweisungen auf laufenden Umgebungen aus; nach einem Lauf kann die Aktionsfolge als RPA-Vorlage für die offline Wiedergabe (tokenfrei) gespeichert werden.',
+  'aiAuto.add': 'Neue zeitgesteuerte Aufgabe',
+  'aiAuto.edit': 'Bearbeiten',
+  'aiAuto.enabled': 'Aktiv',
+  'aiAuto.disabled': 'Inaktiv',
+  'aiAuto.untitled': 'Unbenannte Aufgabe',
+  'aiAuto.name': 'Aufgabenname',
+  'aiAuto.instruction': 'Anweisung',
+  'aiAuto.instructionPlaceholder': 'z. B. Bing öffnen, „RoxyBrowser“ suchen, erstes Ergebnis öffnen',
+  'aiAuto.envIds': 'Zielumgebungen (Mehrfachauswahl)',
+  'aiAuto.envCount': '{n} Zielumgebung(en)',
+  'aiAuto.interval': 'Alle {n} Min',
+  'aiAuto.intervalMin': 'Auslöseintervall (Minuten)',
+  'aiAuto.saveRpa': 'Als RPA-Vorlage speichern',
+  'aiAuto.saveRpaExtra': 'Nach einem Lauf die Aktionsfolge als RPA-Vorlage für die offline Wiedergabe (tokenfrei) speichern.',
+  'aiAuto.maxSteps': 'Max. Schritte pro Lauf',
+  'aiAuto.maxStepsExtra': '0 = globaler Standard (Einstellungen → AI Agent)',
+  'aiAuto.noTasks': 'Noch keine zeitgesteuerten Aufgaben. Klicken Sie auf „Neue zeitgesteuerte Aufgabe“.',
+  'aiAuto.notRunningHint': 'Hinweis: Nur laufende Umgebungen werden angesteuert; nicht geöffnete Umgebungen werden automatisch übersprungen – Fenster werden nie automatisch geöffnet.'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

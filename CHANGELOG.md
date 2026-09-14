@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-15 · AI 定时自动化（自然语言指令 + 定时触发 + 沉淀 RPA）
+
+### 新增
+
+- **AI 定时自动化**（`#109`，缝合 FEATURES §13 执行闭环 与 §7.3 RPA 定时调度）：设置页「AI 定时自动化」分区可增删改多条定时任务——自然语言指令 + 目标环境（多选）+ 触发间隔（分钟）+ 单次最大步数 + 启用 + 「沉淀为 RPA 模板」开关。
+  - 调度器 `AgentRunner.startAutoTaskScheduler()`（`src/main/agent/runner.ts`）每 60s 重读 `AppSettings.aiAutoTasks`，按 `intervalMin` 去抖触发；保存设置后即时生效，无需重启。
+  - 程序化触发路径 `runScheduledTask()`：复用 `agent:start` 同款视觉模型预检（本地 Ollama / 云端 BYOK），仅驱动**运行态**环境，未运行自动跳过并写日志——**绝不自动开窗**（与 RPA 定时调度同一约定）；后台静默执行不抢焦点（`focusWindow=false` + 空 sink 丢弃 UI 事件）。
+  - 跑完沉淀：任务开启「沉淀为 RPA 模板」后，每个环境跑完的动作序列（`rpaSteps`）经注入的 `saveRpaScript`（`server.ts` 的 `saveRpaFromSteps()`）落库为新的 RPA 脚本（默认关闭定时，归属取源环境的团队 / 创建者），下次用 RPA 离线回放零 token。
+  - 设置项（JSON 单列 `app_settings`）：`aiAutoTasks: AiAutoTask[]`（默认 `[]`），`AiAutoTask` 结构（`id/name/instruction/envIds/intervalMin/enabled/saveRpa/maxSteps`）定义在 `src/shared/types.ts` 并并入 `DEFAULT_SETTINGS`。
+  - 前端：设置页新增「AI 定时自动化」分区（任务卡片列表 + 编辑弹窗 + 环境多选，读取 `/api/profiles`），四语 i18n（`aiAuto.*`）。
+
 ## 2026-09-15 · 全空间快照新增「定时自动备份」（本地目录轮转）
 
 ### 新增
