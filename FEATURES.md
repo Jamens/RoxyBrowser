@@ -72,6 +72,29 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 
 > 与 `POST /api/profiles/:id/duplicate`（单个复制、**指纹原样**）的区别就在微抖动：批量开号用本接口，单环境资料迁移用前者。
 
+### 1.3 全空间快照（团队整体打包 / 迁移）
+
+把整个团队空间打包成单个 JSON 一键备份 / 迁移，解决「换机器 / 重装 / 整机迁移」时逐模块导出的繁琐与易漏。
+
+- **内容范围**：环境（整环境结构，含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名引用）+ 代理池（结构化，保留国家 / 地区 / 到期等元信息）+ RPA 脚本 + 扩展元数据引用。
+- **导出**：`GET /api/snapshot/export` → 直接下载 `.json`（文件名含团队 id 与时间戳）。
+- **导入**：`POST /api/snapshot/import`，body 为快照 JSON → `{ profiles, proxiesCreated, proxiesSkipped, rpaCreated, extensionsReferenced }`。
+- **复用既有导入器**：导出 / 导入直接复用 `src/main/exporters.ts` 中「整环境迁移 / 代理批量 / RPA」各模块的既有逻辑，保证单模块迁移与整团队迁移同源、字段一致。
+- **导入顺序**：先恢复代理池（按名称复用，缺失则新建）→ 再导入环境（引用同名代理）→ 最后导入 RPA（定时配置重置为关闭）。扩展按名称重映射，目标缺同名扩展则忽略引用。
+- **校验**：导入前用 `validateSnapshot()`（`src/shared/snapshot.ts`，纯函数）严格校验 `format` / `version` / `profiles[]`，非法文件直接 400 拒绝，不污染数据库。
+
+```bash
+# 导出当前团队快照
+curl -H "Authorization: Bearer <会话令牌>" http://127.0.0.1:39100/api/snapshot/export -o roxy-snapshot.json
+
+# 新机器一键灌入
+curl -X POST http://127.0.0.1:39100/api/snapshot/import \
+  -H "Authorization: Bearer <会话令牌>" -H "Content-Type: application/json" \
+  -d @roxy-snapshot.json
+```
+
+> 扩展实际文件（`.crx` / 目录）不进快照（无法序列化），仅记录名称用于还原时按名重映射；如有同名扩展则自动挂回，否则忽略该引用。
+
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：
