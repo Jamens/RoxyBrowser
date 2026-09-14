@@ -42,6 +42,36 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d @roxy-profile-12.json
 ```
 
+### 1.2 环境克隆工厂（批量派生 · 行为一致 / 指纹各异）
+
+以某个环境为母本一键派生 N 个副本，用于「再开 N 个一样的号」这类批量开号场景。
+
+**为什么不能原样复制指纹**：原样复制会让 N 个号共用同一套设备特征（分辨率 / CPU / 内存 / 显卡 / 字体全同），平台一比对即判定为同一批设备。因此 `deriveJitteredFingerprint()`（`src/shared/fingerprint.ts`）把字段分成两类：
+
+| 类别 | 字段 | 理由 |
+| -- | -- | -- |
+| **保持**（行为一致） | 系统、UA / UA 版本、平台、语言、时区、时区偏移、DoNotTrack、WebRTC 策略、触摸、像素比、噪声开关 | 决定「像不像同一类用户」，共享才有批量运营的意义 |
+| **抖动**（指纹各异） | 分辨率、CPU 核数、内存、显卡（Vendor / Renderer）、字体列表 | 设备指纹的高区分度项，各副本互不相同 |
+
+Canvas / Audio 噪声无需额外处理——preload 的噪声种子由 `profileId` 派生（`seed = profileId * 2654435761`），新建环境拿到新 id，噪声天然互不相同。
+
+**接口**：`POST /api/profiles/:id/duplicate-batch`，body `{ count: number(1–50), namePrefix?: string, copyAccounts?: boolean }` → `{ created, items: [{ id, name }] }`。
+
+**边界**：
+
+- 不复制 **Cookie**——登录态复制过去等于主动制造关联；
+- 不继承代理绑定（`proxyId` 置空），需另行从 IP 池分配；
+- 账号资料默认不复制，可显式传 `copyAccounts: true`；
+- 模板环境（`isTemplate`）拒绝克隆；数量上限 50。
+
+```bash
+curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
+  -H "Authorization: Bearer <会话令牌>" -H "Content-Type: application/json" \
+  -d '{"count":10,"namePrefix":"美区店铺","copyAccounts":false}'
+```
+
+> 与 `POST /api/profiles/:id/duplicate`（单个复制、**指纹原样**）的区别就在微抖动：批量开号用本接口，单环境资料迁移用前者。
+
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：

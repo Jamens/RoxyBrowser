@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress
+  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import {
@@ -75,6 +75,13 @@ export default function Environments() {
   const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [healthName, setHealthName] = useState('')
+  // 环境克隆工厂（以某环境为母本批量派生，指纹微抖动）
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [cloneSrc, setCloneSrc] = useState<ProfileDTO | null>(null)
+  const [cloneCount, setCloneCount] = useState(5)
+  const [cloneName, setCloneName] = useState('')
+  const [cloneAccounts, setCloneAccounts] = useState(false)
+  const [cloneLoading, setCloneLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -115,6 +122,43 @@ export default function Environments() {
       load()
     } catch (e) {
       message.error((e as Error).message)
+    }
+  }
+
+  // 环境克隆工厂：以某个环境为母本批量派生 N 个副本。
+  // 副本继承「行为一致」的字段（系统 / UA / 语言 / 时区），抖动「指纹各异」的字段
+  // （分辨率 / CPU / 内存 / 显卡 / 字体），避免批量号共用同一套设备特征被一锅端。
+  const openClone = () => {
+    if (selected.length !== 1) {
+      message.warning('请先勾选 1 个作为母本的环境')
+      return
+    }
+    const p = list.find((x) => x.id === selected[0])
+    if (!p) return
+    setCloneSrc(p)
+    setCloneName(p.name)
+    setCloneCount(5)
+    setCloneAccounts(false)
+    setCloneOpen(true)
+  }
+
+  const submitClone = async () => {
+    if (!cloneSrc) return
+    setCloneLoading(true)
+    try {
+      const res = await api.post<{ created: number }>(`/api/profiles/${cloneSrc.id}/duplicate-batch`, {
+        count: cloneCount,
+        namePrefix: cloneName,
+        copyAccounts: cloneAccounts
+      })
+      message.success(`已克隆 ${res.created} 个环境（指纹已微抖动）`)
+      setCloneOpen(false)
+      setSelected([])
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setCloneLoading(false)
     }
   }
 
@@ -628,6 +672,17 @@ export default function Environments() {
               >
                 批量重随机指纹 ({selected.length})
               </Button>
+              <Tooltip
+                title={
+                  selected.length === 1
+                    ? '以该环境为母本批量克隆：行为一致（系统/UA/语言/时区）、指纹各异（分辨率/CPU/内存/显卡/字体）'
+                    : '请先勾选 1 个作为母本的环境'
+                }
+              >
+                <Button icon={<CopyOutlined />} onClick={openClone} disabled={selected.length !== 1}>
+                  克隆工厂
+                </Button>
+              </Tooltip>
               <Button
                 icon={<PlayCircleOutlined />}
                 onClick={() => {
@@ -842,6 +897,46 @@ export default function Environments() {
           </div>
         )}
       </Drawer>
+
+      {/* 环境克隆工厂：以母本批量派生副本，指纹微抖动 */}
+      <Modal
+        title={`克隆工厂 — 以「${cloneSrc?.name || ''}」为母本`}
+        open={cloneOpen}
+        onOk={submitClone}
+        onCancel={() => setCloneOpen(false)}
+        okText="开始克隆"
+        cancelText="取消"
+        confirmLoading={cloneLoading}
+      >
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 6 }}>数量（1–50）</div>
+          <InputNumber
+            min={1}
+            max={50}
+            value={cloneCount}
+            onChange={(v) => setCloneCount(Number(v) || 1)}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 6 }}>名称前缀</div>
+          <Input
+            value={cloneName}
+            onChange={(e) => setCloneName(e.target.value)}
+            placeholder="留空则用母本名称，副本依次编号"
+          />
+        </div>
+        <div>
+          <Switch checked={cloneAccounts} onChange={setCloneAccounts} /> 同时复制账号资料（账号密码一并复制）
+        </div>
+        <div style={{ fontSize: 12, color: '#888', marginTop: 16, lineHeight: 1.7 }}>
+          每个副本<strong>继承</strong>系统、UA、语言、时区、平台（行为一致），
+          但分辨率、CPU 核数、内存、显卡、字体与 Canvas·Audio 噪声各不相同（指纹各异），
+          因此批量号不会因共用同一套设备特征而被一锅端。
+          <br />
+          不会复制 Cookie（登录态复制过去等于主动制造关联），也不继承代理绑定，需另行分配。
+        </div>
+      </Modal>
     </div>
   )
 }

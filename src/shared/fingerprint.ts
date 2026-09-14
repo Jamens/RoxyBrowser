@@ -562,3 +562,42 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
 export function listFingerprintPresets(): FingerprintPresetDTO[] {
   return FINGERPRINT_PRESETS.map(({ build, ...rest }) => ({ ...rest, fingerprint: build() }))
 }
+
+/**
+ * 从母指纹派生一个「行为一致、指纹各异」的子指纹——环境克隆工厂的核心。
+ *
+ * 批量开号时若直接原样复制指纹，N 个号会共用同一套设备特征，被平台判定为同一批设备而一锅端。
+ * 因此把字段分成两类处理：
+ * - **保持（行为一致）**：系统、UA、平台、语言、时区、触摸、像素比、噪声开关、WebRTC 策略
+ *   —— 决定「像不像同一类用户」，共享才有批量运营的意义。
+ * - **抖动（指纹各异）**：分辨率、CPU 核数、内存、显卡、字体
+ *   —— 设备指纹的高区分度项，各副本之间必须互不相同。
+ *
+ * 注：Canvas / Audio 噪声无需在此处理——preload 的噪声种子由 profileId 派生
+ * （`seed = profileId * 2654435761`），新建环境拿到新 id，噪声天然互不相同。
+ */
+export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
+  let base = randomFingerprint(src.os)
+  // 分辨率池较小（每个时区 3 种），连抽容易撞回母本同款；
+  // 重试几次尽量保证分辨率至少与母本不同（撞不上时也不强求，避免死循环）。
+  for (let i = 0; i < 5; i++) {
+    if (base.screenWidth !== src.screenWidth || base.screenHeight !== src.screenHeight) break
+    base = randomFingerprint(src.os)
+  }
+  return {
+    ...base,
+    os: src.os,
+    userAgent: src.userAgent,
+    uaFullVersion: src.uaFullVersion,
+    platform: src.platform,
+    languages: [...src.languages],
+    timezone: src.timezone,
+    tzOffset: src.tzOffset,
+    doNotTrack: src.doNotTrack,
+    webrtc: src.webrtc,
+    touch: src.touch,
+    devicePixelRatio: src.devicePixelRatio,
+    canvasNoise: src.canvasNoise,
+    audioNoise: src.audioNoise
+  }
+}

@@ -31,7 +31,7 @@ import {
   ExtensionEntity,
   RpaScriptEntity
 } from './entities'
-import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint } from '../shared/fingerprint'
+import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { substituteSteps } from '../shared/rpa'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
@@ -2814,6 +2814,72 @@ function buildApiRouter(): express.Router {
     }
     await writeLog(req, 'duplicate_profile', `复制环境「${src.name}」→「${copy.name}」，迁移 ${accounts.length} 个账号`)
     res.json({ id: copy.id, name: copy.name, migratedAccounts: accounts.length })
+  })
+
+  // 环境克隆工厂：以某环境为母本批量派生 N 个副本。
+  // 与 /duplicate（单个、指纹原样复制）的关键区别——每个副本都做「指纹微抖动」：
+  // 行为一致（系统 / UA / 语言 / 时区 / 噪声开关），指纹各异（分辨率 / CPU / 内存 / 显卡 / 字体），
+  // 避免批量号共用同一套设备特征被一锅端。
+  // 明确不复制 Cookie：登录态复制过去等于主动制造关联。
+  router.post('/profiles/:id/duplicate-batch', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const src = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!src) return res.status(404).json({ message: '环境不存在' })
+    if (src.isTemplate) return res.status(400).json({ message: '模板环境不支持批量克隆' })
+    const body = req.body || {}
+    const count = Math.max(1, Math.min(50, Number(body.count) || 1))
+    const namePrefix = String(body.namePrefix || src.name).trim() || src.name
+    const copyAccounts = !!body.copyAccounts
+    const srcFp = (src.fingerprint || {}) as unknown as Fingerprint
+
+    const accRepo = AppDataSource.getRepository(AccountEntity)
+    const accounts = copyAccounts ? await accRepo.find({ where: { profileId: src.id } }) : []
+
+    const qbBatch = repo
+      .createQueryBuilder('p')
+      .select('MAX(p.seq)', 'm')
+      .where('p.teamId = :tid', { tid: req.tid })
+    ownerAndWhere(qbBatch, req)
+    let seq = ((await qbBatch.getRawOne<{ m: number | null }>())?.m || 1000) + 1
+
+    const created: { id: number; name: string }[] = []
+    for (let i = 1; i <= count; i++) {
+      const copy = await repo.save(
+        repo.create({
+          teamId: req.tid!,
+          ownerId: req.uid!,
+          groupId: src.groupId,
+          name: `${namePrefix} ${i}`,
+          seq: seq++,
+          remark: src.remark,
+          platform: src.platform,
+          startUrl: src.startUrl,
+          proxyId: null,
+          fingerprint: deriveJitteredFingerprint(srcFp) as unknown as Record<string, unknown>,
+          isTemplate: false,
+          createdBy: req.uid!
+        })
+      )
+      for (const a of accounts) {
+        await accRepo.save(
+          accRepo.create({
+            profileId: copy.id,
+            ownerId: req.uid!,
+            platform: a.platform,
+            username: a.username,
+            password: a.password,
+            remark: a.remark
+          })
+        )
+      }
+      created.push({ id: copy.id, name: copy.name })
+    }
+    await writeLog(
+      req,
+      'duplicate_batch',
+      `从「${src.name}」批量克隆 ${created.length} 个环境（指纹微抖动${copyAccounts ? `，账号资料一并复制` : ''}）`
+    )
+    res.json({ created: created.length, items: created })
   })
 
   // 批量重新生成指纹
