@@ -94,6 +94,8 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 | WebRTC     | 可禁用 `RTCPeerConnection`，防止真实 IP 泄漏                                            |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 
+> **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
+
 相关接口：`POST /api/fingerprint/random`（body `os` 可选 `windows|mac|android|ios`）、`GET /api/fingerprint/presets`。
 
 ### 2.1 环境体检（伪装度评分 + 一致性红绿灯）

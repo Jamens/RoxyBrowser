@@ -41,34 +41,53 @@ const MAC_VERSIONS = [
   { macPlatform: 'Macintosh; Intel Mac OS X 10_15_7', uadPlatform: 'macOS', uadVersion: '12.7.6' }
 ]
 
+// Windows 显卡池：覆盖近几年的常见独显 / 核显形态，并保留少量老型号
+// （真实人群里确实有长期不升级的机器，全用最新型号反而不自然）。
+// renderer 里的 device ID 取各型号常见 PCI ID，形态与真实 ANGLE 输出一致。
 const GPU_WINDOWS = [
+  // ---- 老型号（覆盖「不升级」的真实人群）----
   { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 (0x00001F82) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
   { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 (0x00003E92) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
   { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)' },
-  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x000028E0) Direct3D11 vs_5_0 ps_5_0, D3D11)' }
+  // ---- NVIDIA 近几代 ----
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002503) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 (0x000028E0) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 (0x00002786) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 (0x00002704) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 (0x00002684) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  // ---- Intel 核显 + Arc 独显（A 系列 / B 系列）----
+  { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x00009A49) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics (0x000056A0) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Arc(TM) B390 Graphics (0x0000E20C) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  // ---- AMD 近两代 ----
+  { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon(TM) RX 6600 (0x000073FF) Direct3D11 vs_5_0 ps_5_0, D3D11)' },
+  { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon(TM) RX 7800 XT (0x0000747E) Direct3D11 vs_5_0 ps_5_0, D3D11)' }
 ]
 
 const GPU_MAC = [
   { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)' },
   { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)' },
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)' },
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)' },
+  { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)' },
   { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 655, OpenGL 4.1)' }
 ]
 
 // 时区 / 语言 / 分辨率联动池
+// 分辨率越多样，批量派生时越不容易撞成同一款（此前多数时区只有 1–2 种）
 const TZ_POOL: Array<{ tz: string; languages: string[]; resolutions: Array<[number, number]> }> = [
-  { tz: 'America/New_York', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900]] },
-  { tz: 'America/Los_Angeles', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1536, 864]] },
-  { tz: 'America/Chicago', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1440, 900]] },
-  { tz: 'Europe/London', languages: ['en-GB', 'en'], resolutions: [[1920, 1080], [1366, 768]] },
-  { tz: 'Europe/Berlin', languages: ['de-DE', 'de', 'en-US', 'en'], resolutions: [[1920, 1080], [1680, 1050]] },
-  { tz: 'Europe/Paris', languages: ['fr-FR', 'fr', 'en-US', 'en'], resolutions: [[1920, 1080]] },
-  { tz: 'Asia/Singapore', languages: ['en-SG', 'en', 'zh-CN', 'zh'], resolutions: [[1920, 1080], [2560, 1440]] },
-  { tz: 'Asia/Tokyo', languages: ['ja-JP', 'ja', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768]] },
-  { tz: 'Asia/Shanghai', languages: ['zh-CN', 'zh', 'en-US', 'en'], resolutions: [[1920, 1080], [2560, 1440]] },
-  { tz: 'Australia/Sydney', languages: ['en-AU', 'en'], resolutions: [[1920, 1080]] },
-  { tz: 'America/Sao_Paulo', languages: ['pt-BR', 'pt', 'en-US', 'en'], resolutions: [[1920, 1080]] },
-  { tz: 'Europe/Amsterdam', languages: ['nl-NL', 'nl', 'en-US', 'en'], resolutions: [[1920, 1080]] }
+  { tz: 'America/New_York', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900], [2560, 1440]] },
+  { tz: 'America/Los_Angeles', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1536, 864], [2560, 1440]] },
+  { tz: 'America/Chicago', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1440, 900], [1920, 1200]] },
+  { tz: 'Europe/London', languages: ['en-GB', 'en'], resolutions: [[1920, 1080], [1366, 768], [2560, 1440]] },
+  { tz: 'Europe/Berlin', languages: ['de-DE', 'de', 'en-US', 'en'], resolutions: [[1920, 1080], [1680, 1050], [2560, 1440]] },
+  { tz: 'Europe/Paris', languages: ['fr-FR', 'fr', 'en-US', 'en'], resolutions: [[1920, 1080], [1440, 900]] },
+  { tz: 'Asia/Singapore', languages: ['en-SG', 'en', 'zh-CN', 'zh'], resolutions: [[1920, 1080], [2560, 1440], [1366, 768]] },
+  { tz: 'Asia/Tokyo', languages: ['ja-JP', 'ja', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900]] },
+  { tz: 'Asia/Shanghai', languages: ['zh-CN', 'zh', 'en-US', 'en'], resolutions: [[1920, 1080], [2560, 1440], [1600, 900]] },
+  { tz: 'Australia/Sydney', languages: ['en-AU', 'en'], resolutions: [[1920, 1080], [2560, 1440]] },
+  { tz: 'America/Sao_Paulo', languages: ['pt-BR', 'pt', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768]] },
+  { tz: 'Europe/Amsterdam', languages: ['nl-NL', 'nl', 'en-US', 'en'], resolutions: [[1920, 1080], [3440, 1440]] }
 ]
 
 // 移动设备池（Android：Chrome Mobile；iOS：Safari —— Electron 是 Chromium 内核，
