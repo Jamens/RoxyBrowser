@@ -111,6 +111,9 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 
 - **桌面 + 移动端**：支持 Windows / macOS / Android / iOS 四种形态。UA-CH（`navigator.userAgentData`）全平台接管——`brands` / `platform`（Windows / macOS / Android）/ `mobile` 与 `getHighEntropyValues` 高熵字段均与 UA 严格一致；移动端额外注入触摸能力（`maxTouchPoints`、`ontouchstart`）、`devicePixelRatio`；iOS 按 Safari 形态（移除 `userAgentData`），环境窗口按手机尺寸打开。
 - **指纹预设库**：内置十余套「验证过的指纹组合」（如 `Windows 11 · Chrome 129 · 德国`、`Pixel 8 · Android 14 · 美东`、`iPhone 15 Pro · iOS 17.5 · 美西`），各字段之间保证一致（UA ↔ 平台 ↔ GPU ↔ 屏幕 ↔ 时区语言），一键套用，避免手工拼出互相矛盾的指纹。
+- **内核版本切换（Chrome 大版本）**：指纹表单「内核版本 (Chrome)」下拉可选 **127–132** 任一版本——仅替换 UA 串里的 Chrome 大版本号（如 `Chrome/129.0.6668.100`），同步更新 `uaFullVersion` 与 UA-CH 客户端提示（`navigator.userAgentData`），让同一套设备指纹在不同时期表现为不同浏览器版本（对标官方「内核版本」切换）。iOS 走 Safari/WebKit，不走此路径（下拉自动隐藏）。
+  - 切换由 `applyCoreVersion()`（`src/shared/fingerprint.ts`）实现：正则会把 UA 里的 `Chrome/[\d.]+` 整体替换，保持操作系统 / 平台 / 设备型号等其余字段不变，因此不会出现「Chrome 132 的 UA 却配着 Chrome 127 的 UA-CH」这类不自洽。
+  - `POST /api/fingerprint/random` 支持 `body.coreVersion` 透传——随机指纹时即尊重所选内核；`normalizeFingerprint`（旧数据/缺字段规整）、`presetFingerprint`（预设套用）、克隆工厂（`deriveJitteredFingerprint`）均会正确保留或推导该字段，存储层无新增迁移需求（`Fingerprint.coreVersion` 为普通可选数字列）。
 
 | 维度       | 实现方式                                                                                |
 | ---------- | --------------------------------------------------------------------------------------- |

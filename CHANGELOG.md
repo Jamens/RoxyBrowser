@@ -9,6 +9,12 @@
 
 ---
 
+## 2026-09-15 · 内核版本切换（指纹层 Chrome 大版本可选）
+
+### 新增
+
+- **内核版本切换**：指纹表单新增「内核版本 (Chrome)」下拉（可选 Chrome 127–132），仅替换 UA 串与 UA-CH 客户端提示里的 Chrome 大版本号，让同一套设备指纹在不同时期表现为不同浏览器版本；iOS 走 Safari/WebKit 自动隐藏该下拉。实现 `applyCoreVersion()` 与 `CHROME_MAJORS`（`src/shared/fingerprint.ts`），`randomFingerprint` 支持透传 `coreVersion`，`normalizeFingerprint` / `presetFingerprint` / 克隆工厂均保留或推导该字段；`POST /api/fingerprint/random` 与 v1 接口支持 `body.coreVersion`。`Fingerprint.coreVersion` 新增到 `src/shared/types.ts`（无 DB 迁移）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

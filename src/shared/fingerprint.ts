@@ -197,9 +197,12 @@ export function getTimezoneOffsetMinutes(timeZone: string): number {
   return -Math.round((asUTC - Math.floor(now.getTime() / 1000) * 1000) / 60000)
 }
 
-export function randomFingerprint(os?: OSKind): Fingerprint {
+export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprint {
   const chosenOs: OSKind = os ?? pick<OSKind>(['windows', 'mac'])
-  const chrome = pick(CHROME_VERSIONS)
+  const chrome =
+    coreVersion != null
+      ? CHROME_VERSIONS.find((c) => c.major === coreVersion) ?? pick(CHROME_VERSIONS)
+      : pick(CHROME_VERSIONS)
   const tzInfo = pick(TZ_POOL)
   const [screenWidth, screenHeight] = pick(tzInfo.resolutions)
   let userAgent: string
@@ -214,6 +217,7 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
         os: 'android',
         userAgent: `Mozilla/5.0 (Linux; Android ${dev.osver}; ${dev.model}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome.full} Mobile Safari/537.36`,
         uaFullVersion: chrome.full,
+        coreVersion: chrome.major,
         platform: 'Linux armv8l',
         languages: tzInfo.languages,
         timezone: tzInfo.tz,
@@ -238,6 +242,7 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
       os: 'ios',
       userAgent: `Mozilla/5.0 (iPhone; CPU iPhone OS ${dev.osver} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/${dev.safariVer} Mobile/15E148 Safari/604.1`,
       uaFullVersion: dev.safariVer,
+      coreVersion: Number(dev.safariVer.split('.')[0]),
       platform: 'iPhone',
       languages: tzInfo.languages,
       timezone: tzInfo.tz,
@@ -275,6 +280,7 @@ export function randomFingerprint(os?: OSKind): Fingerprint {
     os: chosenOs,
     userAgent,
     uaFullVersion: chrome.full,
+    coreVersion: chrome.major,
     platform,
     languages: tzInfo.languages,
     timezone: tzInfo.tz,
@@ -298,6 +304,21 @@ export function defaultFingerprint(): Fingerprint {
 }
 
 /**
+ * 切换「内核版本」：仅替换 UA 串里的 Chrome 大版本号，保留操作系统 / 平台 / 设备型号等其余部分，
+ * 让同一套设备指纹在不同时期表现为不同浏览器版本（对标官方「内核版本」切换）。
+ * 仅对 Chrome 系（Windows / macOS / Android）有效；iOS 走 Safari/WebKit，不走此路径。
+ */
+export function applyCoreVersion(fp: Fingerprint, major: number): Fingerprint {
+  const c = CHROME_VERSIONS.find((x) => x.major === major) ?? CHROME_VERSIONS[0]
+  const full = c.full
+  const userAgent = fp.userAgent.replace(/Chrome\/[\d.]+/, `Chrome/${full}`)
+  return { ...fp, userAgent, uaFullVersion: full, coreVersion: major }
+}
+
+/** 可选内核版本列表（降序），供表单下拉使用 */
+export const CHROME_MAJORS = CHROME_VERSIONS.map((v) => v.major).sort((a, b) => b - a)
+
+/**
  * 把任意（可能不完整 / 旧版 / 缺字段）的指纹数据规整成完整且自洽的 Fingerprint。
  * - 空 / 非对象 / 缺 os：直接返回一套随机完整指纹，绝不抛错。
  * - 有 os 但缺部分字段：先按该 os 生成一套自洽基准，再用传入值覆盖；fonts 缺失时
@@ -311,9 +332,14 @@ export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerpr
   }
   const os = fp.os
   const base = randomFingerprint(os as OSKind)
+  const coreVersion =
+    typeof fp.coreVersion === 'number' && fp.coreVersion > 0
+      ? fp.coreVersion
+      : Number(String(fp.uaFullVersion || '').split('.')[0]) || base.coreVersion
   return {
     ...base,
     ...fp,
+    coreVersion,
     fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind)
   } as Fingerprint
 }
@@ -333,6 +359,7 @@ function presetFingerprint(
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
     fonts: osFontList(core.os),
+    coreVersion: Number(core.uaFullVersion.split('.')[0]),
     ...core
   }
 }
@@ -608,6 +635,7 @@ export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
     os: src.os,
     userAgent: src.userAgent,
     uaFullVersion: src.uaFullVersion,
+    coreVersion: src.coreVersion,
     platform: src.platform,
     languages: [...src.languages],
     timezone: src.timezone,

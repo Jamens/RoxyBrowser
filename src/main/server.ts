@@ -1298,9 +1298,11 @@ function buildApiRouter(): express.Router {
 
   // 生成随机指纹
   router.post('/fingerprint/random', authMiddleware, (req: Request, res: Response) => {
-    const os = (req.body || {}).os
+    const body = req.body || {}
+    const os = body.os
     const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
-    res.json(randomFingerprint(valid as OSKind | undefined))
+    const cv = typeof body.coreVersion === 'number' ? body.coreVersion : undefined
+    res.json(randomFingerprint(valid as OSKind | undefined, cv))
   })
 
   // 指纹预设库（内置验证过的指纹组合）
@@ -2406,9 +2408,11 @@ function buildApiRouter(): express.Router {
 
   // --- 指纹：随机生成 ---
   v1.post('/fingerprint/random', async (req: Request, res: Response) => {
-    const os = (req.body || {}).os
+    const body = req.body || {}
+    const os = body.os
     const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
-    res.json({ code: 0, data: randomFingerprint(valid as OSKind | undefined) })
+    const cv = typeof body.coreVersion === 'number' ? body.coreVersion : undefined
+    res.json({ code: 0, data: randomFingerprint(valid as OSKind | undefined, cv) })
   })
 
   // --- 账号：列表 / 创建 / 更新 / 删除 ---

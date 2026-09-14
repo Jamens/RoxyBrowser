@@ -5,7 +5,7 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
-import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint } from '@shared/fingerprint'
+import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint, applyCoreVersion, CHROME_MAJORS } from '@shared/fingerprint'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -142,7 +142,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   }
 
   const randomize = async () => {
-    const f = await api.post<Fingerprint>('/api/fingerprint/random', { os: fp?.os })
+    const f = await api.post<Fingerprint>('/api/fingerprint/random', { os: fp?.os, coreVersion: fp?.coreVersion })
     userPickedRef.current = true
     // 随机出来的不再是任何一套预设，清掉选中态，避免下拉框显示的名字名不副实
     setPresetId(undefined)
@@ -399,6 +399,21 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       options={(['windows', 'mac', 'android', 'ios'] as OSKind[]).map((o) => ({ value: o, label: osLabel(o) }))}
                     />
                   </Form.Item>
+                  {fp.os !== 'ios' && (
+                    <Form.Item label="内核版本 (Chrome)">
+                      <Select
+                        value={fp.coreVersion}
+                        style={{ width: 160 }}
+                        onChange={(major: number) => {
+                          const next = applyCoreVersion(fp, major)
+                          setPresetId(undefined)
+                          userPickedRef.current = true
+                          setFp(next)
+                        }}
+                        options={CHROME_MAJORS.map((m: number) => ({ value: m, label: `Chrome ${m}` }))}
+                      />
+                    </Form.Item>
+                  )}
                   <Form.Item label="User Agent">
                     <Input.TextArea
                       rows={2}

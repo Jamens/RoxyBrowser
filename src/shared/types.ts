@@ -8,6 +8,7 @@ export interface Fingerprint {
   os: OSKind
   userAgent: string
   uaFullVersion: string
+  coreVersion: number // 内核版本（Chrome 大版本），驱动 UA / UA-CH 客户端提示一致性
   platform: string // 'Win32' | 'MacIntel' | 'Linux armv8l' | 'iPhone'
   languages: string[]
   timezone: string // IANA 时区
