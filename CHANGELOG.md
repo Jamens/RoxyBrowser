@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-15 · 全空间快照新增「定时自动备份」（本地目录轮转）
+
+### 新增
+
+- **定时自动备份**（`#110`，延续 `24192c6` 全空间快照）：设置页「空间快照」分区可开启自动备份——按设定间隔（小时）把**每个团队空间**自动打包成 JSON 写入本地目录，每个团队保留最近 7 份（按文件名时间戳排序，超出自动清理），目录不存在 / 不可写时静默跳过、不报错。
+  - 复用代理巡检式 `setInterval` 调度器（`startSnapshotBackupScheduler` / `runSnapshotBackupAll`，`src/main/server.ts`）：启动即调度，保存设置即重启；开关 / 目录 / 间隔任一变化立即生效。
+  - 文件复用 `buildSnapshot()`（`src/main/exporters.ts`，与手动导出 / 导入同源），保证自动备份与手动快照字段完全一致；导入端仍是既有的 `validateSnapshot` → 逐模块导入器。
+  - 设置项（JSON 单列 `app_settings`）：`snapshotBackupEnabled` / `snapshotBackupDir` / `snapshotBackupIntervalH`（默认 24 小时），默认值已并入 `DEFAULT_SETTINGS`（`src/shared/types.ts`）。
+  - 前端：设置页新增「定时自动备份」分区（启用开关 / 备份目录 / 间隔），四语 i18n（`snapshot.backup*` / `common.hours`）。
+
 ## 2026-09-15 · 新增全空间快照（团队整体打包 / 迁移）
 
 ### 新增

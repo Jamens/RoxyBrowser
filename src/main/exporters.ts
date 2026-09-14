@@ -6,9 +6,11 @@
  *
  * 所有函数仅依赖运行时注入的 AppDataSource（在 initDb 后才可用），不在模块加载期调用。
  */
+import { IsNull } from 'typeorm'
 import { AppDataSource } from './server'
 import {
   ProfileEntity,
+  TeamEntity,
   GroupEntity,
   ProxyEntity,
   AccountEntity,
@@ -18,7 +20,7 @@ import {
 } from './entities'
 import { normalizeFingerprint } from '../shared/fingerprint'
 import { DEFAULT_START_URL, type Fingerprint } from '../shared/types'
-import type { ProfileSnapshot, ProxySnapshot, RpaSnapshot, ExtensionSnapshot } from '../shared/snapshot'
+import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, type SnapshotFile, type ProfileSnapshot, type ProxySnapshot, type RpaSnapshot, type ExtensionSnapshot } from '../shared/snapshot'
 
 /** 调用上下文：导出/导入都需要团队与操作者信息；role 用于决定账号隔离范围（owner/admin 不过滤） */
 export interface ExportCtx {
@@ -356,4 +358,36 @@ export async function exportExtensionsMeta(ctx: ExportCtx): Promise<ExtensionSna
   const repo = AppDataSource.getRepository(ExtensionEntity)
   const list = await repo.find({ where: { teamId: ctx.tid, ...scopeOf(ctx) }, order: { id: 'DESC' } })
   return list.map((e) => ({ name: e.name, version: e.version || '', description: e.description || null }))
+}
+
+// ===================== 全空间快照：拼装单个团队空间的完整 JSON =====================
+
+/**
+ * 把整个团队空间（环境 + 代理 + RPA + 扩展引用）拼装成单个 SnapshotFile。
+ * GET /api/snapshot/export 与「定时自动备份」共用此函数，保证手动导出与自动备份同源。
+ * `exportedBy` 用于标记来源（手动导出传用户名，自动备份传「系统定时备份」）。
+ */
+export async function buildSnapshot(ctx: ExportCtx, exportedBy?: string): Promise<SnapshotFile> {
+  const teamRepo = AppDataSource.getRepository(TeamEntity)
+  const team = await teamRepo.findOne({ where: { id: ctx.tid } })
+  const profileRepo = AppDataSource.getRepository(ProfileEntity)
+  const profileList = await profileRepo.find({
+    where: { teamId: ctx.tid, isTemplate: false, deletedAt: IsNull(), ...scopeOf(ctx) },
+    order: { seq: 'ASC' }
+  })
+  const profiles = await Promise.all(profileList.map((p) => exportProfileFull(p, ctx)))
+  const proxies = await exportProxiesStructured(ctx)
+  const rpa = await exportRpaStructured(ctx)
+  const extensions = await exportExtensionsMeta(ctx)
+  return {
+    format: SNAPSHOT_FORMAT,
+    version: SNAPSHOT_VERSION,
+    exportedAt: new Date().toISOString(),
+    team: { id: ctx.tid, name: team?.name || 'team', icon: team?.icon || null },
+    exportedBy,
+    proxies,
+    rpa,
+    extensions,
+    profiles
+  }
 }

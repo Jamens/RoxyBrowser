@@ -82,6 +82,7 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 - **复用既有导入器**：导出 / 导入直接复用 `src/main/exporters.ts` 中「整环境迁移 / 代理批量 / RPA」各模块的既有逻辑，保证单模块迁移与整团队迁移同源、字段一致。
 - **导入顺序**：先恢复代理池（按名称复用，缺失则新建）→ 再导入环境（引用同名代理）→ 最后导入 RPA（定时配置重置为关闭）。扩展按名称重映射，目标缺同名扩展则忽略引用。
 - **校验**：导入前用 `validateSnapshot()`（`src/shared/snapshot.ts`，纯函数）严格校验 `format` / `version` / `profiles[]`，非法文件直接 400 拒绝，不污染数据库。
+- **定时自动备份**：设置页「空间快照」分区可开启，按设定间隔（小时）把**每个团队空间**自动打包写入本地目录，每个团队保留最近 7 份（按文件名时间戳排序，超出自动清理），目录不存在 / 不可写时静默跳过、不报错。复用代理巡检式 `setInterval` 调度器（保存设置即重启调度），逻辑集中在 `startSnapshotBackupScheduler()` / `runSnapshotBackupAll()`（`src/main/server.ts`）；文件复用 `buildSnapshot()`（`src/main/exporters.ts`，与手动导出 / 导入同源），保证自动备份与手动快照字段完全一致。
 
 ```bash
 # 导出当前团队快照

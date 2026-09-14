@@ -377,6 +377,12 @@ export interface AppSettings {
   trayDisplay: 'icon' | 'name'
   // AI Agent（本地 Ollama / 云端 BYOK）
   aiAgent: AIAgentSettings
+  // 全空间快照定时自动备份：把每个团队空间按间隔写入本地目录的快照 JSON
+  snapshotBackupEnabled: boolean
+  // 备份目录（绝对路径，须为本机已存在的可写目录）
+  snapshotBackupDir: string
+  // 备份间隔（小时），最小 1，默认 24
+  snapshotBackupIntervalH: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -411,5 +417,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cloudVisionModel: '',
     needApprovalByDefault: false,
     maxStepsPerRun: 30
-  }
+  },
+  snapshotBackupEnabled: false,
+  snapshotBackupDir: '',
+  snapshotBackupIntervalH: 24
 }

@@ -443,6 +443,17 @@ export default function Settings() {
           </Space>
         )}
 
+        <Divider>{t('snapshot.backupSection')}</Divider>
+        <Form.Item name="snapshotBackupEnabled" label={t('snapshot.backupEnable')} valuePropName="checked" extra={t('snapshot.backupEnableExtra')}>
+          <Switch />
+        </Form.Item>
+        <Form.Item name="snapshotBackupDir" label={t('snapshot.backupDir')} extra={t('snapshot.backupDirExtra')}>
+          <Input placeholder={t('snapshot.backupDirPlaceholder')} style={{ width: 480 }} />
+        </Form.Item>
+        <Form.Item name="snapshotBackupIntervalH" label={t('snapshot.backupInterval')} extra={t('snapshot.backupIntervalExtra')} rules={[{ required: true }]}>
+          <InputNumber min={1} max={8760} addonAfter={t('common.hours')} style={{ width: 180 }} />
+        </Form.Item>
+
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>
             {t('settings.save')}

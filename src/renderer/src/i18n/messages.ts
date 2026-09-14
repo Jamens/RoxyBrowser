@@ -159,6 +159,7 @@ const zhCN = {
   'common.seconds': '秒',
   'common.minutes': '分钟',
   'common.days': '天',
+  'common.hours': '小时',
 
   // ---- 环境起始页（环境窗口首页）----
   'browser.searchPlaceholder': '输入网址或搜索关键词，回车访问',
@@ -282,7 +283,15 @@ const zhCN = {
   'snapshot.exported': '快照已导出',
   'snapshot.import': '导入快照',
   'snapshot.importExtra': '选择一个快照文件，将其内容恢复到当前团队（代理按名称复用，环境重新生成；缺失的扩展引用会被忽略）。',
-  'snapshot.importSuccess': '快照导入成功：环境 {profiles} 个、代理 {proxies} 条、RPA {rpa} 个'
+  'snapshot.importSuccess': '快照导入成功：环境 {profiles} 个、代理 {proxies} 条、RPA {rpa} 个',
+  'snapshot.backupSection': '定时自动备份',
+  'snapshot.backupEnable': '启用定时自动备份',
+  'snapshot.backupEnableExtra': '开启后按设定间隔把每个团队空间打包成 JSON 写入本地目录（每个团队保留最近 7 份）。',
+  'snapshot.backupDir': '备份目录',
+  'snapshot.backupDirExtra': '本地已存在的可写目录（绝对路径）。目录不存在或不可写时备份会被跳过。',
+  'snapshot.backupDirPlaceholder': '例如 D:\\roxy-backup 或 /Users/you/roxy-backup',
+  'snapshot.backupInterval': '备份间隔（小时）',
+  'snapshot.backupIntervalExtra': '每隔多少小时执行一次全空间快照备份，最小 1 小时。'
 }
 
 export type MessageDict = typeof zhCN
@@ -441,6 +450,7 @@ const enUS: MessageDict = {
   'common.seconds': 's',
   'common.minutes': 'min',
   'common.days': 'days',
+  'common.hours': 'hours',
 
   // ---- Environment start page ----
   'browser.searchPlaceholder': 'Enter a URL or keywords, press Enter to go',
@@ -562,7 +572,15 @@ const enUS: MessageDict = {
   'snapshot.exported': 'Snapshot exported',
   'snapshot.import': 'Import Snapshot',
   'snapshot.importExtra': 'Pick a snapshot file to restore its content into the current team (proxies are reused by name, profiles are recreated; missing extension references are ignored).',
-  'snapshot.importSuccess': 'Snapshot imported: {profiles} profiles, {proxies} proxies, {rpa} RPA scripts'
+  'snapshot.importSuccess': 'Snapshot imported: {profiles} profiles, {proxies} proxies, {rpa} RPA scripts',
+  'snapshot.backupSection': 'Scheduled Auto-Backup',
+  'snapshot.backupEnable': 'Enable scheduled auto-backup',
+  'snapshot.backupEnableExtra': 'When enabled, each team space is packed into a JSON file and written to a local directory at the set interval (latest 7 copies per team are kept).',
+  'snapshot.backupDir': 'Backup directory',
+  'snapshot.backupDirExtra': 'An existing writable local directory (absolute path). Backups are skipped if the directory is missing or not writable.',
+  'snapshot.backupDirPlaceholder': 'e.g. D:\\roxy-backup or /Users/you/roxy-backup',
+  'snapshot.backupInterval': 'Backup interval (hours)',
+  'snapshot.backupIntervalExtra': 'How often to run a full-space snapshot backup, minimum 1 hour.'
 }
 
 const jaJP: MessageDict = {
@@ -719,6 +737,7 @@ const jaJP: MessageDict = {
   'common.seconds': '秒',
   'common.minutes': '分',
   'common.days': '日',
+  'common.hours': '時間',
 
   // ---- 環境スタートページ ----
   'browser.searchPlaceholder': 'URL またはキーワードを入力して Enter',
@@ -840,7 +859,15 @@ const jaJP: MessageDict = {
   'snapshot.exported': 'スナップショットをエクスポートしました',
   'snapshot.import': 'スナップショットをインポート',
   'snapshot.importExtra': 'スナップショットファイルを選ぶと、その内容を現在のチームに復元します（プロキシは名前で再利用、環境は再生成、存在しない拡張参照は無視）。',
-  'snapshot.importSuccess': 'スナップショットをインポートしました：環境 {profiles} 件、プロキシ {proxies} 件、RPA {rpa} 件'
+  'snapshot.importSuccess': 'スナップショットをインポートしました：環境 {profiles} 件、プロキシ {proxies} 件、RPA {rpa} 件',
+  'snapshot.backupSection': '定期自動バックアップ',
+  'snapshot.backupEnable': '定期自動バックアップを有効化',
+  'snapshot.backupEnableExtra': '有効にすると、設定した間隔で各チーム空間を JSON にまとめローカルディレクトリへ書き出します（チームごと最新 7 件を保持）。',
+  'snapshot.backupDir': 'バックアップディレクトリ',
+  'snapshot.backupDirExtra': '存在し書き込み可能なローカルディレクトリ（絶対パス）。存在しない・書き込めない場合はスキップされます。',
+  'snapshot.backupDirPlaceholder': '例：D:\\roxy-backup または /Users/you/roxy-backup',
+  'snapshot.backupInterval': 'バックアップ間隔（時間）',
+  'snapshot.backupIntervalExtra': '全空間スナップショットを実行する間隔（最小 1 時間）。'
 }
 
 const deDE: MessageDict = {
@@ -997,6 +1024,7 @@ const deDE: MessageDict = {
   'common.seconds': 's',
   'common.minutes': 'Min',
   'common.days': 'Tage',
+  'common.hours': 'Stunden',
 
   // ---- Umgebungs-Startseite ----
   'browser.searchPlaceholder': 'URL oder Suchbegriff eingeben, Enter zum Öffnen',
@@ -1120,7 +1148,15 @@ const deDE: MessageDict = {
   'snapshot.exported': 'Snapshot exportiert',
   'snapshot.import': 'Snapshot importieren',
   'snapshot.importExtra': 'Wählen Sie eine Snapshot-Datei, um deren Inhalt in das aktuelle Team wiederherzustellen (Proxys werden nach Name wiederverwendet, Umgebungen neu erzeugt; fehlende Erweiterungsreferenzen werden ignoriert).',
-  'snapshot.importSuccess': 'Snapshot importiert: {profiles} Umgebungen, {proxies} Proxys, {rpa} RPA-Skripte'
+  'snapshot.importSuccess': 'Snapshot importiert: {profiles} Umgebungen, {proxies} Proxys, {rpa} RPA-Skripte',
+  'snapshot.backupSection': 'Geplante automatische Sicherung',
+  'snapshot.backupEnable': 'Geplante automatische Sicherung aktivieren',
+  'snapshot.backupEnableExtra': 'Wenn aktiv, wird der gesamte Team-Bereich im eingestellten Intervall als JSON in ein lokales Verzeichnis geschrieben (pro Team werden die neuesten 7 Kopien behalten).',
+  'snapshot.backupDir': 'Sicherungsverzeichnis',
+  'snapshot.backupDirExtra': 'Ein vorhandenes, beschreibbares lokales Verzeichnis (absoluter Pfad). Fehlt es oder ist es nicht beschreibbar, wird die Sicherung übersprungen.',
+  'snapshot.backupDirPlaceholder': 'z. B. D:\\roxy-backup oder /Users/you/roxy-backup',
+  'snapshot.backupInterval': 'Sicherungsintervall (Stunden)',
+  'snapshot.backupIntervalExtra': 'Wie oft ein vollständiger Bereichs-Snapshot erstellt wird, mindestens 1 Stunde.'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

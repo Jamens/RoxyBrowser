@@ -4,7 +4,7 @@ import cors from 'cors'
 import http from 'http'
 import crypto from 'crypto'
 import { homedir } from 'os'
-import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, statSync } from 'fs'
+import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, statSync, readdirSync, unlinkSync } from 'fs'
 import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
@@ -45,7 +45,8 @@ import {
   importProxiesStructured,
   exportRpaStructured,
   importRpaStructured,
-  exportExtensionsMeta
+  exportExtensionsMeta,
+  buildSnapshot
 } from './exporters'
 import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, validateSnapshot, normalizeSnapshot, type SnapshotFile } from '../shared/snapshot'
 import { getSystemStats } from './systemStats'
@@ -491,6 +492,85 @@ async function saveSchedulerLog(teamId: number, userId: number | null, action: s
   } catch {
     /* 日志失败不影响调度 */
   }
+}
+
+// ===================== 全空间快照定时自动备份 =====================
+let snapshotBackupTimer: ReturnType<typeof setInterval> | null = null
+
+async function runSnapshotBackupAll(): Promise<void> {
+  const settings = await getSettings()
+  const enabled = !!settings.snapshotBackupEnabled
+  const dir = typeof settings.snapshotBackupDir === 'string' ? settings.snapshotBackupDir.trim() : ''
+  if (!enabled || !dir) return
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(dir)
+  } catch {
+    console.error('[roxy] 快照备份目录不可访问:', dir)
+    return
+  }
+  if (!st.isDirectory()) {
+    console.error('[roxy] 快照备份路径不是目录:', dir)
+    return
+  }
+  const teamRepo = AppDataSource.getRepository(TeamEntity)
+  const teams = await teamRepo.find()
+  if (teams.length === 0) return
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
+  let ok = 0
+  for (const team of teams) {
+    try {
+      const snap = await buildSnapshot({ tid: team.id, role: 'owner' }, '系统定时备份')
+      const file = join(dir, `roxy-snapshot-${team.id}-${stamp}.json`)
+      writeFileSync(file, JSON.stringify(snap, null, 2), 'utf8')
+      pruneSnapshotBackups(dir, team.id)
+      ok++
+    } catch (e) {
+      console.error(`[roxy] 团队 ${team.id} 快照备份失败:`, (e as Error).message)
+    }
+  }
+  console.log(`[roxy] 快照定时备份完成：${ok}/${teams.length} 个团队 -> ${dir}`)
+}
+
+// 每个团队仅保留最近 7 份备份，避免目录无限增长（文件名含固定宽度时间戳，字典序即时间序）
+function pruneSnapshotBackups(dir: string, teamId: number): void {
+  try {
+    const prefix = `roxy-snapshot-${teamId}-`
+    const files = readdirSync(dir)
+      .filter((f) => f.startsWith(prefix) && f.endsWith('.json'))
+      .sort()
+    while (files.length > 7) {
+      const old = files.shift()
+      if (old) {
+        try {
+          unlinkSync(join(dir, old))
+        } catch {
+          /* 忽略单文件删除失败 */
+        }
+      }
+    }
+  } catch {
+    /* 忽略目录读取失败 */
+  }
+}
+
+async function startSnapshotBackupScheduler(): Promise<void> {
+  if (snapshotBackupTimer) {
+    clearInterval(snapshotBackupTimer)
+    snapshotBackupTimer = null
+  }
+  const settings = await getSettings()
+  const enabled = !!settings.snapshotBackupEnabled
+  const dir = typeof settings.snapshotBackupDir === 'string' ? settings.snapshotBackupDir.trim() : ''
+  const intervalH = Number(settings.snapshotBackupIntervalH) || 24
+  if (!enabled || !dir || !(intervalH > 0)) {
+    console.log('[roxy] 全空间快照定时备份未启用')
+    return
+  }
+  snapshotBackupTimer = setInterval(() => {
+    runSnapshotBackupAll().catch((e) => console.error('[roxy] 快照定时备份异常:', e))
+  }, intervalH * 3600 * 1000)
+  console.log(`[roxy] 全空间快照定时备份已启动，间隔 ${intervalH} 小时，目录 ${dir}`)
 }
 
 let rpaScheduleTimer: ReturnType<typeof setInterval> | null = null
@@ -2608,30 +2688,7 @@ function buildApiRouter(): express.Router {
   // ===== 全空间快照：把整个团队空间打包为单一 JSON（环境 + 代理 + RPA + 扩展引用）=====
   // 复用各模块导出器拼装；导入端同样复用各模块导入器，保证「整环境迁移」与「整团队迁移」同源。
   router.get('/snapshot/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const teamRepo = AppDataSource.getRepository(TeamEntity)
-    const team = await teamRepo.findOne({ where: { id: req.tid! } })
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profileList = await profileRepo.find({
-      where: { teamId: req.tid, isTemplate: false, deletedAt: IsNull(), ...ownerScope(req) },
-      order: { seq: 'ASC' }
-    })
-    const profiles = await Promise.all(
-      profileList.map((p) => exportProfileFull(p, { tid: req.tid!, uid: req.uid, role: req.role }))
-    )
-    const proxies = await exportProxiesStructured({ tid: req.tid!, uid: req.uid, role: req.role })
-    const rpa = await exportRpaStructured({ tid: req.tid!, uid: req.uid, role: req.role })
-    const extensions = await exportExtensionsMeta({ tid: req.tid!, uid: req.uid, role: req.role })
-    const snap: SnapshotFile = {
-      format: SNAPSHOT_FORMAT,
-      version: SNAPSHOT_VERSION,
-      exportedAt: new Date().toISOString(),
-      team: { id: req.tid!, name: team?.name || 'team', icon: team?.icon || null },
-      exportedBy: req.username || undefined,
-      proxies,
-      rpa,
-      extensions,
-      profiles
-    }
+    const snap = await buildSnapshot({ tid: req.tid!, uid: req.uid, role: req.role }, req.username)
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="roxy-snapshot-${req.tid}-${stamp}.json"`)
@@ -3322,6 +3379,8 @@ export async function bootstrap(): Promise<string> {
   startProxyCheckScheduler().catch((e) => console.error('[roxy] 启动巡检调度失败:', e))
   // 6. 启动 RPA 定时执行调度器（每 30s 扫描到点脚本；环境未运行则跳过并写日志）
   startRpaScheduleScheduler()
+  // 7. 启动全空间快照定时自动备份调度（按间隔写入本地目录，目录为空/未启用则跳过）
+  startSnapshotBackupScheduler().catch((e) => console.error('[roxy] 启动快照备份调度失败:', e))
 
   return apiBase
 }
