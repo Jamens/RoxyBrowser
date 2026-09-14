@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch } from 'antd'
+import { useCallback, useEffect, useState, useRef } from 'react'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { SaveOutlined } from '@ant-design/icons'
-import { api } from '../api'
+import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { api, API_BASE, getToken } from '../api'
+import { readTextFile } from '../utils/download'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings } from '@shared/types'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
@@ -106,6 +107,50 @@ export default function Settings() {
     }
   }
 
+  // 全空间快照：把整个团队空间导出为单个 JSON（环境 + 代理 + RPA + 扩展引用）
+  const exportSnapshot = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/snapshot/export`, {
+        headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        return message.error((d as { message?: string }).message || t('snapshot.exportFailed'))
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `roxy-snapshot-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success(t('snapshot.exported'))
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 全空间快照：导入单个 JSON 文件，恢复到当前团队（代理按名复用，环境重新生成）
+  const importSnapshot = async (file: File) => {
+    try {
+      const text = await readTextFile(file)
+      const data = JSON.parse(text)
+      const res = await api.post<{ profiles: number; proxiesCreated: number; rpaCreated: number; proxiesSkipped: number }>(
+        '/api/snapshot/import',
+        data
+      )
+      message.success(
+        t('snapshot.importSuccess', {
+          profiles: res.profiles,
+          proxies: res.proxiesCreated,
+          rpa: res.rpaCreated
+        })
+      )
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   const checkAi = async () => {
     setChecking(true)
     try {
@@ -141,7 +186,8 @@ export default function Settings() {
   }
 
   return (
-    <Card title={t('settings.title')} loading={loading}>
+    <>
+      <Card title={t('settings.title')} loading={loading}>
       <Typography.Paragraph type="secondary">{t('settings.desc')}</Typography.Paragraph>
       <Form form={form} layout="vertical" initialValues={DEFAULT_SETTINGS} style={{ maxWidth: 560 }}>
         <Divider>{t('settings.sectionFp')}</Divider>
@@ -414,6 +460,30 @@ export default function Settings() {
         <Tag>V8 {versions?.v8 ?? '-'}</Tag>
         <Tag>{versions ? `${versions.platform}/${versions.arch}` : '-'}</Tag>
       </Space>
-    </Card>
+      </Card>
+
+      {/* 全空间快照：把整个团队空间打包成单个 JSON，便于迁移 / 整机备份 */}
+      <Card title={<span><DatabaseOutlined /> {t('snapshot.title')}</span>} style={{ marginTop: 16 }}>
+        <Typography.Paragraph type="secondary">{t('snapshot.desc')}</Typography.Paragraph>
+        <Space wrap>
+          <Button icon={<DownloadOutlined />} onClick={exportSnapshot}>
+            {t('snapshot.export')}
+          </Button>
+          <Upload
+            accept="application/json,.json"
+            showUploadList={false}
+            beforeUpload={(file) => {
+              importSnapshot(file)
+              return false
+            }}
+          >
+            <Button icon={<UploadOutlined />}>{t('snapshot.import')}</Button>
+          </Upload>
+        </Space>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+          {t('snapshot.importExtra')}
+        </Typography.Paragraph>
+      </Card>
+    </>
   )
 }

@@ -272,7 +272,17 @@ const zhCN = {
   'aiAgent.agent.templateRemark': '备注',
   'aiAgent.agent.targetEnvs': '目标环境（可多选）',
   'aiAgent.agent.matrixDone': '矩阵执行完成：{done} 成功 / {failed} 失败',
-  'aiAgent.agent.thinking': '视觉模型思考中，首次响应可能需要数秒…'
+  'aiAgent.agent.thinking': '视觉模型思考中，首次响应可能需要数秒…',
+
+  // ---- 全空间快照 ----
+  'snapshot.title': '空间快照',
+  'snapshot.desc': '把整个团队空间（环境 + 代理 + RPA + 扩展引用）打包成单个 JSON 文件，可在新机器一键灌入还原，或用于整机备份迁移。',
+  'snapshot.export': '导出快照',
+  'snapshot.exportFailed': '导出快照失败',
+  'snapshot.exported': '快照已导出',
+  'snapshot.import': '导入快照',
+  'snapshot.importExtra': '选择一个快照文件，将其内容恢复到当前团队（代理按名称复用，环境重新生成；缺失的扩展引用会被忽略）。',
+  'snapshot.importSuccess': '快照导入成功：环境 {profiles} 个、代理 {proxies} 条、RPA {rpa} 个'
 }
 
 export type MessageDict = typeof zhCN
@@ -542,7 +552,17 @@ const enUS: MessageDict = {
   'aiAgent.agent.templateRemark': 'Remark',
   'aiAgent.agent.targetEnvs': 'Target environments (multi-select)',
   'aiAgent.agent.matrixDone': 'Matrix finished: {done} succeeded / {failed} failed',
-  'aiAgent.agent.thinking': 'Vision model is thinking, first response may take a few seconds…'
+  'aiAgent.agent.thinking': 'Vision model is thinking, first response may take a few seconds…',
+
+  // ---- Space Snapshot ----
+  'snapshot.title': 'Space Snapshot',
+  'snapshot.desc': 'Pack the entire team space (profiles + proxies + RPA + extension references) into a single JSON file for one-click restore on a new machine, or for full-machine backup and migration.',
+  'snapshot.export': 'Export Snapshot',
+  'snapshot.exportFailed': 'Failed to export snapshot',
+  'snapshot.exported': 'Snapshot exported',
+  'snapshot.import': 'Import Snapshot',
+  'snapshot.importExtra': 'Pick a snapshot file to restore its content into the current team (proxies are reused by name, profiles are recreated; missing extension references are ignored).',
+  'snapshot.importSuccess': 'Snapshot imported: {profiles} profiles, {proxies} proxies, {rpa} RPA scripts'
 }
 
 const jaJP: MessageDict = {
@@ -810,7 +830,17 @@ const jaJP: MessageDict = {
   'aiAgent.agent.templateRemark': '備考',
   'aiAgent.agent.targetEnvs': '対象環境（複数選択可）',
   'aiAgent.agent.matrixDone': 'マトリックス実行完了：成功 {done} / 失敗 {failed}',
-  'aiAgent.agent.thinking': '視覚モデルが考え中です。初回応答には数秒かかる場合があります…'
+  'aiAgent.agent.thinking': '視覚モデルが考え中です。初回応答には数秒かかる場合があります…',
+
+  // ---- スペーススナップショット ----
+  'snapshot.title': 'スペーススナップショット',
+  'snapshot.desc': 'チーム空間全体（環境＋プロキシ＋RPA＋拡張参照）を単一の JSON ファイルにまとめ、別マシンでのワンクリック復元や丸ごとバックアップ・移行に利用できます。',
+  'snapshot.export': 'スナップショットをエクスポート',
+  'snapshot.exportFailed': 'スナップショットのエクスポートに失敗しました',
+  'snapshot.exported': 'スナップショットをエクスポートしました',
+  'snapshot.import': 'スナップショットをインポート',
+  'snapshot.importExtra': 'スナップショットファイルを選ぶと、その内容を現在のチームに復元します（プロキシは名前で再利用、環境は再生成、存在しない拡張参照は無視）。',
+  'snapshot.importSuccess': 'スナップショットをインポートしました：環境 {profiles} 件、プロキシ {proxies} 件、RPA {rpa} 件'
 }
 
 const deDE: MessageDict = {
@@ -1080,7 +1110,17 @@ const deDE: MessageDict = {
   'aiAgent.agent.templateRemark': 'Bemerkung',
   'aiAgent.agent.targetEnvs': 'Zielumgebungen (Mehrfachauswahl)',
   'aiAgent.agent.matrixDone': 'Matrix abgeschlossen: {done} erfolgreich / {failed} fehlgeschlagen',
-  'aiAgent.agent.thinking': 'Visionsmodell denkt, erste Antwort kann einige Sekunden dauern…'
+  'aiAgent.agent.thinking': 'Visionsmodell denkt, erste Antwort kann einige Sekunden dauern…',
+
+  // ---- Bereichs-Snapshot ----
+  'snapshot.title': 'Bereichs-Snapshot',
+  'snapshot.desc': 'Packt den gesamten Team-Bereich (Umgebungen + Proxys + RPA + Erweiterungsreferenzen) in eine einzelne JSON-Datei – für die Wiederherstellung auf einem neuen Rechner oder ein vollständiges Backup/Migration.',
+  'snapshot.export': 'Snapshot exportieren',
+  'snapshot.exportFailed': 'Snapshot-Export fehlgeschlagen',
+  'snapshot.exported': 'Snapshot exportiert',
+  'snapshot.import': 'Snapshot importieren',
+  'snapshot.importExtra': 'Wählen Sie eine Snapshot-Datei, um deren Inhalt in das aktuelle Team wiederherzustellen (Proxys werden nach Name wiederverwendet, Umgebungen neu erzeugt; fehlende Erweiterungsreferenzen werden ignoriert).',
+  'snapshot.importSuccess': 'Snapshot importiert: {profiles} Umgebungen, {proxies} Proxys, {rpa} RPA-Skripte'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

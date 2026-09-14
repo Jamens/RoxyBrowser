@@ -38,6 +38,16 @@ import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe } from '../shared/healthcheck'
+import {
+  exportProfileFull,
+  importProfileItems,
+  exportProxiesStructured,
+  importProxiesStructured,
+  exportRpaStructured,
+  importRpaStructured,
+  exportExtensionsMeta
+} from './exporters'
+import { SNAPSHOT_FORMAT, SNAPSHOT_VERSION, validateSnapshot, normalizeSnapshot, type SnapshotFile } from '../shared/snapshot'
 import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat, checkCloudStatus } from './agent/cloud'
@@ -1032,62 +1042,8 @@ function buildApiRouter(): express.Router {
     const repo = AppDataSource.getRepository(ProfileEntity)
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
-    const extRepo = AppDataSource.getRepository(ExtensionEntity)
-    const groupRepo = AppDataSource.getRepository(GroupEntity)
-    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const accRepo = AppDataSource.getRepository(AccountEntity)
-    const cookieRepo = AppDataSource.getRepository(CookieEntity)
-
-    const group = p.groupId ? await groupRepo.findOne({ where: { id: p.groupId, teamId: req.tid } }) : null
-    const proxy = p.proxyId ? await proxyRepo.findOne({ where: { id: p.proxyId, teamId: req.tid } }) : null
-    const accounts = await accRepo.find({ where: { profileId: p.id } })
-    const cookies = await cookieRepo.find({ where: { profileId: p.id } })
-    const extIds = Array.isArray(p.extensions) ? (p.extensions as number[]) : []
-    const extensions = extIds.length ? await extRepo.find({ where: extIds.map((id) => ({ id, teamId: req.tid })) }) : []
-
-    // 导出为扁平结构，与导入端完全对齐（导入直接按字段映射；所有 id 在导入端重新生成）
-    const data: Record<string, unknown> = {
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      name: p.name,
-      platform: p.platform,
-      startUrl: p.startUrl,
-      remark: p.remark,
-      fingerprint: p.fingerprint,
-      // 扩展以名称带出，导入端按名重映射回 id
-      extensions: extensions.map((e) => e.name),
-      // 分组 / 代理以「名称」形式带出；代理同时附带完整连接信息（proxyDetail），
-      // 导入端优先按名复用已有代理，否则按 proxyDetail 就地新建
-      group: group ? group.name : null,
-      proxy: proxy ? proxy.name : null,
-      proxyDetail: proxy
-        ? {
-            type: proxy.type,
-            host: proxy.host,
-            port: proxy.port,
-            username: proxy.username,
-            password: proxy.password,
-            remark: proxy.remark,
-            country: proxy.country,
-            region: proxy.region,
-            city: proxy.city,
-            isp: proxy.isp,
-            expiresAt: proxy.expiresAt ? new Date(proxy.expiresAt).toISOString() : null
-          }
-        : null,
-      accounts: accounts.map((a) => ({ platform: a.platform, username: a.username, password: a.password, remark: a.remark })),
-      cookies: cookies.map((c) => ({
-        domain: c.domain,
-        name: c.name,
-        value: c.value,
-        path: c.path || '/',
-        secure: !!c.secure,
-        httpOnly: !!c.httpOnly,
-        sameSite: c.sameSite || 'unspecified',
-        expirationDate: c.expirationDate ? new Date(c.expirationDate).toISOString() : null,
-        hostOnly: c.hostOnly == null ? true : !!c.hostOnly
-      }))
-    }
+    // 复用导出器，保证「单环境导出」与「全空间快照」走同一套结构，往返一致
+    const data = await exportProfileFull(p, { tid: req.tid!, uid: req.uid, role: req.role })
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="profile-${p.id}-${encodeURIComponent(p.name)}.json"`)
     res.send(JSON.stringify(data, null, 2))
@@ -2621,12 +2577,6 @@ function buildApiRouter(): express.Router {
 
   // 导入环境（JSON）：兼容纯环境数组，也支持带分组 / 代理 / 账号的完整迁移文件
   router.post('/profiles/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const groupRepo = AppDataSource.getRepository(GroupEntity)
-    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const accountRepo = AppDataSource.getRepository(AccountEntity)
-    const cookieRepo = AppDataSource.getRepository(CookieEntity)
-    const extRepo = AppDataSource.getRepository(ExtensionEntity)
     const payload = req.body || {}
     // 支持三种入参：{ items: [...] }（批量）、整环境导出单对象（含 name 字段）、裸数组 [...]
     const items = (Array.isArray(payload.items)
@@ -2637,135 +2587,87 @@ function buildApiRouter(): express.Router {
           ? [payload]
           : []) as Array<Record<string, unknown>>
     if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
-
-    // 分组 / 代理按名称复用，缺失则新建；扩展按名称重映射回 id（目标环境无同名扩展则丢弃该引用）
-    const groupIdByName = new Map((await groupRepo.find({ where: ownerScope(req) })).map((g) => [g.name, g.id]))
-    const proxyIdByName = new Map((await proxyRepo.find({ where: ownerScope(req) })).map((x) => [x.name, x.id]))
-    const extIdByName = new Map((await extRepo.find({ where: ownerScope(req) })).map((e) => [e.name, e.id]))
-
-    const qbImp = repo
-      .createQueryBuilder('p')
-      .select('MAX(p.seq)', 'm')
-      .where('p.teamId = :tid', { tid: req.tid })
-    ownerAndWhere(qbImp, req)
-    let seq = Number((await qbImp.getRawOne<{ m: number | null }>())?.m || 1000)
-
-    const created: Array<{ id: number; name: string }> = []
-    let groupsCreated = 0
-    let proxiesCreated = 0
-    let accountsCreated = 0
-    let cookiesCreated = 0
-
-    for (const item of items) {
-      // 分组
-      let groupId: number | null = null
-      const groupName = item.group ? String(item.group) : ''
-      if (groupName) {
-        if (!groupIdByName.has(groupName)) {
-          const g = await groupRepo.save(groupRepo.create({ teamId: req.tid!, ownerId: req.uid!, name: groupName, sort: 0 }))
-          groupIdByName.set(groupName, g.id)
-          groupsCreated++
-        }
-        groupId = groupIdByName.get(groupName) ?? null
-      }
-
-      // 代理：先按名称复用，再按迁移文件里的 proxyDetail 就地新建
-      let proxyId: number | null = null
-      const proxyName = item.proxy ? String(item.proxy) : ''
-      if (proxyName) {
-        if (proxyIdByName.has(proxyName)) {
-          proxyId = proxyIdByName.get(proxyName) ?? null
-        } else {
-          const detail = (item.proxyDetail || {}) as Record<string, unknown>
-          if (detail.host && detail.port) {
-            const x = await proxyRepo.save(
-              proxyRepo.create({
-                teamId: req.tid!,
-                ownerId: req.uid!,
-                name: proxyName,
-                type: String(detail.type || 'http'),
-                host: String(detail.host),
-                port: Number(detail.port),
-                username: String(detail.username || ''),
-                password: String(detail.password || ''),
-                remark: String(detail.remark || '')
-              })
-            )
-            proxyIdByName.set(proxyName, x.id)
-            proxyId = x.id
-            proxiesCreated++
-          }
-        }
-      }
-
-      // 扩展：按名称重映射回 id（目标环境没有同名扩展则丢弃该引用）
-      const extNames = Array.isArray(item.extensions) ? (item.extensions as string[]) : []
-      const extIds = extNames.map((n) => extIdByName.get(n)).filter((v): v is number => v != null)
-
-      seq += 1
-      const p = await repo.save(
-        repo.create({
-          teamId: req.tid!,
-          ownerId: req.uid!,
-          groupId,
-          proxyId,
-          extensions: extIds,
-          name: (item.name as string) || `导入环境 ${seq}`,
-          seq,
-          platform: (item.platform as string) || '',
-          startUrl: (item.startUrl as string) || DEFAULT_START_URL,
-          remark: (item.remark as string) || '',
-          fingerprint: normalizeFingerprint(item.fingerprint as Partial<Fingerprint> | null) as unknown as Record<string, unknown>,
-          createdBy: req.uid!
-        })
-      )
-      created.push({ id: p.id, name: p.name })
-
-      // Cookie：逐条重建并绑定新环境
-      for (const c of (item.cookies || []) as Array<Record<string, unknown>>) {
-        if (!c?.name || !c?.domain) continue
-        await cookieRepo.save(
-          cookieRepo.create({
-            profileId: p.id,
-            ownerId: req.uid!,
-            teamId: req.tid!,
-            domain: String(c.domain),
-            name: String(c.name),
-            value: String(c.value || ''),
-            path: String(c.path || '/'),
-            secure: !!c.secure,
-            httpOnly: !!c.httpOnly,
-            sameSite: String(c.sameSite || 'unspecified'),
-            expirationDate: c.expirationDate ? new Date(c.expirationDate as string | number) : null,
-            hostOnly: c.hostOnly == null ? true : !!c.hostOnly
-          })
-        )
-        cookiesCreated++
-      }
-
-      // 账号
-      for (const acc of (item.accounts || []) as Array<Record<string, unknown>>) {
-        if (!acc?.username) continue
-        await accountRepo.save(
-          accountRepo.create({
-            profileId: p.id,
-            ownerId: req.uid!,
-            platform: String(acc.platform || ''),
-            username: String(acc.username),
-            password: String(acc.password || ''),
-            remark: String(acc.remark || '')
-          })
-        )
-        accountsCreated++
-      }
-    }
-
+    // 复用导出器里的导入实现，保证与全空间快照导入同源
+    const summary = await importProfileItems(items, { tid: req.tid!, uid: req.uid, role: req.role })
+    if (summary.created === 0) return res.status(400).json({ message: '没有有效的环境可导入' })
     await writeLog(
       req,
       'import_profiles',
-      `导入 ${created.length} 个环境（新建分组 ${groupsCreated} 个、代理 ${proxiesCreated} 条、账号 ${accountsCreated} 条、Cookie ${cookiesCreated} 条）`
+      `导入 ${summary.created} 个环境（新建分组 ${summary.groupsCreated} 个、代理 ${summary.proxiesCreated} 条、账号 ${summary.accountsCreated} 条、Cookie ${summary.cookiesCreated} 条）`
     )
-    res.json({ created: created.length, items: created, groupsCreated, proxiesCreated, accountsCreated, cookiesCreated })
+    res.json({
+      created: summary.created,
+      items: summary.items,
+      groupsCreated: summary.groupsCreated,
+      proxiesCreated: summary.proxiesCreated,
+      accountsCreated: summary.accountsCreated,
+      cookiesCreated: summary.cookiesCreated
+    })
+  })
+
+  // ===== 全空间快照：把整个团队空间打包为单一 JSON（环境 + 代理 + RPA + 扩展引用）=====
+  // 复用各模块导出器拼装；导入端同样复用各模块导入器，保证「整环境迁移」与「整团队迁移」同源。
+  router.get('/snapshot/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const teamRepo = AppDataSource.getRepository(TeamEntity)
+    const team = await teamRepo.findOne({ where: { id: req.tid! } })
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profileList = await profileRepo.find({
+      where: { teamId: req.tid, isTemplate: false, deletedAt: IsNull(), ...ownerScope(req) },
+      order: { seq: 'ASC' }
+    })
+    const profiles = await Promise.all(
+      profileList.map((p) => exportProfileFull(p, { tid: req.tid!, uid: req.uid, role: req.role }))
+    )
+    const proxies = await exportProxiesStructured({ tid: req.tid!, uid: req.uid, role: req.role })
+    const rpa = await exportRpaStructured({ tid: req.tid!, uid: req.uid, role: req.role })
+    const extensions = await exportExtensionsMeta({ tid: req.tid!, uid: req.uid, role: req.role })
+    const snap: SnapshotFile = {
+      format: SNAPSHOT_FORMAT,
+      version: SNAPSHOT_VERSION,
+      exportedAt: new Date().toISOString(),
+      team: { id: req.tid!, name: team?.name || 'team', icon: team?.icon || null },
+      exportedBy: req.username || undefined,
+      proxies,
+      rpa,
+      extensions,
+      profiles
+    }
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="roxy-snapshot-${req.tid}-${stamp}.json"`)
+    res.send(JSON.stringify(snap, null, 2))
+  })
+
+  // 一键灌入：先恢复代理池（按名称复用），再导入环境（引用同名代理），最后导入 RPA。
+  // 扩展为名称引用，目标缺同名扩展则自动丢弃引用（与单环境导入行为一致）。
+  router.post('/snapshot/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const v = validateSnapshot(req.body)
+    if (!v.ok) return res.status(400).json({ message: '快照文件不合法：' + v.errors.join('；'), detail: v })
+    const data = normalizeSnapshot(req.body as SnapshotFile)
+    const proxyRes = await importProxiesStructured(data.proxies, { tid: req.tid!, uid: req.uid, role: req.role })
+    const profRes = await importProfileItems(data.profiles as unknown as Array<Record<string, unknown>>, {
+      tid: req.tid!,
+      uid: req.uid,
+      role: req.role
+    })
+    const rpaRes = await importRpaStructured(data.rpa, { tid: req.tid!, uid: req.uid, role: req.role })
+    if (profRes.created === 0 && proxyRes.imported === 0 && rpaRes.created === 0) {
+      return res.status(400).json({ message: '快照中没有可导入的内容' })
+    }
+    await writeLog(
+      req,
+      'import_snapshot',
+      `导入快照（团队「${data.team.name || req.tid}」）：环境 ${profRes.created} 个、代理 ${proxyRes.imported} 条、RPA ${rpaRes.created} 个`
+    )
+    res.json({
+      ok: true,
+      profiles: profRes.created,
+      groupsCreated: profRes.groupsCreated,
+      proxiesCreated: proxyRes.imported,
+      proxiesSkipped: proxyRes.skipped,
+      rpaCreated: rpaRes.created,
+      extensionsReferenced: data.extensions.length
+    })
   })
 
 
