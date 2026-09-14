@@ -4,6 +4,8 @@ import { existsSync } from 'fs'
 import { AppDataSource } from './server'
 import { ProfileEntity, ProxyEntity, CookieEntity, ExtensionEntity } from './entities'
 import type { Fingerprint, RpaStep } from '../shared/types'
+import type { FingerprintProbe } from '../shared/healthcheck'
+import { collectProbe } from './healthProbe'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
 async function setElectronCookie(ses: Electron.Session, c: CookieEntity) {
@@ -128,6 +130,12 @@ export function getRunningWindowIds(): number[] {
 export function getWindow(profileId: number): BrowserWindow | undefined {
   const w = windows.get(profileId)
   return w && !w.isDestroyed() ? w : undefined
+}
+/** 环境体检：在目标环境窗口内采集实际生效的指纹值（窗口未运行返回 null） */
+export async function probeFingerprint(profileId: number): Promise<FingerprintProbe | null> {
+  const w = getWindow(profileId)
+  if (!w) return null
+  return collectProbe(w)
 }
 /** 已打开窗口的详细信息，供 UI 选择同步对象 */
 export function getRunningWindows(): { id: number; title: string }[] {

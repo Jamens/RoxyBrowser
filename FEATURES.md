@@ -66,6 +66,42 @@ curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
 
 相关接口：`POST /api/fingerprint/random`（body `os` 可选 `windows|mac|android|ios`）、`GET /api/fingerprint/presets`。
 
+### 2.1 环境体检（伪装度评分 + 一致性红绿灯）
+
+「配置保存成功」不等于「指纹真的注入生效了」。体检把**数据库里的设定指纹**与**环境窗口内真实回读值**逐项对撞，回答两个问题：注入生效了吗？四件套自洽吗？
+
+- **入口**：环境列表每行「体检」按钮（需环境已打开；未打开时提示先开窗）。
+- **接口**：`POST /api/profiles/:id/healthcheck` → `{ score, items[], consistency[], checkedAt, proxyCountry }`。
+- **伪装度 0–100**：按加权项计算，逐项展示「设定值 / 实测值 / 是否正常」，不适用项不计入总分：
+
+  | 检查项 | 权重 | 实测来源 |
+  | -- | -- | -- |
+  | User Agent / 平台 / 语言 | 12 / 8 / 8 | `navigator.userAgent`、`platform`、`languages` |
+  | 屏幕分辨率 | 8 | `screen.width` / `height` |
+  | 时区 / 时区偏移 | 12 / 8 | `Intl.DateTimeFormat().resolvedOptions().timeZone`、`Date.getTimezoneOffset()` |
+  | WebGL 显卡 | 10 | `getParameter(37445)` / `(37446)` |
+  | UA-CH（userAgentData） | 8 | `platform` / `mobile`（iOS 伪装时必须整体不存在） |
+  | CPU 核心 / 内存 / DNT | 4 / 4 / 2 | `hardwareConcurrency`、`deviceMemory`、`doNotTrack` |
+  | 触摸能力 | 4 | `maxTouchPoints`、`'ontouchstart' in window` |
+  | Canvas 噪声 | 6 | `HTMLCanvasElement.prototype.toDataURL` 是否被改写 |
+  | Audio 噪声 | 5 | `AudioBuffer.prototype.getChannelData` 是否被改写 |
+  | WebRTC | 8 | `RTCPeerConnection` 是否不可用 |
+  | 字体防泄漏 | 5 | `document.fonts.check` 是否被改写 |
+
+- **噪声 / 防护类不看配置、看注入是否真挂上**：通过判断原型方法是否被改写来实测——原生方法的 `toString()` 含 `[native code]`，被 JS 覆盖后是普通函数源码。因此能发现「配置存了但注入没生效」这类问题。
+- **一致性红绿灯**（关联高危信号，不计入伪装度分）：
+
+  | 检查项 | 含义 |
+  | -- | -- |
+  | 时区 ↔ 代理出口国家 | 时区所属国家与代理出口 IP 国家是否一致 |
+  | 语言 ↔ 时区国家 | 浏览器语言地区与时区国家是否一致 |
+  | UA 平台 ↔ 设定系统 | UA 解析出的平台与设定 OS 是否一致 |
+
+  未绑定代理或代理未检测时显示「未检测」（灰色），不判红。
+- **环境限制不误报**：无 GPU 环境创建不出 WebGL 上下文时，该项标记「不适用」且权重置 0，不会被当成注入失败。
+
+> 实测值取自环境窗口内真实读取，因此体检**必须在环境窗口运行时执行**（与 RPA 录制要求一致）；窗口未运行会返回 400。
+
 ### 3. 代理 IP
 
 - 支持 HTTP / HTTPS / SOCKS5，带用户名密码

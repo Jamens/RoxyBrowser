@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty
+  Card, Table, Button, Input, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined
+  ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
+  SafetyCertificateOutlined
 } from '@ant-design/icons'
+import type { HealthReport } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -15,6 +17,36 @@ import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
 import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
+
+// 体检项中文标签（后端只回 key 与「设定值/实测值」，展示名放前端）
+const HEALTH_LABELS: Record<string, string> = {
+  userAgent: 'User Agent',
+  platform: '平台 Platform',
+  languages: '语言 Languages',
+  screen: '屏幕分辨率',
+  timezone: '时区 Timezone',
+  tzOffset: '时区偏移 UTC',
+  webgl: 'WebGL 显卡',
+  uaData: 'UA-CH（userAgentData）',
+  hardwareConcurrency: 'CPU 核心数',
+  deviceMemory: '内存 deviceMemory',
+  doNotTrack: 'Do Not Track',
+  touch: '触摸能力',
+  canvasNoise: 'Canvas 噪声',
+  audioNoise: 'Audio 噪声',
+  webrtc: 'WebRTC',
+  fonts: '字体防泄漏'
+}
+
+// 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）
+const CONSISTENCY_LABELS: Record<string, string> = {
+  tzVsProxy: '时区 ↔ 代理出口国家',
+  langVsTz: '语言 ↔ 时区国家',
+  uaVsOs: 'UA 平台 ↔ 设定系统'
+}
+
+/** 伪装度配色：≥90 绿 / ≥70 黄 / 其余红 */
+const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '#ff4d4f')
 
 export default function Environments() {
   const { message } = useAppCtx()
@@ -38,6 +70,11 @@ export default function Environments() {
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [groupForm] = Form.useForm()
   const [quickCreating, setQuickCreating] = useState(false)
+  // 环境体检报告
+  const [healthOpen, setHealthOpen] = useState(false)
+  const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
+  const [healthLoading, setHealthLoading] = useState(false)
+  const [healthName, setHealthName] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const load = useCallback(async () => {
@@ -78,6 +115,27 @@ export default function Environments() {
       load()
     } catch (e) {
       message.error((e as Error).message)
+    }
+  }
+
+  // 环境体检：把「设定指纹」与「窗口内实测回读值」对撞，输出伪装度分与一致性红绿灯。
+  // 必须在窗口运行时执行——注入是否真的生效，只有在真实页面上下文里才读得准。
+  const runHealthCheck = async (r: ProfileDTO) => {
+    if (r.status !== 'running') {
+      message.warning('请先打开该环境窗口，再执行体检')
+      return
+    }
+    setHealthName(r.name)
+    setHealthReport(null)
+    setHealthLoading(true)
+    setHealthOpen(true)
+    try {
+      setHealthReport(await api.post<HealthReport>(`/api/profiles/${r.id}/healthcheck`, {}))
+    } catch (e) {
+      message.error((e as Error).message)
+      setHealthOpen(false)
+    } finally {
+      setHealthLoading(false)
     }
   }
 
@@ -422,7 +480,7 @@ export default function Environments() {
     },
     {
       title: '操作',
-      width: 232,
+      width: 276,
       render: (_, r) => (
         <Space size={4}>
           {r.status === 'running' ? (
@@ -444,6 +502,9 @@ export default function Environments() {
               <Button size="small" icon={<SwapOutlined />} />
             </Tooltip>
           </Popconfirm>
+          <Tooltip title="环境体检：伪装度评分 + 一致性红绿灯（需先打开环境）">
+            <Button size="small" icon={<SafetyCertificateOutlined />} onClick={() => runHealthCheck(r)} />
+          </Tooltip>
           <Tooltip title="导出整环境配置（含指纹 / 代理 / 账号 / Cookie / 扩展）">
             <Button size="small" icon={<ExportOutlined />} onClick={() => exportProfile(r.id, r.name)} />
           </Tooltip>
@@ -704,6 +765,81 @@ export default function Environments() {
               }
             ]}
           />
+        )}
+      </Drawer>
+
+      {/* 环境体检报告：伪装度分（设定值 vs 窗口实测值逐项对撞）+ 一致性红绿灯 */}
+      <Drawer
+        title={`环境体检报告 — ${healthName}`}
+        width={760}
+        open={healthOpen}
+        onClose={() => setHealthOpen(false)}
+      >
+        {healthLoading && <Empty description="正在环境窗口内采集指纹…" />}
+        {!healthLoading && !healthReport && <Empty description="暂无报告" />}
+        {!healthLoading && healthReport && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+              <div style={{ textAlign: 'center', minWidth: 96 }}>
+                <div style={{ fontSize: 12, color: '#888' }}>伪装度</div>
+                <div style={{ fontSize: 38, fontWeight: 500, color: scoreColor(healthReport.score), lineHeight: 1.25 }}>
+                  {healthReport.score}
+                </div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <Progress percent={healthReport.score} strokeColor={scoreColor(healthReport.score)} showInfo={false} />
+                <div style={{ fontSize: 12, color: '#888', marginTop: 6 }}>
+                  按「设定指纹 vs 窗口实测值」逐项加权得出，仅统计适用项。检测于{' '}
+                  {dayjs(healthReport.checkedAt).format('YYYY-MM-DD HH:mm:ss')}
+                </div>
+              </div>
+            </div>
+
+            <Typography.Title level={5} style={{ marginTop: 20 }}>
+              一致性检查（关联高危信号）
+            </Typography.Title>
+            <Table
+              size="small"
+              rowKey="key"
+              pagination={false}
+              dataSource={healthReport.consistency}
+              columns={[
+                { title: '检查项', dataIndex: 'key', width: 190, render: (v: string) => CONSISTENCY_LABELS[v] || v },
+                { title: '期望', dataIndex: 'expected', ellipsis: true },
+                { title: '实际', dataIndex: 'actual', ellipsis: true },
+                {
+                  title: '状态',
+                  width: 96,
+                  render: (_: unknown, r) =>
+                    r.skipped ? <Tag>未检测</Tag> : r.ok ? <Tag color="success">一致</Tag> : <Tag color="error">不一致</Tag>
+                }
+              ]}
+            />
+
+            <Typography.Title level={5} style={{ marginTop: 24 }}>
+              逐项对撞（设定值 / 实测值）
+            </Typography.Title>
+            <Table
+              size="small"
+              rowKey="key"
+              pagination={false}
+              dataSource={healthReport.items}
+              columns={[
+                { title: '检查项', dataIndex: 'key', width: 160, render: (v: string) => HEALTH_LABELS[v] || v },
+                { title: '设定值', dataIndex: 'expected', ellipsis: true },
+                { title: '实测值', dataIndex: 'actual', ellipsis: true },
+                {
+                  title: '状态',
+                  width: 88,
+                  render: (_: unknown, r) =>
+                    r.weight === 0 ? <Tag>不适用</Tag> : r.ok ? <Tag color="success">正常</Tag> : <Tag color="error">不符</Tag>
+                }
+              ]}
+            />
+            <div style={{ fontSize: 12, color: '#888', marginTop: 16 }}>
+              实测值取自环境窗口内真实读取（含原型函数是否被改写），因此能反映指纹注入是否真的生效，而不只是配置是否保存成功。
+            </div>
+          </div>
         )}
       </Drawer>
     </div>

@@ -37,6 +37,7 @@ import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
+import { buildHealthReport, type FingerprintProbe } from '../shared/healthcheck'
 import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat, checkCloudStatus } from './agent/cloud'
@@ -60,6 +61,8 @@ export let apiBase = ''
 export interface BrowserBridge {
   openWindow(profileId: number): Promise<void>
   closeWindow(profileId: number): Promise<void>
+  /** 环境体检：在目标窗口内采集实际生效的指纹值，窗口未运行返回 null */
+  probeFingerprint(profileId: number): Promise<FingerprintProbe | null>
 }
 let browserBridge: BrowserBridge | null = null
 export function setBrowserBridge(b: BrowserBridge) {
@@ -1174,6 +1177,28 @@ function buildApiRouter(): express.Router {
     await repo.save(p)
     await writeLog(req, 'close_profile', `关闭环境「${p.name}」(#${p.id})`)
     res.json({ ok: true })
+  })
+
+  // 环境体检：把「数据库里的设定指纹」与「窗口内实测回读值」对撞，
+  // 输出伪装度分与一致性红绿灯（IP国家 ↔ 时区 ↔ 语言 ↔ UA 是否自洽）。
+  // 必须在环境窗口运行时执行——注入生效与否只有在真实页面上下文里才读得准。
+  router.post('/profiles/:id/healthcheck', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
+    if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+    if (p.status !== 'running') return res.status(400).json({ message: '请先打开环境窗口，再执行体检' })
+    const actual = await browserBridge.probeFingerprint(p.id)
+    if (!actual) return res.status(400).json({ message: '环境窗口未运行，请打开后再体检' })
+    if (actual.error) return res.status(500).json({ message: `指纹采集失败：${actual.error}` })
+    let proxyCountry = ''
+    if (p.proxyId) {
+      const px = await AppDataSource.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } })
+      proxyCountry = px?.country || ''
+    }
+    const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, { proxyCountry })
+    res.json(report)
   })
 
   // 从模板创建环境

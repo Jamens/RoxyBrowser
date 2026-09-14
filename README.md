@@ -98,6 +98,29 @@ mysql -uroot -p1234560 < db/schema.sql
 
 > 若 MySQL 未启动，应用启动会弹出错误框：「无法连接数据库或启动服务……请确认 MySQL 已启动（默认 127.0.0.1:3307，root/1234560）」。
 
+## 核心功能
+
+- **环境管理**：无限创建隔离环境（每个独立 `persist:env-{id}` session），批量开关、分组筛选、回收站、整环境导出 / 导入迁移、手动切换线路
+- **浏览器指纹**：UA / UA-CH / 平台 / 语言 / 时区 / 分辨率 / CPU·内存 / Canvas·Audio 噪声 / WebGL / WebRTC / 字体防泄漏，桌面 + 移动端四形态，另附指纹预设库
+- **代理 IP**：HTTP(S) / SOCKS5，一键检测（出口 IP / 地区 / 延迟 / 匿名度）、IP 池视角、一键分配、定时巡检、扫码导出
+- **环境体检**：伪装度评分 + 一致性红绿灯——把「设定指纹」与「环境窗口内实测回读值」逐项对撞（详见下节）
+- **多窗口同步**：键鼠轨迹级同步（稳定 selector + 元素内相对坐标 + 贝塞尔曲线插值）
+- **RPA 脚本**：录制回放、变量替换、定时执行、运行日志
+- **AI Agent**：本地 Ollama（默认，零 token）+ 云端 BYOK 可选，支持「看屏 → 决策 → 操作」执行闭环
+- **团队协作 / 账号中心 / Cookie / 扩展**：成员角色控权、账号批量导入、Cookie 按环境隔离与批量导入、按环境加载 Chrome 扩展
+- **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器
+
+各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
+
+### 环境体检（伪装度评分 + 一致性红绿灯）
+
+在环境列表每行点「体检」（需环境已打开），后端会在**该环境窗口内真实执行 JS 回读**当前生效的指纹值，与数据库里的设定指纹逐项对撞：
+
+- **伪装度 0–100**：按 UA / 平台 / 语言 / 屏幕 / 时区 / 时区偏移 / WebGL / UA-CH / CPU·内存 / Canvas·Audio 噪声 / WebRTC / 字体防泄漏等项加权得出，逐项展示「设定值 / 实测值 / 是否正常」。
+- **一致性红绿灯**：代理出口 IP 国家 ↔ 时区 ↔ 浏览器语言 ↔ UA 平台 四件套是否自洽——不自洽是**关联高危信号**（比单项指纹更像真人更重要）。
+- 噪声与防护类开关不看配置、看**注入是否真挂上**：通过判断原型方法是否被改写（原生方法 `toString()` 含 `[native code]`）来实测 Canvas / Audio / 字体防护是否生效。
+- 环境限制不会误报：无 GPU 环境创建不出 WebGL 上下文时，该项标记为「不适用」且不计入总分，不会被当成「指纹注入失败」。
+
 ## 目录结构
 
 ```
@@ -108,14 +131,16 @@ src/
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
 │   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发
-│   └── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
+│   ├── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
+│   └── healthProbe.ts        # 环境体检采集：在环境窗口内执行 JS，读回真实生效的指纹值
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
 │   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池）
 │   ├── countries.ts          # 16 个主流跨境电商国家（国家码 / 中英文名 / IANA 时区 / 默认语言）
 │   ├── locales.ts            # 支持的语言（zh-CN / en-US / ja-JP / de-DE）与 antd·dayjs 包名映射
-│   └── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）
+│   ├── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）
+│   └── healthcheck.ts        # 环境体检比对：设定指纹 vs 实测值 → 伪装度分与一致性红绿灯（纯函数）
 └── renderer/src/             # React 前端
     ├── pages/                # 登录、环境管理、模板、代理、账号、Cookie、团队、日志、API、设置、新标签页
     ├── i18n/                 # 多语言：I18nProvider / useT / messages 词典 / antd·dayjs 语言包桥接
