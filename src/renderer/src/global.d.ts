@@ -46,6 +46,14 @@ declare global {
       agentOnNeedApproval: (cb: (d: { runId: string; envId: number; question: string }) => void) => () => void
       /** 订阅矩阵汇总事件（全部环境执行完毕时触发一次），返回取消订阅函数 */
       agentOnAllDone: (cb: (d: { runId: string; results: { envId: number; status: 'done' | 'failed'; result: string; rpaSteps?: import('@shared/types').RpaStep[] }[] }) => void) => () => void
+      /** 检查更新（手动触发） */
+      checkUpdate?: () => Promise<{ state: string; message?: string }>
+      /** 下载当前可用更新 */
+      downloadUpdate?: () => Promise<{ ok: boolean; error?: string }>
+      /** 退出并安装已下载的更新 */
+      quitAndInstall?: () => void
+      /** 订阅更新状态推送，返回取消订阅函数 */
+      onUpdateStatus?: (cb: (s: import('@shared/types').UpdaterStatus) => void) => () => void
     }
   }
 }

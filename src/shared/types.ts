@@ -447,3 +447,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   snapshotBackupIntervalH: 24,
   aiAutoTasks: []
 }
+
+// ===== 自动更新（electron-updater）状态推送 =====
+// 主进程经 IPC（app:update-status）把更新状态推给渲染端；dev 态不检查更新。
+export type UpdaterStatus =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'dev' }
+  | { state: 'latest'; version: string }
+  | { state: 'available'; version: string }
+  | { state: 'downloading'; percent: number }
+  | { state: 'downloaded'; version: string }
+  | { state: 'error'; message: string }

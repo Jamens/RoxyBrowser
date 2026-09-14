@@ -84,6 +84,15 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 - **校验**：导入前用 `validateSnapshot()`（`src/shared/snapshot.ts`，纯函数）严格校验 `format` / `version` / `profiles[]`，非法文件直接 400 拒绝，不污染数据库。
 - **定时自动备份**：设置页「空间快照」分区可开启，按设定间隔（小时）把**每个团队空间**自动打包写入本地目录，每个团队保留最近 7 份（按文件名时间戳排序，超出自动清理），目录不存在 / 不可写时静默跳过、不报错。复用代理巡检式 `setInterval` 调度器（保存设置即重启调度），逻辑集中在 `startSnapshotBackupScheduler()` / `runSnapshotBackupAll()`（`src/main/server.ts`）；文件复用 `buildSnapshot()`（`src/main/exporters.ts`，与手动导出 / 导入同源），保证自动备份与手动快照字段完全一致。
 
+### 1.4 发布与自动更新
+
+对标官方可分发产品形态：打包产物默认不签名，正式分发可一键接入代码签名；并内置基于 `electron-updater` 的自动更新。
+
+- **代码签名（证书就绪）**：`electron-builder.yml` 已配置 `win.signingHashAlgorithms: [sha256]`，签名经环境变量 `CSC_LINK`（`.pfx` 路径 / URL）与 `CSC_KEY_PASSWORD` 驱动——本地 / CI 无证书时自动跳过、仅告警，不破坏构建。正式发布在签名机设置两变量后执行 `pnpm dist` 即可，主程序 exe 与 NSIS 安装包会被自动签名；Portable 版为 7z 自解包无法签名，仅作内部分发。
+- **自动更新（electron-updater）**：`src/main/updater.ts` 在主进程接入 `autoUpdater`，仅打包安装版（`app.isPackaged`）生效，开发态只推送 `{ state: 'dev' }`；采用 manual 模式（自动检查但不自动下载，由用户在设置页「关于」区确认后再下载 / 安装，避免打断多账号操作）。
+  - 更新源由 `electron-builder.yml` 的 `publish.generic` 决定（默认占位 `https://update.roxyclone.com`），可用环境变量 `UPDATE_FEED_URL` 在运行时覆盖。执行 `pnpm dist` 时生成 `latest.yml` 与安装包并上传到该地址。
+  - 主进程经 IPC `app:update-status` 推送状态，渲染端 `window.roxy.onUpdateStatus` 订阅；设置页提供「检查更新」按钮与状态展示（发现新版本 → 下载并安装 → 立即重启安装），四语 i18n（`update.*`）。
+
 ```bash
 # 导出当前团队快照
 curl -H "Authorization: Bearer <会话令牌>" http://127.0.0.1:39100/api/snapshot/export -o roxy-snapshot.json

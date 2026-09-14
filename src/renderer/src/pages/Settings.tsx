@@ -4,7 +4,7 @@ import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
 import { readTextFile } from '../utils/download'
-import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings, type AiAutoTask } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings, type AiAutoTask, type UpdaterStatus } from '@shared/types'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
@@ -221,6 +221,43 @@ export default function Settings() {
         {text}
       </Typography.Paragraph>
     )
+  }
+
+  // 自动更新状态展示：检查 / 可用 / 下载中 / 已下载 / 错误 各态对应不同交互
+  const renderUpdateStatus = (s: UpdaterStatus | null) => {
+    if (!s) return null
+    switch (s.state) {
+      case 'dev':
+        return <Tag>{t('update.dev')}</Tag>
+      case 'checking':
+        return <Tag color="processing">{t('update.checking')}</Tag>
+      case 'latest':
+        return <Tag color="success">{t('update.latest')}（{s.version}）</Tag>
+      case 'available':
+        return (
+          <Button
+            type="link"
+            onClick={async () => {
+              const r = await window.roxy?.downloadUpdate?.()
+              if (r && !r.ok) message.error(r.error || t('update.error'))
+            }}
+          >
+            {t('update.available')} {s.version} → {t('update.download')}
+          </Button>
+        )
+      case 'downloading':
+        return <Tag color="processing">{t('update.downloading')} {s.percent}%</Tag>
+      case 'downloaded':
+        return (
+          <Button type="primary" onClick={() => window.roxy?.quitAndInstall?.()}>
+            {t('update.downloaded')} · {t('update.installNow')}
+          </Button>
+        )
+      case 'error':
+        return <Tag color="error">{t('update.error')}{s.message ? `：${s.message}` : ''}</Tag>
+      default:
+        return null
+    }
   }
 
   return (

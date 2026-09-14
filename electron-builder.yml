@@ -31,6 +31,13 @@ compression: maximum
 win:
   icon: resources/icon.ico
   artifactName: ${productName}-${version}-${platform}-${arch}.${ext}
+  # 代码签名（证书就绪，本地无证书时 electron-builder 自动跳过、仅告警，不破坏构建）：
+  #   正式分发前设置环境变量后执行 pnpm dist：
+  #     CSC_LINK         = .pfx 证书路径或下载 URL（Authenticode 代码签名证书，EV 更佳）
+  #     CSC_KEY_PASSWORD = 证书私钥密码
+  #   主程序 exe 与 NSIS 安装包会被自动签名；Portable 版为 7z 自解包无法签名，仅作内部分发。
+  signingHashAlgorithms:
+    - sha256
   target:
     - target: nsis
       arch:
@@ -52,3 +59,9 @@ nsis:
   createStartMenuShortcut: true
   language: '2052'
   deleteAppDataOnUninstall: false
+
+# 自动更新 feed：pnpm dist 会把 latest.yml + 安装包上传到该地址；
+# 正式分发时可用环境变量 UPDATE_FEED_URL 覆盖为你的托管地址。
+publish:
+  - provider: generic
+    url: https://update.roxyclone.com

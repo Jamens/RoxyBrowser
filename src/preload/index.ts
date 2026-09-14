@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentAction, RpaStep } from '../shared/types'
+import type { AgentAction, RpaStep, UpdaterStatus } from '../shared/types'
 
 export interface NetworkProxyConfig {
   mode: 'system' | 'custom'
@@ -23,6 +23,18 @@ contextBridge.exposeInMainWorld('roxy', {
   setTrayDisplay: (mode: 'icon' | 'name') => ipcRenderer.invoke('app:set-tray-display', mode) as Promise<{ ok: boolean }>,
   /** 内核版本信息（应用 / Electron / Chromium / Node / V8 / 平台） */
   getVersions: () => ipcRenderer.invoke('app:get-versions') as Promise<AppVersions>,
+  /** 检查更新（手动触发），返回检查状态 */
+  checkUpdate: () => ipcRenderer.invoke('app:check-update') as Promise<{ state: string; message?: string }>,
+  /** 下载当前可用更新 */
+  downloadUpdate: () => ipcRenderer.invoke('app:download-update') as Promise<{ ok: boolean; error?: string }>,
+  /** 退出并安装已下载的更新 */
+  quitAndInstall: () => ipcRenderer.send('app:quit-and-install'),
+  /** 订阅更新状态推送，返回取消订阅函数 */
+  onUpdateStatus: (cb: (s: UpdaterStatus) => void) => {
+    const h = (_e: unknown, s: UpdaterStatus) => cb(s)
+    ipcRenderer.on('app:update-status', h)
+    return () => ipcRenderer.removeListener('app:update-status', h)
+  },
   // ===== AI Agent 执行闭环（Route A）=====
   /** 启动一次矩阵运行（可驱动 N 个环境并发）：返回 { runId } 或 { error } */
   agentStart: (payload: {

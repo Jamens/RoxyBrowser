@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings, writeAgentLog, saveRpaFromSteps } from './server'
 import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint } from './browserManager'
 import { AgentRunner } from './agent/runner'
+import { setupAutoUpdater } from './updater'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -207,6 +208,11 @@ if (!gotLock) {
     } catch (err) {
       console.error('[roxy] 主窗口打开失败，本地 API 继续运行:', (err as Error).message)
     }
+
+    // 5. 自动更新（仅打包安装版启用；dev 态自动跳过，仅推送 { state: 'dev' }）
+    setupAutoUpdater((channel, payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
+    })
 
     app.on('activate', () => {
       showMainWindow()

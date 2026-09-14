@@ -311,7 +311,18 @@ const zhCN = {
   'aiAuto.maxSteps': '单次最大步数',
   'aiAuto.maxStepsExtra': '0 = 跟随全局默认（设置 → AI Agent）',
   'aiAuto.noTasks': '还没有定时任务，点「新增定时任务」创建一个。',
-  'aiAuto.notRunningHint': '注意：仅运行态的环境会被驱动；未打开的环境自动跳过，绝不自动开窗。'
+  'aiAuto.notRunningHint': '注意：仅运行态的环境会被驱动；未打开的环境自动跳过，绝不自动开窗。',
+  'update.title': '更新',
+  'update.check': '检查更新',
+  'update.checking': '正在检查更新…',
+  'update.latest': '已是最新版本',
+  'update.available': '发现新版本',
+  'update.download': '下载并安装',
+  'update.downloading': '正在下载',
+  'update.downloaded': '新版本已下载',
+  'update.installNow': '立即重启安装',
+  'update.error': '更新检查失败',
+  'update.dev': '开发模式不检查更新'
 }
 
 export type MessageDict = typeof zhCN
@@ -620,7 +631,18 @@ const enUS: MessageDict = {
   'aiAuto.maxSteps': 'Max steps per run',
   'aiAuto.maxStepsExtra': '0 = follow the global default (Settings → AI Agent)',
   'aiAuto.noTasks': 'No scheduled tasks yet. Click "New scheduled task" to create one.',
-  'aiAuto.notRunningHint': 'Note: only running environments are driven; environments that are not open are skipped automatically — windows are never opened automatically.'
+  'aiAuto.notRunningHint': 'Note: only running environments are driven; environments that are not open are skipped automatically — windows are never opened automatically.',
+  'update.title': 'Update',
+  'update.check': 'Check for Updates',
+  'update.checking': 'Checking for updates…',
+  'update.latest': 'Up to date',
+  'update.available': 'New version available',
+  'update.download': 'Download & Install',
+  'update.downloading': 'Downloading',
+  'update.downloaded': 'New version downloaded',
+  'update.installNow': 'Restart & Install Now',
+  'update.error': 'Update check failed',
+  'update.dev': 'Update check disabled in dev mode'
 }
 
 const jaJP: MessageDict = {
@@ -927,7 +949,18 @@ const jaJP: MessageDict = {
   'aiAuto.maxSteps': '1回の最大ステップ数',
   'aiAuto.maxStepsExtra': '0 = 全体デフォルトに従う（設定 → AI Agent）',
   'aiAuto.noTasks': '定期タスクはまだありません。「定期タスクを追加」で作成してください。',
-  'aiAuto.notRunningHint': '注意：実行中の環境のみ駆動されます。開いていない環境は自動でスキップされ、ウィンドウが勝手に開くことはありません。'
+  'aiAuto.notRunningHint': '注意：実行中の環境のみ駆動されます。開いていない環境は自動でスキップされ、ウィンドウが勝手に開くことはありません。',
+  'update.title': '更新',
+  'update.check': '更新を確認',
+  'update.checking': '更新を確認中…',
+  'update.latest': '最新バージョンです',
+  'update.available': '新しいバージョンがあります',
+  'update.download': 'ダウンロードしてインストール',
+  'update.downloading': 'ダウンロード中',
+  'update.downloaded': '新しいバージョンをダウンロードしました',
+  'update.installNow': '今すぐ再起動してインストール',
+  'update.error': '更新の確認に失敗しました',
+  'update.dev': '開発モードでは更新を確認しません'
 }
 
 const deDE: MessageDict = {
@@ -1236,7 +1269,18 @@ const deDE: MessageDict = {
   'aiAuto.maxSteps': 'Max. Schritte pro Lauf',
   'aiAuto.maxStepsExtra': '0 = globaler Standard (Einstellungen → AI Agent)',
   'aiAuto.noTasks': 'Noch keine zeitgesteuerten Aufgaben. Klicken Sie auf „Neue zeitgesteuerte Aufgabe“.',
-  'aiAuto.notRunningHint': 'Hinweis: Nur laufende Umgebungen werden angesteuert; nicht geöffnete Umgebungen werden automatisch übersprungen – Fenster werden nie automatisch geöffnet.'
+  'aiAuto.notRunningHint': 'Hinweis: Nur laufende Umgebungen werden angesteuert; nicht geöffnete Umgebungen werden automatisch übersprungen – Fenster werden nie automatisch geöffnet.',
+  'update.title': 'Aktualisierung',
+  'update.check': 'Nach Updates suchen',
+  'update.checking': 'Nach Updates suchen…',
+  'update.latest': 'Auf dem neuesten Stand',
+  'update.available': 'Neue Version verfügbar',
+  'update.download': 'Herunterladen & Installieren',
+  'update.downloading': 'Wird heruntergeladen',
+  'update.downloaded': 'Neue Version heruntergeladen',
+  'update.installNow': 'Jetzt neu starten & installieren',
+  'update.error': 'Update-Prüfung fehlgeschlagen',
+  'update.dev': 'Im Entwicklungsmodus keine Update-Prüfung'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

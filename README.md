@@ -217,7 +217,17 @@ pnpm dist:dir     # 仅产出免安装目录 → release/win-unpacked/（调试�
 - `resources/` 打进 `app.asar`，托盘图标按「asar 内 / asar.unpacked / extraResources」三种路径依次探测（`src/main/index.ts` 的 `trayIconPath()`）
 - 国内镜像：Electron 用 `.npmrc` 的 `electron_mirror`，打包器二进制用环境变量 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`
 
+### 代码签名（消除 SmartScreen「未知发布者」）
+默认不签名（本地 / CI 无证书时 electron-builder 自动跳过、仅告警，不破坏构建）。正式分发请在签名机上设置环境变量后执行 `pnpm dist`：
+- `CSC_LINK`：Authenticode 代码签名证书（`.pfx`）路径或下载 URL（建议 EV 证书，SmartScreen 声誉积累更快）
+- `CSC_KEY_PASSWORD`：证书私钥密码
+
+> electron-builder 会自动签名主程序 `RoxyBrowserClone.exe` 与 NSIS 安装包；Portable 版为 7z 自解包，无法签名，仅作内部分发。
+
+### 自动更新（electron-updater）
+- 已接入 `electron-updater`：安装版启动后静默检查一次更新，设置页「关于」区可手动「检查更新」并一键下载安装（不自动下载，避免打断多账号操作）。
+- 更新源由 `electron-builder.yml` 的 `publish.generic` 决定（默认占位 `https://update.roxyclone.com`）。生产环境请改为你托管的更新服务器，或用环境变量 `UPDATE_FEED_URL` 在运行时覆盖。
+- 执行 `pnpm dist` 时，electron-builder 会生成 `latest.yml` 与安装包并上传到该地址；安装版据此差分下载更新。
+
 > **已知环境限制**：在受限终端（如带删除保护沙箱的 IDE 内置终端）中，electron-builder 收尾清理临时文件可能报错，**但安装包已在此之前生成完毕**，属无害告警；普通终端下不会出现。若 `release/` 残留旧目录无法清理，用 `-c.directories.output=<新目录>` 换个输出路径即可。
->
-> 打包产物未做代码签名，Windows SmartScreen 会提示「未知发布者」，选择「仍要运行」即可；正式分发请接入代码签名证书（EV 更佳）。
 

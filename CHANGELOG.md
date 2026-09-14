@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
+
+### 新增
+
+- **代码签名（证书就绪）**：`electron-builder.yml` 接入 `win.signingHashAlgorithms: [sha256]`，签名经环境变量 `CSC_LINK`（`.pfx` 路径 / URL）与 `CSC_KEY_PASSWORD` 驱动；本地 / CI 无证书时 electron-builder 自动跳过、仅告警，不破坏构建。正式发布在签名机设置两变量后执行 `pnpm dist` 即可，主程序 exe 与 NSIS 安装包自动签名；Portable 版为 7z 自解包无法签名，仅作内部分发。
+- **自动更新（electron-updater）**：新增 `src/main/updater.ts` 在主进程接入 `autoUpdater`——仅打包安装版（`app.isPackaged`）生效，开发态只推送 `{ state: 'dev' }`；manual 模式（自动检查但不自动下载，由用户在设置页确认后再下载 / 安装，避免打断多账号操作）。
+  - 更新源由 `electron-builder.yml` 的 `publish.generic`（默认占位 `https://update.roxyclone.com`）决定，可用环境变量 `UPDATE_FEED_URL` 在运行时覆盖；`pnpm dist` 时生成 `latest.yml` 与安装包上传到该地址。
+  - 主进程经 IPC `app:update-status` 推送状态，渲染端 `window.roxy.onUpdateStatus` 订阅；设置页「关于」区新增「检查更新」按钮与状态展示（发现新版本 → 下载并安装 → 立即重启安装），四语 i18n（`update.*`）。
+  - 依赖 `electron-updater@6.8.9`（已写入 `package.json`）。
+
 ## 2026-09-15 · AI 定时自动化（自然语言指令 + 定时触发 + 沉淀 RPA）
 
 ### 新增
