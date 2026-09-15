@@ -99,7 +99,7 @@
   - 自洽性（关键）：历史环境（本功能上线前创建、无 GEO 字段）在 `normalizeFingerprint` 中按其**自身 timezone** 反查坐标补齐，不套用随机基准，避免「东京时区 + 纽约坐标」；克隆派生只做 ±0.03° 同城微抖，不漂出母本城市。
   - 前端：`ProfileForm.tsx` 时区下新增纬度 / 经度 / 精度输入，切换时区时坐标自动跟随到该时区代表城市。
   - 验证：离线单测 57 项全绿；node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
-  - 提交：`__PENDING__`（feat + 文档）。
+  - 提交：`56ced10`（feat）+ `docs: CHANGELOG` 同功能文档提交。
 
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
