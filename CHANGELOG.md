@@ -102,7 +102,7 @@
   - detail 只记「方法 + 路径 + 资源 id + 名称」，绝不写入 token / password / Cookie value。
   - `Logs.tsx` 补 `api_*` 中文标签与配色 21 项。
   - 离线单测 49 项全绿；node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
-  - 提交：`__PENDING__`（fix + 文档）。
+  - 提交：`71e051b`（fix）+ `docs: CHANGELOG` 同功能文档提交。
 
 ## 2026-09-16 · 地理位置伪装（GEO / navigator.geolocation）
 
