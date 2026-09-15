@@ -98,9 +98,12 @@ const zhCN = {
   // ---- 登录页科技感视觉 ----
   'login.heroTitle': '为跨境账号安全而生',
   'login.heroSub': '银行级隔离 · 指纹防护 · 端到端加密',
-  'login.feat1': '指纹防护',
-  'login.feat2': '端到端加密',
-  'login.feat3': '多账号隔离',
+  'login.slideAiTitle': 'AI 智能体 · 自动执行',
+  'login.slideAiDesc': '自然语言下达指令，本地大模型自动完成填表、采集与比价；零 token 成本，全程在你本机完成。',
+  'login.slidePrivacyTitle': '隐私安全 · 数据自持',
+  'login.slidePrivacyDesc': '端到端隔离的独立指纹环境，数据全部存于本地数据库，不上传云端，杜绝第三方窥探。',
+  'login.slideIsolateTitle': '多账号防关联 · 独立环境',
+  'login.slideIsolateDesc': '每个账号独享一套设备指纹与出口 IP，跨境电商、社媒矩阵批量运营互不串号。',
 
   // ---- 顶栏 ----
   'layout.logout': '退出登录',
@@ -475,9 +478,12 @@ const enUS: MessageDict = {
   // ---- Login hero (tech/security visual) ----
   'login.heroTitle': 'Built for cross-border account security',
   'login.heroSub': 'Bank-grade isolation · Fingerprint protection · End-to-end encryption',
-  'login.feat1': 'Fingerprint guard',
-  'login.feat2': 'End-to-end encryption',
-  'login.feat3': 'Multi-account isolation',
+  'login.slideAiTitle': 'AI Agent · Automated execution',
+  'login.slideAiDesc': 'Give instructions in plain language — the local model fills forms, collects data and compares prices. Zero token cost, everything runs on your machine.',
+  'login.slidePrivacyTitle': 'Privacy & security · Data stays yours',
+  'login.slidePrivacyDesc': 'End-to-end isolated fingerprint environments; all data is stored in your local database and never uploaded to the cloud.',
+  'login.slideIsolateTitle': 'Anti-association · Isolated profiles',
+  'login.slideIsolateDesc': 'Each account gets its own device fingerprint and exit IP, so cross-border stores and social matrices never get linked.',
 
   'layout.logout': 'Sign out',
   'layout.logoutSuccess': 'Signed out',
@@ -849,9 +855,12 @@ const jaJP: MessageDict = {
   // ---- ログイン視覚（テック/セキュリティ）----
   'login.heroTitle': 'クロスボーダーアカウントの安全のために',
   'login.heroSub': '銀行級隔離 · 指紋防護 · エンドツーエンド暗号化',
-  'login.feat1': '指紋防護',
-  'login.feat2': 'エンドツーエンド暗号化',
-  'login.feat3': 'マルチアカウント隔離',
+  'login.slideAiTitle': 'AI エージェント · 自動実行',
+  'login.slideAiDesc': '自然言語で指示するだけで、ローカルモデルが入力・収集・比較を自動実行。トークン費用ゼロ、すべて端末内で完結します。',
+  'login.slidePrivacyTitle': 'プライバシー · データは手元に',
+  'login.slidePrivacyDesc': 'エンドツーエンドで隔離された独立指紋環境。データはローカル DB にのみ保存され、クラウドへ送信されません。',
+  'login.slideIsolateTitle': '紐付け防止 · 独立環境',
+  'login.slideIsolateDesc': '各アカウントが固有の指紋と出口 IP を持ち、越境 EC や SNS 運用でも紐付け判定されません。',
 
   'layout.logout': 'ログアウト',
   'layout.logoutSuccess': 'ログアウトしました',
@@ -1223,9 +1232,12 @@ const deDE: MessageDict = {
   // ---- Login-Hero (Tech/Sicherheit) ----
   'login.heroTitle': 'Für die Sicherheit grenzüberschreitender Konten',
   'login.heroSub': 'Bankenklasse-Isolation · Fingerabdruck-Schutz · End-to-End-Verschlüsselung',
-  'login.feat1': 'Fingerabdruck-Schutz',
-  'login.feat2': 'End-to-End-Verschlüsselung',
-  'login.feat3': 'Multi-Account-Isolation',
+  'login.slideAiTitle': 'KI-Agent · Automatisierte Ausführung',
+  'login.slideAiDesc': 'Anweisungen in natürlicher Sprache – das lokale Modell füllt Formulare aus, sammelt Daten und vergleicht Preise. Keine Token-Kosten, alles lokal.',
+  'login.slidePrivacyTitle': 'Privatsphäre · Daten bleiben bei Ihnen',
+  'login.slidePrivacyDesc': 'End-to-End isolierte Fingerprint-Umgebungen; alle Daten liegen in Ihrer lokalen Datenbank, nichts geht in die Cloud.',
+  'login.slideIsolateTitle': 'Keine Verknüpfung · Isolierte Profile',
+  'login.slideIsolateDesc': 'Jedes Konto erhält eigenen Fingerprint und eigene Exit-IP – Shops und Social-Media-Konten werden nicht verknüpft.',
 
   'layout.logout': 'Abmelden',
   'layout.logoutSuccess': 'Abgemeldet',

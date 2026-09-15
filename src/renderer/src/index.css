@@ -67,37 +67,76 @@ body {
   margin: 0 0 18px;
   letter-spacing: 0.5px;
 }
-.login-shield-wrap {
-  margin: 8px auto 18px;
+/* ===== 登录页左侧功能轮播 ===== */
+.login-carousel {
+  margin: 4px auto 0;
+  max-width: 420px;
+}
+.login-slides {
+  position: relative;
   width: 340px;
+  height: 240px;
   max-width: 80%;
+  margin: 6px auto 10px;
 }
-.login-shield-svg {
+/* 三张 slide 绝对定位堆叠，靠 opacity + 位移切换；
+   这样容器高度恒定，切换时下方文案与指示点不会上下跳动。 */
+.login-slide {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: translateX(26px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+  pointer-events: none;
+}
+.login-slide.is-active {
+  opacity: 1;
+  transform: translateX(0);
+}
+.login-art {
   width: 100%;
-  height: auto;
+  height: 100%;
   animation: loginFloat 6s ease-in-out infinite;
-  filter: drop-shadow(0 8px 30px rgba(40, 120, 255, 0.35));
+  filter: drop-shadow(0 8px 30px rgba(40, 120, 255, 0.3));
 }
-.login-feats {
-  display: flex;
-  gap: 14px;
-  justify-content: center;
-  flex-wrap: wrap;
-  margin-top: 6px;
+/* 文案区保底高度：三种文案（中/英/德）长短差异明显，
+   不设保底会让切换时指示点上下跳动。110px 可容纳最长的德文四行。 */
+.login-slide-text {
+  min-height: 110px;
 }
-.login-feat {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border-radius: 999px;
-  background: rgba(90, 160, 255, 0.12);
-  border: 1px solid rgba(120, 190, 255, 0.28);
-  color: #cfe2ff;
+.login-slide-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+.login-slide-desc {
+  margin: 0 auto;
+  max-width: 400px;
+  color: rgba(190, 215, 255, 0.82);
   font-size: 13px;
+  line-height: 1.65;
 }
-.login-feat .anticon {
-  color: #5ad1ff;
+/* 进度指示点：纯展示，不可点击（需求要求禁止手动左右切换） */
+.login-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.login-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(190, 215, 255, 0.3);
+  cursor: default;
+  transition: background 0.3s ease, width 0.3s ease;
+}
+.login-dot.is-active {
+  width: 20px;
+  border-radius: 4px;
+  background: #6fb4ff;
 }
 .login-grid {
   position: absolute;

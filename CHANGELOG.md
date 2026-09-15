@@ -89,6 +89,20 @@
   - 四语 i18n（`env.screenshot` / `env.screenshotTitle` / `env.screenshotNotRunning` / `env.screenshotDownload` / `env.screenshotCapturing` / `env.screenshotEmpty` / `env.screenshotCapturedAt`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile`。
   - 提交：`6e857b8`（feat + 文档，amend 后 hash 由 6c32c9d 变更为此值）。
 
+## 2026-09-16 · 登录页左侧改为功能轮播
+
+### 优化
+
+- **登录页左侧视觉改版**：原「单张盾牌插画 + 三个特性标签」改为**三图功能轮播**，更直观地介绍产品能力。
+  - 3 张插画全部内联 SVG（渐变 + SMIL 动效，无外部图片依赖）：① **AI 智能体**（机器人 + 神经网络 + 指令气泡）② **隐私安全**（盾牌 + 锁 + 环绕加密环）③ **多账号防关联**（三张独立窗口 + 隔断线，每张指纹纹路各不相同）。
+  - 每 **2 秒**自动切换；**鼠标移入轮播区域暂停**，移出后从当前张继续（靠 `paused` 依赖重建定时器实现）。
+  - **禁止手动切换**：不提供左右箭头，底部指示点也不可点击（`cursor: default`），仅作进度展示。
+  - 文案走 i18n 四语：`login.slideAiTitle/Desc`、`login.slidePrivacyTitle/Desc`、`login.slideIsolateTitle/Desc`；顺带清掉随旧 UI 一起失效的 `login.feat1/2/3` 死 key。
+  - 稳定性：三张 slide 绝对定位堆叠（容器高度恒定），文案区保底高度 110px——中/英/德三语行数差异大，不设保底会让切换时下方指示点抖动。
+  - 窄屏（≤900px）左侧整体 `display: none`，轮播不影响移动端布局。
+  - 验证：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
+  - 提交：`__PENDING__`（ui + 文档）。
+
 ## 2026-09-16 · 追踪器屏蔽（隐身增强）
 
 ### 新增
