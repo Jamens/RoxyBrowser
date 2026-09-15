@@ -77,6 +77,8 @@ export interface BrowserBridge {
   closeWindow(profileId: number): Promise<void>
   /** 环境体检：在目标窗口内采集实际生效的指纹值，窗口未运行返回 null */
   probeFingerprint(profileId: number): Promise<FingerprintProbe | null>
+  /** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer，窗口未运行抛错 */
+  captureScreenshot(profileId: number): Promise<Buffer>
 }
 let browserBridge: BrowserBridge | null = null
 export function setBrowserBridge(b: BrowserBridge) {
@@ -1428,6 +1430,26 @@ function buildApiRouter(): express.Router {
     }
     const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, { proxyCountry })
     res.json(report)
+  })
+
+  // 环境截图：截取运行中环境窗口当前视口，返回 PNG（data URL）。
+  // 用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕等；必须在环境运行时执行——
+  // capturePage 只能在真实窗口上下文里截到页面内容（与体检同理）。
+  router.post('/profiles/:id/screenshot', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid, ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
+    if (p.status !== 'running') return res.status(400).json({ message: '请先打开环境窗口，再截图' })
+    if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+    try {
+      const buf = await browserBridge.captureScreenshot(p.id)
+      const dataUrl = `data:image/png;base64,${buf.toString('base64')}`
+      await writeLog(req, 'screenshot_profile', `对环境「${p.name}」(#${p.id}) 截图`)
+      res.json({ ok: true, image: dataUrl, capturedAt: new Date().toISOString() })
+    } catch (e) {
+      res.status(400).json({ message: (e as Error).message })
+    }
   })
 
   // 从模板创建环境

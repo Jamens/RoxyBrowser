@@ -117,6 +117,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **操作日志导出**：操作日志页一键把当前筛选结果导出为 CSV / JSON，便于审计留存；导出本身记入操作日志（属敏感操作），四语支持，详见下节
 - **团队切换器**：顶栏一键在「我所属的团队」之间切换工作区（无需退出登录）；切换时用该团队的实时角色重发会话令牌，并关闭旧团队运行中的环境窗口，切换后整页刷新、所有数据自动归属新团队，详见下节
 - **环境分享转移**：环境列表每行「转移」即可把环境（含其 Cookie / 账号）分享到其他团队——跨团队数据按 `teamId` 强隔离，「转移」即把归属改写为目标团队；仅可转移到你同为成员的其他团队，详见下节
+- **环境截图**：环境列表每行「截图」即可截取运行中环境窗口的当前视口为 PNG（用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕），弹窗内可一键下载；环境需先打开，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -219,6 +220,14 @@ app.listen(4000)
 
 - **接口**：`POST /api/profiles/:id/transfer`（需登录，body `{ teamId }`）——校验该环境属于当前团队且未运行；校验操作人**同时是目标团队成员**（否则无权把数据塞进该团队）；改写 `ProfileEntity.teamId/ownerId`，并级联把该环境的 `Cookie`（自带 `teamId` 列）迁到目标团队、把 `Account`（靠 `profileId` 隐式归属，无独立 `teamId` 列）同步 `ownerId`。全程写敏感审计日志 `transfer_profile`。
 - **前端**：环境列表每行「转移」按钮打开弹窗，从 `GET /api/auth/teams` 拉取「我所属且非当前」的团队作为目标候选；确认后环境即从当前团队列表消失（归属已变更），成功提示标注目标团队；只属于 1 个团队时给出「无法转移」提示。
+
+### 环境截图（窗口视口 PNG）
+
+对标 RoxyBrowser「SEO 内容营销」用例里「截图报告」的卖点——把运行中环境窗口的当前视口截成 PNG，用于 SEO 排名核对、收录检测、A-B 测试证据、竞品调研留痕等。
+
+- **接口**：`POST /api/profiles/:id/screenshot`（需登录）——校验环境属于当前团队、未软删、且 `status === 'running'`（与体检同理，`capturePage` 只能在真实窗口上下文里截到页面）；经 `browserBridge.captureScreenshot` 调 `webContents.capturePage()` 取 PNG，`Buffer` 转 base64 `data:image/png;base64,...` 回前端；写审计日志 `screenshot_profile`。
+- **前端**：环境列表每行「截图」按钮（`CameraOutlined`）打开弹窗展示图片，标注截图时间，提供「下载 PNG」按钮（`downloadDataUrl` 把 data URL 解码为 Blob 落盘）；环境未运行时按钮提示先打开。
+- **复用**：截图能力底层复用 AI Agent 已有的 `webContents.capturePage()` 采集通道（`src/main/agent/session.ts`），不另起一套。
 
 ## 目录结构
 

@@ -144,6 +144,14 @@ export function getRunningWindows(): { id: number; title: string }[] {
     .map(([id]) => ({ id, title: windowTitles.get(id) || `环境 #${id}` }))
 }
 
+/** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer（窗口未运行抛错） */
+export async function captureScreenshot(profileId: number): Promise<Buffer> {
+  const win = windows.get(profileId)
+  if (!win || win.isDestroyed()) throw new Error('环境未运行，无法截图（请先打开环境窗口）')
+  const img = await win.webContents.capturePage()
+  return img.toPNG()
+}
+
 function rendererEntry(): { url?: string; file?: string } {
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) return { url: devUrl }

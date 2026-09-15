@@ -45,7 +45,8 @@ const ACTION_LABELS: Record<string, string> = {
   agent_done: 'AI 执行完成',
   agent_failed: 'AI 执行失败',
   switch_team: '切换团队',
-  transfer_profile: '转移环境'
+  transfer_profile: '转移环境',
+  screenshot_profile: '环境截图'
 }
 
 export default function Logs() {

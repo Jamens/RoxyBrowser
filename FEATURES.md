@@ -364,6 +364,16 @@ app.listen(4000)
 - **i18n**：四语新增 `env.transfer / env.transferTitle / env.transferTo / env.transferConfirm / env.transferHint / env.transferred / env.noOtherTeam`；`Logs.tsx` 的 `ACTION_LABELS` 补 `transfer_profile: '转移环境'`。
 - **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron + MySQL 多团队转移 + Cookie/账号级联归属）本沙箱未跑，沿用「用户自测」惯例。
 
+### 7.9 环境截图（窗口视口 PNG）
+
+对标 RoxyBrowser「SEO 内容营销」用例的「截图报告」卖点——截运行中环境窗口当前视口为 PNG，用于 SEO 排名核对、收录检测、A-B 测试证据、竞品调研留痕。底层复用 AI Agent 已有的 `webContents.capturePage()` 采集通道（`src/main/agent/session.ts`），不另起一套。
+
+- **主进程**：`src/main/browserManager.ts` 新增 `captureScreenshot(profileId)`——从 `windows` Map 取 `BrowserWindow`，`win.webContents.capturePage()` 返回 `NativeImage`，`.toPNG()` 得 `Buffer`；窗口未运行 / 已销毁抛错。挂到 `server.ts` 的 `BrowserBridge` 接口（`captureScreenshot`）并由 `index.ts` 的 `setBrowserBridge({ ..., captureScreenshot })` 注入。
+- **接口**：`POST /api/profiles/:id/screenshot`（需登录）—— `findOne({ id, teamId: req.tid, ...ownerScope(req) })` 锁定当前团队内环境；`deletedAt` 非空 → 400；`status !== 'running'` → 400（与体检同约束）；`browserBridge.captureScreenshot` 取 PNG，`Buffer.toString('base64')` 拼 `data:image/png;base64,...` 回前端；写审计日志 `screenshot_profile`（非敏感动作）。
+- **前端**：`Environments.tsx` 行内「截图」按钮（`CameraOutlined`）→ 弹窗展示图片 + 截图时间，提供「下载 PNG」（`downloadDataUrl` 把 data URL 解码为 Blob 落盘，文件名含环境名 + `nowStamp`）；环境未运行时 `message.warning(t('env.screenshotNotRunning'))`。`src/renderer/src/utils/download.ts` 新增 `downloadDataUrl(dataUrl, filename)`（base64 → Uint8Array → Blob）。
+- **i18n**：四语新增 `env.screenshot / env.screenshotTitle / env.screenshotNotRunning / env.screenshotDownload / env.screenshotCapturing / env.screenshotEmpty / env.screenshotCapturedAt`；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile: '环境截图'`。
+- **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron 开窗 → 截图返回 PNG）本沙箱未跑，沿用「用户自测」惯例。
+
 ### 8. 操作日志
 
 

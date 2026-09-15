@@ -76,7 +76,18 @@
   - 后端：`POST /api/profiles/:id/transfer`（需登录，body `{ teamId }`）——校验环境属于当前团队且未运行；校验操作人同时是目标团队成员（否则 403）；改写 `ProfileEntity.teamId/ownerId`，并级联把该环境的 `Cookie`（自带 `teamId` 列）迁到目标团队、把 `Account`（靠 `profileId` 隐式归属，无独立 `teamId` 列）同步 `ownerId`；写敏感审计日志 `transfer_profile`（已把 `transfer` 加入 `SENSITIVE_LOG_KEYWORDS`）。
   - 前端：`Environments.tsx` 行内「转移」按钮（`ShareAltOutlined`）打开 Modal，从 `GET /api/auth/teams` 拉取「我所属且非当前」的团队作目标候选；确认后环境即从当前团队列表消失，成功提示标注目标团队；只属 1 团队时提示无法转移。
   - 四语 i18n（`env.transfer` / `env.transferTitle` / `env.transferTo` / `env.transferConfirm` / `env.transferHint` / `env.transferred` / `env.noOtherTeam`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `transfer_profile`。
-  - 提交：`709be64`（feat + 文档）。
+  - 提交：`9790857`（feat + 文档）。
+
+## 2026-09-15 · 环境截图（窗口视口 PNG）
+
+### 新增
+
+- **环境截图**：环境列表每行「截图」即可截运行中环境窗口当前视口为 PNG，用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕（对标 RoxyBrowser「SEO 内容营销」用例的「截图报告」卖点）。
+  - 主进程：`browserManager.ts` 新增 `captureScreenshot(profileId)`（`webContents.capturePage()` → `NativeImage.toPNG()`，复用 AI Agent 既有采集通道），挂到 `BrowserBridge` 接口并由 `index.ts` 注入。
+  - 后端：`POST /api/profiles/:id/screenshot`（需登录）——校验环境属当前团队、未软删、且 `status === 'running'`（与体检同约束），取 PNG 转 base64 `data:image/png;base64,...` 回前端，写审计日志 `screenshot_profile`。
+  - 前端：`Environments.tsx` 行内「截图」按钮（`CameraOutlined`）+ 弹窗展示图片 / 截图时间 /「下载 PNG」（`downloadDataUrl` 解码 data URL 为 Blob）；`utils/download.ts` 新增 `downloadDataUrl`。环境未运行时提示先打开。
+  - 四语 i18n（`env.screenshot` / `env.screenshotTitle` / `env.screenshotNotRunning` / `env.screenshotDownload` / `env.screenshotCapturing` / `env.screenshotEmpty` / `env.screenshotCapturedAt`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile`。
+  - 提交：`6c32c9d`（feat + 文档）。
 
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 

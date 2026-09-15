@@ -8,10 +8,10 @@ import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
-  SafetyCertificateOutlined, ShareAltOutlined
+  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined
 } from '@ant-design/icons'
 import type { HealthReport } from '@shared/healthcheck'
-import { downloadText, readTextFile, nowStamp } from '../utils/download'
+import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
@@ -93,6 +93,13 @@ export default function Environments() {
   const [transferTarget, setTransferTarget] = useState<number | undefined>()
   const [transferTeams, setTransferTeams] = useState<{ id: number; name: string }[]>([])
   const [transferLoading, setTransferLoading] = useState(false)
+
+  // 环境截图：截取运行中环境窗口当前视口（用于 SEO 报告 / 收录检测 / A-B 证据等）
+  const [shotOpen, setShotOpen] = useState(false)
+  const [shotSrc, setShotSrc] = useState<ProfileDTO | null>(null)
+  const [shotImage, setShotImage] = useState('')
+  const [shotCapturedAt, setShotCapturedAt] = useState('')
+  const [shotLoading, setShotLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -505,6 +512,29 @@ export default function Environments() {
     }
   }
 
+  // 环境截图：环境必须运行中（capturePage 只能在真实窗口上下文里截到页面内容）
+  const takeScreenshot = async (r: ProfileDTO) => {
+    if (r.status !== 'running') {
+      message.warning(t('env.screenshotNotRunning'))
+      return
+    }
+    setShotSrc(r)
+    setShotImage('')
+    setShotCapturedAt('')
+    setShotLoading(true)
+    setShotOpen(true)
+    try {
+      const res = await api.post<{ image: string; capturedAt: string }>(`/api/profiles/${r.id}/screenshot`, {})
+      setShotImage(res.image)
+      setShotCapturedAt(res.capturedAt)
+    } catch (e) {
+      message.error((e as Error).message)
+      setShotOpen(false)
+    } finally {
+      setShotLoading(false)
+    }
+  }
+
   const columns: ColumnsType<ProfileDTO> = [
     { title: '序号', dataIndex: 'seq', width: 70 },
     {
@@ -603,6 +633,9 @@ export default function Environments() {
           </Tooltip>
           <Tooltip title={t('env.transfer')}>
             <Button size="small" icon={<ShareAltOutlined />} onClick={() => openTransfer(r)} />
+          </Tooltip>
+          <Tooltip title={t('env.screenshot')}>
+            <Button size="small" icon={<CameraOutlined />} onClick={() => takeScreenshot(r)} />
           </Tooltip>
           <Popconfirm title="删除后进入回收站，可随时恢复。确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -1010,6 +1043,38 @@ export default function Environments() {
         <div style={{ fontSize: 12, color: '#888', marginTop: 12, lineHeight: 1.7 }}>
           {t('env.transferHint')}
         </div>
+      </Modal>
+
+      {/* 环境截图：截取运行中环境窗口当前视口，可下载 PNG（用于 SEO 报告 / 收录检测 / A-B 证据） */}
+      <Modal
+        title={t('env.screenshotTitle')}
+        open={shotOpen}
+        onCancel={() => setShotOpen(false)}
+        footer={
+          shotImage ? (
+            <Button
+              type="primary"
+              icon={<ExportOutlined />}
+              onClick={() => downloadDataUrl(shotImage, `roxy-shot-${shotSrc?.name || 'env'}-${nowStamp()}.png`)}
+            >
+              {t('env.screenshotDownload')}
+            </Button>
+          ) : null
+        }
+        width={900}
+      >
+        {shotLoading && <Empty description={t('env.screenshotCapturing')} />}
+        {!shotLoading && !shotImage && <Empty description={t('env.screenshotEmpty')} />}
+        {!shotLoading && shotImage && (
+          <div>
+            <img src={shotImage} alt="screenshot" style={{ width: '100%', border: '1px solid #eee', borderRadius: 4 }} />
+            {shotCapturedAt && (
+              <div style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+                {t('env.screenshotCapturedAt', { time: dayjs(shotCapturedAt).format('YYYY-MM-DD HH:mm:ss') })}
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   )
