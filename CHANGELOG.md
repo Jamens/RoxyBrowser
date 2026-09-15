@@ -15,6 +15,17 @@
 
 - **内核版本切换**：指纹表单新增「内核版本 (Chrome)」下拉（可选 Chrome 127–132），仅替换 UA 串与 UA-CH 客户端提示里的 Chrome 大版本号，让同一套设备指纹在不同时期表现为不同浏览器版本；iOS 走 Safari/WebKit 自动隐藏该下拉。实现 `applyCoreVersion()` 与 `CHROME_MAJORS`（`src/shared/fingerprint.ts`），`randomFingerprint` 支持透传 `coreVersion`，`normalizeFingerprint` / `presetFingerprint` / 克隆工厂均保留或推导该字段；`POST /api/fingerprint/random` 与 v1 接口支持 `body.coreVersion`。`Fingerprint.coreVersion` 新增到 `src/shared/types.ts`（无 DB 迁移）。
 
+## 2026-09-15 · 登录二次验证（2FA / TOTP）
+
+### 新增
+
+- **登录二次验证（TOTP）**：用户可在「设置 → 登录二次验证」扫码启用 Google Authenticator / 1Password / Authy 等验证器的 6 位动态码；启用后每次登录除密码外还需动态码。
+  - 后端 `src/main/totp.ts` 用 Node 内置 `crypto`（HMAC-SHA1 + base32）实现 `generateTotpSecret` / `buildOtpAuthUrl` / `verifyTotp` / `totpQrDataUrl`，**零新增依赖**（二维码复用已有的 `qrcode`）。
+  - 接口：`POST /api/auth/2fa/setup`（生成密钥 + 二维码 data URL，pending）、`POST /api/auth/2fa/confirm`（首个动态码确认启用）、`POST /api/auth/2fa/disable`（动态码关闭）、`POST /api/auth/2fa/verify`（登录第二步：挑战令牌 + 动态码换正式令牌）。
+  - 登录改造：`POST /api/auth/login` 在密码正确且已启用 2FA 时只返回 `{ twoFactorRequired, challengeToken }`（5 分钟短期令牌），不直接发令牌；`GET /api/auth/me` 返回 `twoFactorEnabled` 供设置页展示状态。
+  - 数据模型：`users` 表加 `twoFactorSecret`（base32，可空）+ `twoFactorEnabled`（tinyint），`synchronize:true` 自动加列，无迁移脚本。
+  - 渲染端 `Login.tsx` 需配合处理 `twoFactorRequired` 挑战（本项目该文件受敏感内容门禁，挑战逻辑以补丁形式交付，详见提交说明）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

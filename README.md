@@ -112,6 +112,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **AI 定时自动化**：自然语言指令 + 定时触发 AI Agent 在运行态环境自动执行，跑完把动作序列沉淀为 RPA 模板（下次离线零 token 回放），详见下节
 - **团队协作 / 账号中心 / Cookie / 扩展**：成员角色控权、账号批量导入、Cookie 按环境隔离与批量导入、按环境加载 Chrome 扩展
 - **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器
+- **登录二次验证（2FA / TOTP）**：登录除密码外还需验证器动态码；设置页扫码启用 / 关闭，TOTP 用 Node 内置 crypto 实现（无外部依赖）
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 

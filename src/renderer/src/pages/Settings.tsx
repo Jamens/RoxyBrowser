@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
 import { readTextFile } from '../utils/download'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings, type AiAutoTask, type UpdaterStatus } from '@shared/types'
@@ -47,6 +47,69 @@ export default function Settings() {
   const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string } | null>(null)
   const [checking, setChecking] = useState(false)
   const { t, setLocale } = useI18n()
+
+  // ===== 登录二次验证（2FA / TOTP）=====
+  const [twoFaEnabled, setTwoFaEnabled] = useState(false)
+  const [twoFaBusy, setTwoFaBusy] = useState(false)
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [setupSecret, setSetupSecret] = useState('')
+  const [setupQr, setSetupQr] = useState('')
+  const [setupCode, setSetupCode] = useState('')
+  const [disableOpen, setDisableOpen] = useState(false)
+  const [disableCode, setDisableCode] = useState('')
+
+  const loadTwoFa = useCallback(async () => {
+    try {
+      const me = await api.get<{ twoFactorEnabled?: boolean }>('/api/auth/me')
+      setTwoFaEnabled(!!me.twoFactorEnabled)
+    } catch {
+      /* 忽略：未登录等极端情况 */
+    }
+  }, [])
+  useEffect(() => {
+    loadTwoFa()
+  }, [loadTwoFa])
+
+  const startTwoFaSetup = async () => {
+    setTwoFaBusy(true)
+    try {
+      const r = await api.post<{ secret: string; qrCodeDataUrl: string }>('/api/auth/2fa/setup')
+      setSetupSecret(r.secret)
+      setSetupQr(r.qrCodeDataUrl)
+      setSetupCode('')
+      setSetupOpen(true)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTwoFaBusy(false)
+    }
+  }
+  const confirmTwoFaSetup = async () => {
+    setTwoFaBusy(true)
+    try {
+      await api.post('/api/auth/2fa/confirm', { code: setupCode })
+      setTwoFaEnabled(true)
+      setSetupOpen(false)
+      message.success('二次验证已启用')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTwoFaBusy(false)
+    }
+  }
+  const confirmTwoFaDisable = async () => {
+    setTwoFaBusy(true)
+    try {
+      await api.post('/api/auth/2fa/disable', { code: disableCode })
+      setTwoFaEnabled(false)
+      setDisableOpen(false)
+      message.success('二次验证已关闭')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTwoFaBusy(false)
+    }
+  }
 
   // AI 定时自动化：任务列表管理与编辑
   const [profiles, setProfiles] = useState<{ id: number; name: string }[]>([])
@@ -666,6 +729,65 @@ export default function Settings() {
           {t('snapshot.importExtra')}
         </Typography.Paragraph>
       </Card>
+
+      {/* 登录二次验证（2FA / TOTP） */}
+      <Card title={<span><SafetyOutlined /> 登录二次验证（2FA / TOTP）</span>} style={{ marginTop: 16 }}>
+        <Typography.Paragraph type="secondary">
+          启用后，每次登录除密码外还需输入验证器 App（Google Authenticator / 1Password / Authy 等）生成的 6 位动态码。
+        </Typography.Paragraph>
+        <Space wrap>
+          <Tag color={twoFaEnabled ? 'green' : 'default'}>{twoFaEnabled ? '已启用' : '未启用'}</Tag>
+          {!twoFaEnabled ? (
+            <Button icon={<LockOutlined />} loading={twoFaBusy} onClick={startTwoFaSetup}>
+              启用二次验证
+            </Button>
+          ) : (
+            <Button danger loading={twoFaBusy} onClick={() => { setDisableCode(''); setDisableOpen(true) }}>
+              关闭二次验证
+            </Button>
+          )}
+        </Space>
+        <Modal
+          open={setupOpen}
+          title={<span><QrcodeOutlined /> 启用二次验证</span>}
+          okText="确认启用"
+          confirmLoading={twoFaBusy}
+          onOk={confirmTwoFaSetup}
+          onCancel={() => setSetupOpen(false)}
+        >
+          <Typography.Paragraph>用验证器 App 扫描下方二维码，或手动输入密钥：</Typography.Paragraph>
+          {setupQr && <img src={setupQr} alt="2fa-qr" style={{ width: 200, height: 200, marginBottom: 12 }} />}
+          <Typography.Paragraph copyable={{ text: setupSecret }} style={{ marginBottom: 12 }}>
+            <code>{setupSecret}</code>
+          </Typography.Paragraph>
+          <Typography.Text>输入验证器显示的 6 位动态码</Typography.Text>
+          <Input
+            value={setupCode}
+            onChange={(e) => setSetupCode(e.target.value)}
+            maxLength={6}
+            placeholder="000000"
+            style={{ marginTop: 8, width: 200 }}
+          />
+        </Modal>
+        <Modal
+          open={disableOpen}
+          title="关闭二次验证"
+          okText="确认关闭"
+          confirmLoading={twoFaBusy}
+          onOk={confirmTwoFaDisable}
+          onCancel={() => setDisableOpen(false)}
+        >
+          <Typography.Paragraph>请输入验证器当前的 6 位动态码以关闭：</Typography.Paragraph>
+          <Input
+            value={disableCode}
+            onChange={(e) => setDisableCode(e.target.value)}
+            maxLength={6}
+            placeholder="000000"
+            style={{ marginTop: 8, width: 200 }}
+          />
+        </Modal>
+      </Card>
+
     </>
   )
 }

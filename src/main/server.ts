@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, sta
 import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
 import { HttpProxyAgent } from 'http-proxy-agent'
@@ -841,6 +842,15 @@ function buildApiRouter(): express.Router {
       await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
       teamId = team.id
     }
+    // 登录二次验证（TOTP）：已启用则只发短期挑战令牌，需再用动态码换取正式令牌
+    if (user.twoFactorEnabled && user.twoFactorSecret) {
+      const challengeToken = jwt.sign(
+        { uid: user.id, tid: teamId, username: user.username, role: member?.role || 'owner', purpose: '2fa' },
+        JWT_SECRET,
+        { expiresIn: '5m' }
+      )
+      return res.json({ twoFactorRequired: true, challengeToken })
+    }
     const token = jwt.sign(
       { uid: user.id, tid: teamId, username: user.username, role: member?.role || 'owner' },
       JWT_SECRET,
@@ -853,7 +863,77 @@ function buildApiRouter(): express.Router {
     const userRepo = AppDataSource.getRepository(UserEntity)
     const user = await userRepo.findOne({ where: { id: req.uid } })
     if (!user) return res.status(401).json({ message: '用户不存在' })
-    res.json({ id: user.id, username: user.username, nickname: user.nickname, role: await freshRole(req) })
+    res.json({
+      id: user.id,
+      username: user.username,
+      nickname: user.nickname,
+      role: await freshRole(req),
+      twoFactorEnabled: !!user.twoFactorEnabled
+    })
+  })
+
+  // ===== 登录二次验证（TOTP）=====
+  // 生成密钥 + 二维码（pending：写入 secret 但暂不启用，待 confirm 通过再置 enabled）
+  router.post('/auth/2fa/setup', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    const user = await userRepo.findOne({ where: { id: req.uid } })
+    if (!user) return res.status(401).json({ message: '用户不存在' })
+    const secret = generateTotpSecret()
+    user.twoFactorSecret = secret
+    user.twoFactorEnabled = false
+    await userRepo.save(user)
+    const otpauth = buildOtpAuthUrl('RoxyBrowserClone', user.username, secret)
+    const qrCodeDataUrl = await totpQrDataUrl(otpauth)
+    res.json({ secret, otpauthUrl: otpauth, qrCodeDataUrl })
+  })
+
+  // 用首个动态码确认启用（防止用户没扫上就误开）
+  router.post('/auth/2fa/confirm', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const { code } = req.body || {}
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    const user = await userRepo.findOne({ where: { id: req.uid } })
+    if (!user || !user.twoFactorSecret) return res.status(400).json({ message: '请先发起 2FA 设置' })
+    if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
+    user.twoFactorEnabled = true
+    await userRepo.save(user)
+    res.json({ ok: true, twoFactorEnabled: true })
+  })
+
+  // 关闭 2FA（需提供当前动态码）
+  router.post('/auth/2fa/disable', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const { code } = req.body || {}
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    const user = await userRepo.findOne({ where: { id: req.uid } })
+    if (!user || !user.twoFactorEnabled) return res.status(400).json({ message: '未启用 2FA' })
+    if (!verifyTotp(user.twoFactorSecret || '', code)) return res.status(400).json({ message: '动态码不正确' })
+    user.twoFactorEnabled = false
+    user.twoFactorSecret = null
+    await userRepo.save(user)
+    res.json({ ok: true, twoFactorEnabled: false })
+  })
+
+  // 登录第二步：用挑战令牌 + 动态码换取正式令牌
+  router.post('/auth/2fa/verify', async (req: Request, res: Response) => {
+    const { challengeToken, code } = req.body || {}
+    if (!challengeToken) return res.status(400).json({ message: '缺少挑战令牌' })
+    let payload: { uid: number; tid: number; username: string; role: string; purpose?: string }
+    try {
+      payload = jwt.verify(challengeToken, JWT_SECRET) as typeof payload
+    } catch {
+      return res.status(401).json({ message: '挑战已过期，请重新登录' })
+    }
+    if (payload.purpose !== '2fa') return res.status(401).json({ message: '无效挑战' })
+    const userRepo = AppDataSource.getRepository(UserEntity)
+    const user = await userRepo.findOne({ where: { id: payload.uid } })
+    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret)
+      return res.status(401).json({ message: '2FA 状态异常，请重新登录' })
+    if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
+    const token = jwt.sign(
+      { uid: user.id, tid: payload.tid, username: user.username, role: payload.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    )
+    res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: payload.role } })
   })
 
   // ===== 窗口同步开关 =====

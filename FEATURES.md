@@ -286,6 +286,16 @@ curl -X POST http://127.0.0.1:39100/api/rpa/import \
 
 > 提示：回放的是合成事件（`isTrusted=false`），对校验该属性的反爬站点无效；脚本在不同页面结构（selector 失效）时对应步骤会被跳过。
 
+### 7.4 登录二次验证（2FA / TOTP）
+
+对标商业产品的账号安全：登录除密码外还需验证器（Google Authenticator / 1Password / Authy）生成的 6 位动态码，防止密码泄露后被直接登录。
+
+- **启用流程**：设置页「登录二次验证」点「启用」→ 后端 `POST /api/auth/2fa/setup` 生成 base32 密钥 + `otpauth://` 二维码（PNG data URL，直接用 `<img>` 展示）→ 用验证器扫码 → 输入首个动态码 → `POST /api/auth/2fa/confirm` 校验通过后才把 `users.twoFactorEnabled` 置真（避免没扫上就误开）。
+- **登录流程**：`POST /api/auth/login` 密码正确且已启用 2FA 时，只返回 `{ twoFactorRequired: true, challengeToken }`（`challengeToken` 是带 `purpose:'2fa'` 声明、5 分钟过期的短期 JWT，**不直接发登录令牌**）；渲染端拿挑战令牌 + 用户输入的动态码调 `POST /api/auth/2fa/verify`，校验通过才签发正式 7 天令牌。
+- **关闭**：`POST /api/auth/2fa/disable` 需提供当前动态码，通过后清空密钥。
+- **实现**：`src/main/totp.ts` 用 Node 内置 `crypto`（HMAC-SHA1 + base32 编解码，RFC 6238）实现，允许 ±1 个时间窗（±30s）时钟漂移；**零新增依赖**（二维码复用已有 `qrcode` 包）。`GET /api/auth/me` 返回 `twoFactorEnabled` 供设置页展示状态。
+- **数据模型**：`users` 表加 `twoFactorSecret`（varchar，可空）+ `twoFactorEnabled`（tinyint），`TypeORM synchronize:true` 首次启动自动加列，无手写迁移。
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。

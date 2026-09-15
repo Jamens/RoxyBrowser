@@ -23,6 +23,13 @@ export class UserEntity {
   @Column({ type: 'varchar', length: 64, default: '' })
   nickname: string
 
+  // 登录二次验证（TOTP）：secret 为 base32 编码的 TOTP 密钥；enabled 表示已启用
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  twoFactorSecret: string | null
+
+  @Column({ type: 'tinyint', default: 0 })
+  twoFactorEnabled: boolean
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }
