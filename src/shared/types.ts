@@ -38,6 +38,11 @@ export interface Fingerprint {
   geoLatitude: number
   geoLongitude: number
   geoAccuracy: number // 精度（米）
+  // ---- 追踪器屏蔽 ----
+  // 命中已知分析 / 广告 / 埋点域名的请求直接 cancel。
+  // 实现在主进程（session.webRequest），不经过 preload——preload 跑在渲染进程，
+  // 只能改 JS、拦不到网络请求。用于避免反复调研竞品时被对方埋点识别。
+  blockTrackers: boolean
 }
 
 /** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */

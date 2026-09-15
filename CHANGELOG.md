@@ -89,6 +89,19 @@
   - 四语 i18n（`env.screenshot` / `env.screenshotTitle` / `env.screenshotNotRunning` / `env.screenshotDownload` / `env.screenshotCapturing` / `env.screenshotEmpty` / `env.screenshotCapturedAt`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile`。
   - 提交：`6e857b8`（feat + 文档，amend 后 hash 由 6c32c9d 变更为此值）。
 
+## 2026-09-16 · 追踪器屏蔽（隐身增强）
+
+### 新增
+
+- **追踪器屏蔽**：环境级开关，拦截已知分析 / 广告 / 埋点域名的请求，避免反复调研竞品时被对方的埋点、Cookie 或第三方脚本识别甚至反监控（对标 RoxyBrowser「屏蔽追踪器」）。
+  - 实现：主进程 `browserManager.openWindow` 给环境 session 挂 `session.webRequest.onBeforeRequest`，命中即 cancel。**preload 跑在渲染进程，只能改 JS、拦不到网络请求**，所以这次不是走 preload 注入。
+  - 判定：`src/shared/trackers.ts` 纯函数模块（可单测）导出 `TRACKER_HOSTS` 与 `isTrackerUrl(url, extraHosts)`；hostname 等于清单项或以其子域结尾即命中，非法 / 非 http(s) 一律放过。
+  - 清单原则：只拦明确的分析 / 广告子域，绝不拦主域（拦 `facebook.com` 会让用户登不上号）；CDN 与错误上报（Sentry / Bugsnag）不在清单内。
+  - 开关：`Fingerprint.blockTrackers`，新建环境默认开启；预设确定开启、克隆继承母本；`normalizeFingerprint` 对老数据兜底。上线前创建的环境默认不拦截，表单开启后生效。
+  - 前端：`ProfileForm.tsx` 高级设置加「追踪器屏蔽」Switch（说明用 tooltip 避免撑高同排项）。
+  - 验证：离线单测 98 项全绿（68 项判定 + 30 项指纹联动）；node / web 双 `tsc --noEmit` EXIT 0；build EXIT 0。
+  - 提交：`__PENDING__`（feat + 文档）。
+
 ## 2026-09-16 · 自动化 API 审计留痕（令牌操作进操作日志）
 
 ### 修复

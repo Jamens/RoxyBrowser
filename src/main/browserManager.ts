@@ -5,6 +5,7 @@ import { AppDataSource } from './server'
 import { ProfileEntity, ProxyEntity, CookieEntity, ExtensionEntity } from './entities'
 import type { Fingerprint, RpaStep } from '../shared/types'
 import type { FingerprintProbe } from '../shared/healthcheck'
+import { isTrackerUrl } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
@@ -184,6 +185,19 @@ export async function openWindow(profileId: number): Promise<void> {
   // 独立 session：每个环境独立 Cookie / 缓存 / 存储
   const ses = session.fromPartition(`persist:env-${profileId}`)
   ses.setUserAgent(fp.userAgent)
+
+  // ===== 追踪器屏蔽 =====
+  // 命中已知分析 / 广告 / 埋点域名直接 cancel，避免反复调研竞品时被对方的埋点、
+  // Cookie 或第三方脚本识别出来甚至反监控。
+  // 只能在**主进程**用 session.webRequest 做——preload 跑在渲染进程，只能改 JS、拦不到网络请求。
+  // 必须在导航前挂上，否则首屏的统计脚本早已发出。
+  // 注：本功能上线前的环境没有 blockTrackers 字段（undefined），按「不改变既有环境行为」
+  // 的原则默认不拦截，用户在环境表单里开启后生效。
+  if (fp.blockTrackers) {
+    ses.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, cb) => {
+      cb({ cancel: isTrackerUrl(details.url) })
+    })
+  }
 
   // 代理
   let proxyRules = ''

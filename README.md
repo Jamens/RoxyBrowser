@@ -119,6 +119,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **环境分享转移**：环境列表每行「转移」即可把环境（含其 Cookie / 账号）分享到其他团队——跨团队数据按 `teamId` 强隔离，「转移」即把归属改写为目标团队；仅可转移到你同为成员的其他团队，详见下节
 - **环境截图**：环境列表每行「截图」即可截取运行中环境窗口的当前视口为 PNG（用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕），弹窗内可一键下载；环境需先打开，详见下节
 - **地理位置伪装（GEO）**：覆盖 `navigator.geolocation`，按环境时区回灌「代表城市」坐标；坐标与时区联动自洽，避免「东京时区 + 纽约坐标」这类自相矛盾的关联信号，详见下节
+- **追踪器屏蔽**：环境级开关，拦截已知分析 / 广告 / 埋点域名的请求（GA、GTM、Facebook Pixel、Hotjar、Mixpanel 等），避免反复调研竞品时被对方埋点、Cookie 或第三方脚本识别甚至反监控；只拦明确的统计 / 广告子域，不影响登录与正常 CDN 资源，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -239,6 +240,16 @@ app.listen(4000)
 - **自洽性（关键）**：坐标抖动幅度刻意压得很小（随机 ±0.04° ≈ 4km、克隆派生 ±0.03°），既让不同环境坐标互不相同，又不会飘到邻市 / 邻国而与设定的时区、语言矛盾。历史环境（本功能上线前创建、无 GEO 字段）在 `normalizeFingerprint` 中按其**自身的 timezone** 反查坐标补齐，不会套用随机基准而产生矛盾。
 - **联动**：环境表单里切换时区，纬度 / 经度 / 精度会自动跟随到该时区代表城市；也可手工微调。
 
+### 追踪器屏蔽（隐身增强）
+
+对标 RoxyBrowser「屏蔽追踪器 / 自动清理指纹」——调研竞品时反复用同一环境访问对方站点，很容易被埋点、Cookie 或第三方脚本识别出来，甚至被对方反监控。
+
+- **实现位置与其它指纹项不同**：请求拦截只能在**主进程**做——`browserManager.openWindow` 里给环境 session 挂 `session.webRequest.onBeforeRequest`，命中即 `cancel`。preload 跑在渲染进程，只能改 JS、**拦不到网络请求**。必须在导航前挂上，否则首屏的统计脚本早已发出去了。
+- **判定规则**：`src/shared/trackers.ts` 纯函数模块（可离线单测）导出 `TRACKER_HOSTS` 与 `isTrackerUrl(url, extraHosts)`；主机名等于清单项或以其子域结尾即命中。
+- **清单原则（关键，别乱加）**：只拦**明确的分析 / 广告子域**，绝不拦主域——拦 `facebook.com` 会让用户直接登不上号，拦 `connect.facebook.net` 才只是干掉 SDK 而不影响登录；CDN（jsdelivr / unpkg / cdnjs）与错误上报（Sentry / Bugsnag）也不在清单内，否则页面会碎或报错刷屏。
+- **开关**：`Fingerprint.blockTrackers`，新建环境**默认开启**（与 Canvas / Audio 噪声一致），可在环境表单「高级设置」里单独关闭；克隆派生继承母本设置，保持批量号行为一致。
+- **兼容性**：本功能上线前创建的环境没有该字段，按「不改变既有环境行为」的原则默认不拦截，在表单里开启后生效。
+
 ## 目录结构
 
 
@@ -259,7 +270,8 @@ src/
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
-│   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池）
+│   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池 / GEO 坐标 / 反追踪开关）
+│   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── countries.ts          # 16 个主流跨境电商国家（国家码 / 中英文名 / IANA 时区 / 默认语言）
 │   ├── locales.ts            # 支持的语言（zh-CN / en-US / ja-JP / de-DE）与 antd·dayjs 包名映射
 │   ├── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）

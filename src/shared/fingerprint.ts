@@ -1,4 +1,5 @@
 import type { Fingerprint, FingerprintPresetDTO, OSKind } from './types'
+import { DEFAULT_BLOCK_TRACKERS } from './trackers'
 
 // ============ 随机指纹生成器 ============
 
@@ -264,6 +265,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         touch: true,
         devicePixelRatio: dev.dpr,
         ...geoFor(tzInfo.tz),
+        blockTrackers: DEFAULT_BLOCK_TRACKERS,
         fonts: randomFonts('android')
       }
     }
@@ -290,6 +292,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         touch: true,
         devicePixelRatio: dev.dpr,
         ...geoFor(tzInfo.tz),
+        blockTrackers: DEFAULT_BLOCK_TRACKERS,
         fonts: randomFonts('ios')
       }
   }
@@ -327,6 +330,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     ...geoFor(tzInfo.tz),
+    blockTrackers: DEFAULT_BLOCK_TRACKERS,
     fonts: randomFonts(chosenOs)
   }
 }
@@ -386,7 +390,9 @@ export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerpr
     ...fp,
     coreVersion,
     fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind),
-    ...geo
+    ...geo,
+    // 老数据没有该字段时显式兜底：不能让 `{ ...fp }` 里可能存在的 undefined 把它抹成假值
+    blockTrackers: typeof fp.blockTrackers === 'boolean' ? fp.blockTrackers : base.blockTrackers
   } as Fingerprint
 }
 
@@ -401,6 +407,7 @@ function presetFingerprint(
   return {
     canvasNoise: true,
     audioNoise: true,
+    blockTrackers: DEFAULT_BLOCK_TRACKERS,
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
@@ -703,6 +710,8 @@ export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
     geoLongitude: round6(
       (typeof src.geoLongitude === 'number' ? src.geoLongitude : tzGeo(src.timezone)[1]) + (rand() - 0.5) * 0.06
     ),
-    geoAccuracy: typeof src.geoAccuracy === 'number' ? src.geoAccuracy : 50
+    geoAccuracy: typeof src.geoAccuracy === 'number' ? src.geoAccuracy : 50,
+    // 与 canvasNoise / audioNoise 同属「行为一致」类：母本关则副本也关，保持批量号行为统一
+    blockTrackers: typeof src.blockTrackers === 'boolean' ? src.blockTrackers : DEFAULT_BLOCK_TRACKERS
   }
 }

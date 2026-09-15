@@ -526,6 +526,15 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     <Form.Item label="Audio 噪声" style={{ marginBottom: 0 }} valuePropName="checked">
                       <Switch checked={fp.audioNoise} onChange={(v) => setFpField('audioNoise', v)} />
                     </Form.Item>
+                    {/* 用 tooltip 而不是 extra：extra 会撑高单项，导致同排开关高度不齐 */}
+                    <Form.Item
+                      label="追踪器屏蔽"
+                      style={{ marginBottom: 0 }}
+                      valuePropName="checked"
+                      tooltip="拦截已知分析 / 广告 / 埋点域名的请求（GA、GTM、Facebook Pixel、Hotjar 等），避免反复调研竞品时被对方埋点识别；只拦明确的统计 / 广告子域，不影响登录与正常 CDN 资源"
+                    >
+                      <Switch checked={!!fp.blockTrackers} onChange={(v) => setFpField('blockTrackers', v)} />
+                    </Form.Item>
                     <Form.Item label="WebRTC" style={{ marginBottom: 0 }}>
                       <Select
                         value={fp.webrtc}

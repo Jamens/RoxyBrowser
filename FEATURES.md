@@ -389,6 +389,22 @@ app.listen(4000)
 - **i18n**：本功能文案沿用环境表单既有硬编码风格，未新增 key。
 - **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0；**离线单测 57 项全绿**（`tsc` 转 CJS 后 `.tmp/test_geo.cjs` 对拍：坐标准确性 / 未知时区回落 / 确定性 / 抖动幅度受控 / random 与派生自洽 / 历史数据按自身时区反查 / 无效输入兜底 / 克隆不漂出母本城市）。真实 E2E（开窗后页面读 geolocation）本沙箱未跑，沿用「用户自测」惯例。
 
+### 7.11 追踪器屏蔽（隐身增强）
+
+对标 RoxyBrowser「屏蔽追踪器」——调研竞品时反复用同一环境访问对方站点，容易被对方的埋点、Cookie 或第三方脚本识别出来，甚至被反监控。
+
+- **实现位置与其它指纹项不同**：挂在 `main/browserManager.ts` 的 `openWindow` 里，给环境 session 注册 `session.webRequest.onBeforeRequest`，命中即 `cancel`。**preload 跑在渲染进程，只能改 JS、拦不到网络请求**——所以本次「指纹三处同步」的第三处是主进程而非 preload。必须在导航前挂上，否则首屏的统计脚本早已发出。
+- **判定**：`src/shared/trackers.ts` 纯函数模块（与 `webhook.ts` / `logExport.ts` / `apiAudit.ts` 同构、可单测）导出 `TRACKER_HOSTS` 与 `isTrackerUrl(url, extraHosts)`；hostname 等于清单项或以其子域结尾即命中；URL 非法 / 非 http(s)（file / chrome / data / about）一律放过——宁可放过，不可误杀。
+- **清单三原则（关键，别乱加）**：
+  1. 只拦**明确的分析 / 广告子域**，绝不拦主域——拦 `facebook.com` 会让用户直接登不上号，拦 `connect.facebook.net` 才只是干掉 SDK 而不影响登录；
+  2. CDN（jsdelivr / unpkg / cdnjs）不拦，否则页面会碎；
+  3. 错误上报（Sentry / Bugsnag）不拦，那是开发者工具不是追踪，拦了会报错刷屏。
+- **开关**：`Fingerprint.blockTrackers`，新建环境**默认开启**（`DEFAULT_BLOCK_TRACKERS = true`，与 Canvas / Audio 噪声一致）；预设取「确定开启」，克隆派生**继承母本**（属「行为一致」类，与 `canvasNoise` / `audioNoise` 同）；`normalizeFingerprint` 对老数据显式兜底，避免被 `{ ...fp }` 里可能存在的 undefined 抹成假值。
+- **兼容性**：本功能上线前创建的环境没有该字段，按「不改变既有环境行为」的原则默认不拦截，在环境表单里开启后生效。
+- **前端**：`ProfileForm.tsx` 高级设置里加「追踪器屏蔽」Switch。说明文字用 `tooltip` 而非 `extra`——extra 会撑高单项导致同排开关高度不齐（与 GEO 那次是同一个坑）。
+- **验证**：离线单测 **98 项全绿** —— `test_trackers.cjs` 68 项（21 类追踪域命中 / 子域匹配 / **不误杀主域 13 项** / 不误杀 CDN 与错误上报 / 非法与 file·chrome·data 协议放过 / 大小写 / 自定义 extra / 清单不得含主域且无重复）+ `test_blocktrackers.cjs` 30 项（四 OS 默认开启 / 预设 / 老数据归一 / 显式开关保留 / 克隆继承 / 无效输入兜底）。node / web `tsc --noEmit` EXIT 0；build EXIT 0。真实 E2E（开窗访问带 GA 的站点看请求是否被拦）本沙箱未跑，沿用「用户自测」惯例。
+- **单测抓到的真实缺陷**：Mixpanel 的 SDK 实际走 `cdn.mxpnl.com`，清单里只写了 `mixpanel.com` 会漏拦，已补 `mxpnl.com`。
+
 ### 8. 操作日志
 
 
