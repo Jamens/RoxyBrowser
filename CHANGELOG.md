@@ -23,6 +23,10 @@
   - 后端 `src/main/totp.ts` 用 Node 内置 `crypto`（HMAC-SHA1 + base32）实现 `generateTotpSecret` / `buildOtpAuthUrl` / `verifyTotp` / `totpQrDataUrl`，**零新增依赖**（二维码复用已有的 `qrcode`）。
   - 接口：`POST /api/auth/2fa/setup`（生成密钥 + 二维码 data URL，pending）、`POST /api/auth/2fa/confirm`（首个动态码确认启用）、`POST /api/auth/2fa/disable`（动态码关闭）、`POST /api/auth/2fa/verify`（登录第二步：挑战令牌 + 动态码换正式令牌）。
   - 登录改造：`POST /api/auth/login` 在密码正确且已启用 2FA 时只返回 `{ twoFactorRequired, challengeToken }`（5 分钟短期令牌），不直接发令牌；`GET /api/auth/me` 返回 `twoFactorEnabled` 供设置页展示状态。
+
+### 修复
+
+- **2FA 挑战令牌防复用**：`authMiddleware` 原先仅校验 JWT 签名、未检查 `purpose` 声明，导致登录第二步下发的 `purpose:'2fa'` 挑战令牌可被当作 Bearer 会话令牌访问任意受保护接口（尤其 `/api/auth/2fa/setup` 会静默覆盖密钥并关闭 2FA），形成 2FA 降级/绕过。现显式拒绝任何携带 `purpose` 的令牌（`6d4da32`）。
   - 数据模型：`users` 表加 `twoFactorSecret`（base32，可空）+ `twoFactorEnabled`（tinyint），`synchronize:true` 自动加列，无迁移脚本。
   - 渲染端 `Login.tsx` 需配合处理 `twoFactorRequired` 挑战（本项目该文件受敏感内容门禁，挑战逻辑以补丁形式交付，详见提交说明）。
 

@@ -123,7 +123,10 @@ function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : String(req.query.token || '')
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; tid: number; username: string; role: string }
+    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; tid: number; username: string; role: string; purpose?: string }
+    // 拒绝「分步挑战令牌」(purpose 存在)：它只能用于 /auth/2fa/verify 换取会话令牌，
+    // 绝不能当作完整会话令牌去访问受保护接口，否则存在 2FA 降级/绕过风险。
+    if (payload.purpose) return res.status(401).json({ message: '令牌类型无效，请重新登录' })
     req.uid = payload.uid
     req.tid = payload.tid
     req.username = payload.username
