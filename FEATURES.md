@@ -296,6 +296,38 @@ curl -X POST http://127.0.0.1:39100/api/rpa/import \
 - **实现**：`src/main/totp.ts` 用 Node 内置 `crypto`（HMAC-SHA1 + base32 编解码，RFC 6238）实现，允许 ±1 个时间窗（±30s）时钟漂移；**零新增依赖**（二维码复用已有 `qrcode` 包）。`GET /api/auth/me` 返回 `twoFactorEnabled` 供设置页展示状态。
 - **数据模型**：`users` 表加 `twoFactorSecret`（varchar，可空）+ `twoFactorEnabled`（tinyint），`TypeORM synchronize:true` 首次启动自动加列，无手写迁移。
 
+### 7.5 Webhook 通知（操作日志实时外发）
+
+把操作日志事件以 HTTP POST 实时推送到你自己的服务，用于运维机器人、审计存档、或联动外部系统。配置存于 `AppSettings.webhooks`（JSON 列，随设置一起持久化），前端设置页「Webhook 通知」分区增删。
+
+- **触发点（单一收敛）**：所有事件都从既有的操作日志入口触发——`writeLog(req, action, detail)`（`src/main/server.ts`，覆盖 HTTP 业务动作）、`saveSchedulerLog(teamId, userId, action, detail)`（定时调度）、`writeAgentLog({profileId, action, detail, actor})`（AI Agent 执行）。这保证「凡是写进操作日志的动作，都会同时外发 Webhook」，不会出现「日志有记录但 Webhook 没收到」。
+- **订阅与命中**：每条 Webhook 的 `events` 支持三种写法——`['*']` 或空数组 = 全部事件；精确字符串 = 仅该事件（如 `open_profile`）；关键词 = 事件名按 `_` 分词后包含该关键词即命中（如 `profile` 命中 `create_profile` / `open_profile` / `batch_delete_profile`，`proxy` 命中 `create_proxy` / `allocate_proxy`）。还支持 `*keyword*` 通配。
+- **投递（fire-and-forget）**：`dispatchWebhook(event, ctx)` 遍历缓存中「启用且命中」的 Webhook，逐个 `dispatchWebhookEvent` 投递；**不 await、绝不抛错阻塞主流程**（失败静默忽略）。8 秒超时（`AbortController`）。
+- **签名**：设置了 `secret` 时，对原始请求体做 `HMAC-SHA256`，请求头带 `X-Roxy-Signature: sha256=<hex>`；接收端用同一密钥复算比对即可校验来源与完整性；`secret` 为空则不签名。
+- **请求头与 Payload**：头含 `X-Roxy-Event`（事件名）、`X-Roxy-Delivery`（唯一投递 ID，便于接收端去重）、`Content-Type: application/json`；Body 为 JSON `{ event, eventId, timestamp, teamId, actor: {uid,username,role}|null, detail }`。
+- **发送测试**：`POST /api/webhooks/test`（需登录）接收一条 Webhook 配置（未保存也可），立即单发一次并返回 `{ ok, status, error }`；设置页每条配置右侧「发送测试」按钮调用它，先验证地址 / 密钥再保存。
+- **性能**：Webhook 配置缓存在内存（`setCachedWebhooks`），`getSettings()` 每次读取设置时刷新、`PUT /settings` 保存后刷新，事件触发时直接读缓存、不查库。
+- **纯函数可单测**：`src/main/webhook.ts` 不含 express、不依赖 Electron；签名 / 事件匹配 / 投递均可用注入的 mock `fetch` 做离线往返测试（已用独立 HMAC 参考实现交叉验证）。
+
+**接收端最小示例（Node + Express）**：
+
+```js
+import { createHmac } from 'node:crypto'
+import express from 'express'
+const app = express()
+app.use(express.json({ limit: '1mb' }))
+app.post('/roxy-webhook', (req, res) => {
+  const secret = process.env.ROXY_HOOK_SECRET
+  if (secret) {
+    const sig = 'sha256=' + createHmac('sha256', secret).update(JSON.stringify(req.body)).digest('hex')
+    if (sig !== req.headers['x-roxy-signature']) return res.status(401).end()
+  }
+  console.log('[roxy]', req.headers['x-roxy-event'], req.body)
+  res.sendStatus(200)
+})
+app.listen(4000)
+```
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。

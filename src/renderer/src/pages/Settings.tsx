@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState, useRef } from 'react'
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined } from '@ant-design/icons'
+import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
 import { readTextFile } from '../utils/download'
-import { DEFAULT_SETTINGS, SEARCH_ENGINES, type AppSettings, type AiAutoTask, type UpdaterStatus } from '@shared/types'
+import { DEFAULT_SETTINGS, SEARCH_ENGINES, WEBHOOK_EVENT_GROUPS, type AppSettings, type AiAutoTask, type UpdaterStatus, type WebhookConfig } from '@shared/types'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
@@ -46,6 +46,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string } | null>(null)
   const [checking, setChecking] = useState(false)
+  const [testingId, setTestingId] = useState<number | null>(null)
   const { t, setLocale } = useI18n()
 
   // ===== 登录二次验证（2FA / TOTP）=====
@@ -123,6 +124,7 @@ export default function Settings() {
   }, [])
 
   const genTaskId = () => `t-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  const genWebhookId = () => `wh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 
   const openTaskEditor = (index: number) => {
     const task = (form.getFieldValue(['aiAutoTasks', index]) as AiAutoTask) || {
@@ -205,6 +207,43 @@ export default function Settings() {
       message.error((e as Error).message)
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Webhook 事件下拉选项：全部事件 + 各分组（分组值为关键词，命中规则见 webhookShouldFire）
+  const webhookEventOptions = useMemo(() => {
+    const humanize = (s: string) => s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    return [
+      { value: '*', label: t('webhook.eventAll') },
+      ...WEBHOOK_EVENT_GROUPS.map((g) => ({
+        label: t(`webhook.group.${g.key}`),
+        options: g.events.map((e) => ({
+          value: e,
+          label: humanize(e)
+        }))
+      }))
+    ]
+  }, [t])
+
+  // Webhook「发送测试」：用当前表单里的配置单发一次，反馈投递结果
+  const sendWebhookTest = async (idx: number) => {
+    const wh = form.getFieldValue(['webhooks', idx]) as WebhookConfig | undefined
+    if (!wh || !wh.url) {
+      message.warning(t('webhook.urlRequired'))
+      return
+    }
+    setTestingId(idx)
+    try {
+      const res = await api.post<{ ok: boolean; status: number; error?: string }>('/api/webhooks/test', { webhook: wh })
+      if (res.ok && res.status >= 200 && res.status < 300) {
+        message.success(t('webhook.testOk', { status: res.status }))
+      } else {
+        message.error(t('webhook.testFail', { status: res.status || '-', error: res.error || '' }))
+      }
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTestingId(null)
     }
   }
 
@@ -687,6 +726,71 @@ export default function Settings() {
             </Space>
           </Form>
         </Modal>
+
+        <Divider>{t('webhook.section')}</Divider>
+        <Typography.Paragraph type="secondary">{t('webhook.desc')}</Typography.Paragraph>
+        <Form.List name="webhooks">
+          {(_fields, { add, remove }) => (
+            <>
+              {_fields.length === 0 && (
+                <Typography.Paragraph type="secondary">{t('webhook.noHooks')}</Typography.Paragraph>
+              )}
+              {_fields.map((field) => {
+                const wh = (form.getFieldValue(['webhooks', field.name]) as WebhookConfig) || ({} as WebhookConfig)
+                return (
+                  <Card
+                    key={field.key}
+                    size="small"
+                    style={{ marginBottom: 12 }}
+                    title={wh.name || t('webhook.untitled')}
+                    extra={
+                      <Space>
+                        <Tag color={wh.enabled ? 'green' : 'default'}>{wh.enabled ? t('webhook.enabled') : t('webhook.disabled')}</Tag>
+                        <Button size="small" loading={testingId === field.name} icon={<NotificationOutlined />} onClick={() => sendWebhookTest(field.name)}>
+                          {t('webhook.test')}
+                        </Button>
+                        <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                      </Space>
+                    }
+                  >
+                    <Form.Item name={[field.name, 'id']} hidden>
+                      <Input />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'name']} label={t('webhook.name')} rules={[{ required: true }]}>
+                      <Input placeholder={t('webhook.namePlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'url']} label={t('webhook.url')} rules={[{ required: true }, { type: 'url', message: t('webhook.urlInvalid') }]}>
+                      <Input placeholder="https://example.com/webhook" />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'secret']} label={t('webhook.secret')} extra={t('webhook.secretExtra')}>
+                      <Input.Password placeholder={t('webhook.secretPlaceholder')} />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'enabled']} label={t('webhook.enabled')} valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item name={[field.name, 'events']} label={t('webhook.events')} extra={t('webhook.eventsExtra')}>
+                      <Select
+                        mode="multiple"
+                        allowClear
+                        placeholder={t('webhook.eventsPlaceholder')}
+                        style={{ width: '100%' }}
+                        options={webhookEventOptions}
+                      />
+                    </Form.Item>
+                  </Card>
+                )
+              })}
+              <Button
+                type="dashed"
+                block
+                icon={<PlusOutlined />}
+                onClick={() => add({ id: genWebhookId(), name: '', url: '', secret: '', enabled: true, events: ['*'] })}
+              >
+                {t('webhook.add')}
+              </Button>
+            </>
+          )}
+        </Form.List>
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

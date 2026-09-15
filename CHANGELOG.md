@@ -30,6 +30,20 @@
   - 数据模型：`users` 表加 `twoFactorSecret`（base32，可空）+ `twoFactorEnabled`（tinyint），`synchronize:true` 自动加列，无迁移脚本。
   - 渲染端 `Login.tsx` 需配合处理 `twoFactorRequired` 挑战（本项目该文件受敏感内容门禁，挑战逻辑以补丁形式交付，详见提交说明）。
 
+## 2026-09-15 · Webhook 通知（操作日志实时外发）
+
+### 新增
+
+- **Webhook 通知**：把操作日志事件实时 POST 到用户自有服务，用于运维机器人 / 审计 / 外部联动。
+  - 数据模型：`AppSettings.webhooks: WebhookConfig[]`（`src/shared/types.ts`，JSON 列随设置持久化；`WebhookConfig` = `{ id, name, url, secret, enabled, events }`）。
+  - 引擎 `src/main/webhook.ts`（纯函数、无 express 依赖）：`signWebhookBody`（HMAC-SHA256）、`webhookShouldFire`（命中规则：空/`*`=全部、精确、关键词分词匹配如 `profile`→`create_profile`/`batch_delete_profile`、`*kw*` 通配）、`buildWebhookPayload`、`dispatchWebhookEvent`（fetch + 头 + 8s 超时）、`dispatchWebhook`（fire-and-forget，绝不阻塞主流程）、`testWebhook`。
+  - 事件收敛：在 `writeLog` / `saveSchedulerLog` / `writeAgentLog` 三个操作日志入口 fire-and-forget 调用，凡写日志的动作都外发；`getSettings()` 与 `PUT /settings` 刷新内存缓存，事件触发不查库。
+  - 接口：`POST /api/webhooks/test`（需登录）接收一条配置单发并返回 `{ ok, status, error }`；设置页每条配置「发送测试」按钮调用它。
+  - 请求头：`X-Roxy-Event` / `X-Roxy-Delivery`（去重 ID）/ `X-Roxy-Signature: sha256=<HMAC>`（设了密钥时）；Body = `{ event, eventId, timestamp, teamId, actor, detail }`。
+  - 前端：`Settings.tsx` 新增「Webhook 通知」分区（`Form.List` 增删多条，含名称 / 地址 / 签名密钥 / 启用 / 事件多选），四语 i18n（`webhook.*` + `webhook.group.*`）。
+  - 离线单测：编译为 CJS 后用 mock fetch 对拍签名 / 事件匹配 / 投递 / fire-and-forget（26 项全绿，已用独立 HMAC 参考实现交叉验证）。
+  - 提交：`9128a2d`（feat + 离线单测）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

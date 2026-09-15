@@ -322,7 +322,39 @@ const zhCN = {
   'update.downloaded': '新版本已下载',
   'update.installNow': '立即重启安装',
   'update.error': '更新检查失败',
-  'update.dev': '开发模式不检查更新'
+  'update.dev': '开发模式不检查更新',
+
+  // ---- Webhook 通知 ----
+  'webhook.section': 'Webhook 通知',
+  'webhook.desc': '把操作日志事件（创建/打开环境、增删代理、团队变更等）实时推送到你的服务，便于自动化与审计。',
+  'webhook.noHooks': '还没有 Webhook，点「新增 Webhook」创建一个。',
+  'webhook.untitled': '未命名 Webhook',
+  'webhook.name': '名称',
+  'webhook.namePlaceholder': '例如：我的运维机器人',
+  'webhook.url': '接收地址',
+  'webhook.urlInvalid': '请输入合法的 URL（以 http:// 或 https:// 开头）',
+  'webhook.urlRequired': '请先填写接收地址再发送测试',
+  'webhook.secret': '签名密钥（HMAC-SHA256）',
+  'webhook.secretExtra': '留空则不签名；设置后接收端可用 X-Roxy-Signature: sha256=… 校验来源与完整性。',
+  'webhook.secretPlaceholder': '可选，用于签名',
+  'webhook.enabled': '启用',
+  'webhook.disabled': '停用',
+  'webhook.events': '订阅事件',
+  'webhook.eventsExtra': '选择「全部事件」接收所有操作；或按分类订阅（命中规则：事件名含该关键词即触发，如 profile 匹配 create_profile / open_profile / batch_delete_profile）。',
+  'webhook.eventsPlaceholder': '选择要接收的事件（默认全部）',
+  'webhook.test': '发送测试',
+  'webhook.testOk': '测试投递成功（HTTP {status}）',
+  'webhook.testFail': '测试投递失败（HTTP {status}）：{error}',
+  'webhook.add': '新增 Webhook',
+  'webhook.eventAll': '全部事件',
+  'webhook.group.profile': '环境',
+  'webhook.group.proxy': '代理',
+  'webhook.group.team': '团队',
+  'webhook.group.account': '账号',
+  'webhook.group.cookie': 'Cookie',
+  'webhook.group.rpa': 'RPA',
+  'webhook.group.agent': 'AI Agent',
+  'webhook.group.auth': '登录'
 }
 
 export type MessageDict = typeof zhCN
@@ -642,7 +674,39 @@ const enUS: MessageDict = {
   'update.downloaded': 'New version downloaded',
   'update.installNow': 'Restart & Install Now',
   'update.error': 'Update check failed',
-  'update.dev': 'Update check disabled in dev mode'
+  'update.dev': 'Update check disabled in dev mode',
+
+  // ---- Webhook 通知 ----
+  'webhook.section': 'Webhook Notifications',
+  'webhook.desc': 'Push operation-log events (profile create/open, proxy add/remove, team changes, etc.) to your service in real time for automation and auditing.',
+  'webhook.noHooks': 'No webhooks yet. Click "New Webhook" to create one.',
+  'webhook.untitled': 'Untitled Webhook',
+  'webhook.name': 'Name',
+  'webhook.namePlaceholder': 'e.g. My Ops Bot',
+  'webhook.url': 'Endpoint URL',
+  'webhook.urlInvalid': 'Enter a valid URL (starting with http:// or https://)',
+  'webhook.urlRequired': 'Enter an endpoint URL before sending a test',
+  'webhook.secret': 'Signing secret (HMAC-SHA256)',
+  'webhook.secretExtra': 'Leave empty to skip signing. When set, receivers can verify origin and integrity via X-Roxy-Signature: sha256=….',
+  'webhook.secretPlaceholder': 'optional, used for signing',
+  'webhook.enabled': 'Enabled',
+  'webhook.disabled': 'Disabled',
+  'webhook.events': 'Subscribed events',
+  'webhook.eventsExtra': 'Choose "All events" to receive everything, or subscribe by category (match rule: fires when the event name contains the keyword, e.g. profile matches create_profile / open_profile / batch_delete_profile).',
+  'webhook.eventsPlaceholder': 'Select events to receive (all by default)',
+  'webhook.test': 'Send test',
+  'webhook.testOk': 'Test delivery succeeded (HTTP {status})',
+  'webhook.testFail': 'Test delivery failed (HTTP {status}): {error}',
+  'webhook.add': 'New Webhook',
+  'webhook.eventAll': 'All events',
+  'webhook.group.profile': 'Profiles',
+  'webhook.group.proxy': 'Proxies',
+  'webhook.group.team': 'Team',
+  'webhook.group.account': 'Accounts',
+  'webhook.group.cookie': 'Cookies',
+  'webhook.group.rpa': 'RPA',
+  'webhook.group.agent': 'AI Agent',
+  'webhook.group.auth': 'Auth'
 }
 
 const jaJP: MessageDict = {
@@ -960,7 +1024,39 @@ const jaJP: MessageDict = {
   'update.downloaded': '新しいバージョンをダウンロードしました',
   'update.installNow': '今すぐ再起動してインストール',
   'update.error': '更新の確認に失敗しました',
-  'update.dev': '開発モードでは更新を確認しません'
+  'update.dev': '開発モードでは更新を確認しません',
+
+  // ---- Webhook 通知 ----
+  'webhook.section': 'Webhook 通知',
+  'webhook.desc': '操作ログのイベント（環境の作成/起動、プロキシの追加/削除、チーム変更など）をリアルタイムに外部サービスへプッシュし、自動化や監査に活用できます。',
+  'webhook.noHooks': 'Webhook はまだありません。「新規 Webhook」で作成できます。',
+  'webhook.untitled': '名称未設定の Webhook',
+  'webhook.name': '名前',
+  'webhook.namePlaceholder': '例：運用ボット',
+  'webhook.url': 'エンドポイント URL',
+  'webhook.urlInvalid': '正しい URL を入力してください（http:// または https:// で始まる）',
+  'webhook.urlRequired': 'テスト送信前にエンドポイント URL を入力してください',
+  'webhook.secret': '署名シークレット（HMAC-SHA256）',
+  'webhook.secretExtra': '空のままなら署名しません。設定すると受信側は X-Roxy-Signature: sha256=… で送信元と完全性を検証できます。',
+  'webhook.secretPlaceholder': '省略可、署名用',
+  'webhook.enabled': '有効',
+  'webhook.disabled': '無効',
+  'webhook.events': '購読するイベント',
+  'webhook.eventsExtra': '「すべてのイベント」で全通知、またはカテゴリごとに購読（一致ルール：イベント名にキーワードが含まれると発火。例：profile は create_profile / open_profile / batch_delete_profile に一致）。',
+  'webhook.eventsPlaceholder': '受信するイベントを選択（既定ですべて）',
+  'webhook.test': 'テスト送信',
+  'webhook.testOk': 'テスト配信に成功しました（HTTP {status}）',
+  'webhook.testFail': 'テスト配信に失敗しました（HTTP {status}）：{error}',
+  'webhook.add': '新規 Webhook',
+  'webhook.eventAll': 'すべてのイベント',
+  'webhook.group.profile': '環境',
+  'webhook.group.proxy': 'プロキシ',
+  'webhook.group.team': 'チーム',
+  'webhook.group.account': 'アカウント',
+  'webhook.group.cookie': 'Cookie',
+  'webhook.group.rpa': 'RPA',
+  'webhook.group.agent': 'AI Agent',
+  'webhook.group.auth': 'ログイン'
 }
 
 const deDE: MessageDict = {
@@ -1280,7 +1376,39 @@ const deDE: MessageDict = {
   'update.downloaded': 'Neue Version heruntergeladen',
   'update.installNow': 'Jetzt neu starten & installieren',
   'update.error': 'Update-Prüfung fehlgeschlagen',
-  'update.dev': 'Im Entwicklungsmodus keine Update-Prüfung'
+  'update.dev': 'Im Entwicklungsmodus keine Update-Prüfung',
+
+  // ---- Webhook 通知 ----
+  'webhook.section': 'Webhook-Benachrichtigungen',
+  'webhook.desc': 'Sendet Ereignisse aus dem Aktivitätsprotokoll (Profil erstellen/öffnen, Proxy hinzufügen/entfernen, Teamänderungen usw.) in Echtzeit an Ihren Dienst – für Automatisierung und Audit.',
+  'webhook.noHooks': 'Noch keine Webhooks. Klicken Sie auf „Neuer Webhook“, um einen zu erstellen.',
+  'webhook.untitled': 'Unbenannter Webhook',
+  'webhook.name': 'Name',
+  'webhook.namePlaceholder': 'z. B. Mein Ops-Bot',
+  'webhook.url': 'Endpunkt-URL',
+  'webhook.urlInvalid': 'Geben Sie eine gültige URL ein (beginnend mit http:// oder https://)',
+  'webhook.urlRequired': 'Geben Sie vor dem Test eine Endpunkt-URL ein',
+  'webhook.secret': 'Signaturgeheimnis (HMAC-SHA256)',
+  'webhook.secretExtra': 'Leer lassen = keine Signatur. Wenn gesetzt, kann der Empfänger Herkunft und Integrität per X-Roxy-Signature: sha256=… prüfen.',
+  'webhook.secretPlaceholder': 'optional, zur Signierung',
+  'webhook.enabled': 'Aktiv',
+  'webhook.disabled': 'Inaktiv',
+  'webhook.events': 'Abonnierte Ereignisse',
+  'webhook.eventsExtra': '„Alle Ereignisse" empfängt alles, oder abonnieren Sie nach Kategorie (Trefferregel: Ereignis wird ausgelöst, wenn der Name das Schlüsselwort enthält, z. B. profile passt auf create_profile / open_profile / batch_delete_profile).',
+  'webhook.eventsPlaceholder': 'Ereignisse zur Empfängerauswahl (standardmäßig alle)',
+  'webhook.test': 'Test senden',
+  'webhook.testOk': 'Testübermittlung erfolgreich (HTTP {status})',
+  'webhook.testFail': 'Testübermittlung fehlgeschlagen (HTTP {status}): {error}',
+  'webhook.add': 'Neuer Webhook',
+  'webhook.eventAll': 'Alle Ereignisse',
+  'webhook.group.profile': 'Profile',
+  'webhook.group.proxy': 'Proxies',
+  'webhook.group.team': 'Team',
+  'webhook.group.account': 'Konten',
+  'webhook.group.cookie': 'Cookies',
+  'webhook.group.rpa': 'RPA',
+  'webhook.group.agent': 'KI-Agent',
+  'webhook.group.auth': 'Login'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

@@ -113,6 +113,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **团队协作 / 账号中心 / Cookie / 扩展**：成员角色控权、账号批量导入、Cookie 按环境隔离与批量导入、按环境加载 Chrome 扩展
 - **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器
 - **登录二次验证（2FA / TOTP）**：登录除密码外还需验证器动态码；设置页扫码启用 / 关闭，TOTP 用 Node 内置 crypto 实现（无外部依赖）
+- **Webhook 通知**：把操作日志事件（创建/打开环境、增删代理、团队变更、AI Agent 执行等）实时推送到你自己的服务，用于自动化与审计；HMAC-SHA256 签名校验来源、设置页「发送测试」即时验证、按事件分类订阅（含「全部事件」），详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -161,6 +162,36 @@ mysql -uroot -p1234560 < db/schema.sql
 
 > 前置依赖：本功能复用 AI Agent 执行闭环，需先在「设置 → AI Agent」启用并配好本地视觉模型（或云端 BYOK 视觉模型）。目标环境需提前处于运行态。
 
+### Webhook 通知（操作日志实时外发）
+
+把「谁在什么环境做了什么」以 HTTP POST 实时推送到你自己的接收端，方便接入运维机器人、审计存档、或联动外部系统。
+
+- **触发点**：复用现有操作日志的单一收敛点（`writeLog` / `saveSchedulerLog` / `writeAgentLog`），凡是写操作日志的动作都会触发——覆盖环境增删改开关、代理增删分配、团队与成员变更、账号 / Cookie 操作、RPA 脚本、AI Agent 执行、定时调度等。
+- **配置**：设置页「Webhook 通知」分区，可增删多条；每条含「名称 / 接收地址 / 签名密钥（可选）/ 启用开关 / 订阅事件」。事件订阅支持「全部事件」或按分类（环境 / 代理 / 团队 / 账号 / Cookie / RPA / AI Agent / 登录）勾选，命中规则为「事件名包含该关键词」（如 `profile` 命中 `create_profile` / `open_profile` / `batch_delete_profile`）。
+- **投递**：`fire-and-forget`，绝不抛错阻塞主流程；8 秒超时；请求头携带 `X-Roxy-Event`（事件名）、`X-Roxy-Delivery`（唯一投递 ID，便于去重）、`X-Roxy-Signature: sha256=<HMAC>`（设置了密钥时）。Payload 含 `event` / `eventId` / `timestamp` / `teamId` / `actor` / `detail`。
+- **签名校验**：接收端用同一密钥对原始请求体做 `HMAC-SHA256`，比对 `X-Roxy-Signature` 即可确认来源与完整性；密钥留空则不签名。
+- **发送测试**：每条配置右侧「发送测试」按钮会立即单发一次（即使未启用），返回 HTTP 状态码，方便先验证地址与密钥再保存。
+- **性能**：Webhook 配置缓存在内存（每次读取设置 / 保存设置时刷新），事件触发时直接读缓存、不查库。
+
+**接收端示例（Node）**：
+
+```js
+import { createHmac } from 'node:crypto'
+import express from 'express'
+const app = express()
+app.use(express.json({ limit: '1mb' }))
+app.post('/roxy-webhook', (req, res) => {
+  const secret = process.env.ROXY_HOOK_SECRET
+  if (secret) {
+    const sig = 'sha256=' + createHmac('sha256', secret).update(JSON.stringify(req.body)).digest('hex')
+    if (sig !== req.headers['x-roxy-signature']) return res.status(401).end()
+  }
+  console.log('[roxy]', req.headers['x-roxy-event'], req.body)
+  res.sendStatus(200)
+})
+app.listen(4000)
+```
+
 ## 目录结构
 
 ```
@@ -168,6 +199,7 @@ src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
 │   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
+│   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
 │   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发

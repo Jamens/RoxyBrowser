@@ -9,6 +9,7 @@ import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
+import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
 import { HttpProxyAgent } from 'http-proxy-agent'
@@ -36,7 +37,7 @@ import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normaliz
 import { substituteSteps } from '../shared/rpa'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
-import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings } from '../shared/types'
+import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe } from '../shared/healthcheck'
 import {
@@ -191,6 +192,12 @@ async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
       sensitive: isSensitiveAction(action)
     })
   )
+  // 触发 Webhook 通知（fire-and-forget，绝不阻塞主流程）
+  dispatchWebhook(action, {
+    teamId: req.tid,
+    actor: { uid: req.uid, username: req.username || 'api', role: req.role || 'member' },
+    detail
+  })
 }
 
 /**
@@ -224,6 +231,14 @@ export async function writeAgentLog(input: {
         sensitive: isSensitiveAction(input.action)
       })
     )
+    // 触发 Webhook 通知（fire-and-forget）
+    dispatchWebhook(input.action, {
+      teamId,
+      actor: input.actor
+        ? { uid: input.actor.userId, username: input.actor.username, role: 'ai-agent' }
+        : null,
+      detail: input.detail
+    })
   } catch (e) {
     console.error('[agent-log] 写入失败:', e instanceof Error ? e.message : e)
   }
@@ -387,7 +402,10 @@ async function checkProxy(
 export async function getSettings(): Promise<AppSettings> {
   const repo = AppDataSource.getRepository(AppSettingsEntity)
   const row = await repo.findOne({ where: { key: 'global' } })
-  return { ...DEFAULT_SETTINGS, ...((row?.settings as Partial<AppSettings>) || {}) }
+  const settings = { ...DEFAULT_SETTINGS, ...((row?.settings as Partial<AppSettings>) || {}) }
+  // 每次读取设置都刷新 webhook 内存缓存（启动 / PUT /settings 后自动生效，无需单独查库）
+  setCachedWebhooks(Array.isArray(settings.webhooks) ? settings.webhooks : [])
+  return settings
 }
 
 // 代理定时巡检调度器
@@ -520,6 +538,12 @@ async function saveSchedulerLog(teamId: number, userId: number | null, action: s
   try {
     const repo = AppDataSource.getRepository(OperationLogEntity)
     await repo.save(repo.create({ teamId, userId: userId ?? 0, username: 'scheduler', action, detail }))
+    // 触发 Webhook 通知（fire-and-forget）
+    dispatchWebhook(action, {
+      teamId,
+      actor: userId ? { uid: userId, username: 'scheduler', role: 'member' } : null,
+      detail
+    })
   } catch {
     /* 日志失败不影响调度 */
   }
@@ -2150,9 +2174,23 @@ function buildApiRouter(): express.Router {
     if (!row) row = repo.create({ key: 'global', settings: merged })
     else row.settings = merged
     await repo.save(row)
+    // 设置变更后刷新 webhook 内存缓存（避免每次事件查库）
+    setCachedWebhooks(Array.isArray(merged.webhooks) ? (merged.webhooks as WebhookConfig[]) : [])
     // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
     startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
     res.json({ ok: true, settings: merged })
+  })
+
+  // Webhook 发送测试：用前端传入的配置单发一次，返回投递结果（不写入持久化）
+  router.post('/webhooks/test', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const wh = (req.body && (req.body as { webhook?: WebhookConfig }).webhook) || null
+    if (!wh || !wh.url) {
+      res.status(400).json({ message: '缺少 webhook 配置或 url' })
+      return
+    }
+    // 测试时不强制要求 enabled（便于在未启用状态下验证地址/密钥）
+    const result = await testWebhook(wh)
+    res.json({ ok: result.ok, status: result.status, error: result.error })
   })
 
   // ===== AI Agent：连通性探针（本地 Ollama 或 云端 BYOK）=====

@@ -363,6 +363,43 @@ export interface AiAutoTask {
   maxSteps: number
 }
 
+// ===== Webhook 通知 =====
+// 单条 Webhook 订阅配置（持久化在 AppSettings.webhooks 里）
+export interface WebhookConfig {
+  /** 唯一 ID（uuid） */
+  id: string
+  /** 展示名 */
+  name: string
+  /** 接收地址 */
+  url: string
+  /** HMAC-SHA256 签名密钥；为空表示不签名 */
+  secret: string
+  /** 是否启用 */
+  enabled: boolean
+  /**
+   * 订阅的事件列表（对应操作日志的 action 字符串）：
+   * - 含 '*' 或为空数组 = 全部事件
+   * - 精确字符串 = 仅该事件（如 'create_profile'）
+   * - 'prefix_*' 形式 = 前缀匹配（如 'profile_*' 匹配 create_profile / open_profile ...，'batch_*' 匹配批量操作）
+   */
+  events: string[]
+}
+
+// Webhook 事件分组（设置页多选 UI 的预设；引擎只做字符串匹配，分组纯属展示用）。
+// 每个分组的 events 是「关键词」：事件名按 _ 分词后包含该关键词即命中——
+// 这样能自然适配「动词在前」的操作日志命名（create_profile / open_profile / batch_delete_profile 都含 profile 段）。
+export type WebhookGroupKey = 'profile' | 'proxy' | 'team' | 'account' | 'cookie' | 'rpa' | 'agent' | 'auth'
+export const WEBHOOK_EVENT_GROUPS: { key: WebhookGroupKey; events: string[] }[] = [
+  { key: 'profile', events: ['profile', 'template'] },
+  { key: 'proxy', events: ['proxy'] },
+  { key: 'team', events: ['team', 'member', 'token'] },
+  { key: 'account', events: ['account'] },
+  { key: 'cookie', events: ['cookie'] },
+  { key: 'rpa', events: ['rpa'] },
+  { key: 'agent', events: ['agent'] },
+  { key: 'auth', events: ['login', '2fa'] }
+]
+
 // 全局设置（设置页持久化到 app_settings 表）
 export interface AppSettings {
   // 新建环境随机指纹时的默认操作系统
@@ -408,6 +445,8 @@ export interface AppSettings {
   snapshotBackupIntervalH: number
   // AI 定时自动化任务列表（自然语言指令 + 定时触发 agent 闭环 + 跑完沉淀 RPA 模板）
   aiAutoTasks: AiAutoTask[]
+  // Webhook 通知订阅列表（操作日志事件触发外发 POST）
+  webhooks: WebhookConfig[]
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -446,7 +485,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   snapshotBackupEnabled: false,
   snapshotBackupDir: '',
   snapshotBackupIntervalH: 24,
-  aiAutoTasks: []
+  aiAutoTasks: [],
+  webhooks: []
 }
 
 // ===== 自动更新（electron-updater）状态推送 =====
