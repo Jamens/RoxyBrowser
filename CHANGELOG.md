@@ -44,6 +44,18 @@
   - 离线单测：编译为 CJS 后用 mock fetch 对拍签名 / 事件匹配 / 投递 / fire-and-forget（26 项全绿，已用独立 HMAC 参考实现交叉验证）。
   - 提交：`9128a2d`（feat + 离线单测）。
 
+## 2026-09-15 · 操作日志导出（CSV / JSON）
+
+### 新增
+
+- **操作日志导出**：操作日志页一键把当前筛选结果导出为 CSV / JSON，便于审计留存。
+  - 后端：`GET /api/logs/export?format=csv|json`（需登录），仅导出当前团队；复用列表关键词筛选，并支持 `sensitive=1` / `action` / `from` / `to` 过滤。CSV 带 UTF-8 BOM、`createdAt` 输出 ISO UTC、字段自动转义。
+  - 纯函数 `src/main/logExport.ts`：`escapeCsvField` / `logsToCsv` / `logsToJson` / `exportStamp`（无 express 依赖，可单测）。
+  - 导出本身写入操作日志（`export_logs`，敏感操作），形成审计闭环。
+  - 前端：`Logs.tsx` 工具栏「导出」下拉（CSV / JSON），`fetch` 带 Bearer 头取回文件后本地下载（令牌不进 URL）；四语 i18n（`logs.export` / `logs.exportCsv` / `logs.exportJson` / `logs.exported` / `logs.exportFailed`）。
+  - 离线单测：`logsToCsv` 转义 / BOM / 字段顺序 / 多行字段 / JSON 往返（19 项全绿）。
+  - 提交：`dd807db`（feat + 离线单测 + 文档）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

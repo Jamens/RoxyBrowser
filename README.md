@@ -114,6 +114,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器
 - **登录二次验证（2FA / TOTP）**：登录除密码外还需验证器动态码；设置页扫码启用 / 关闭，TOTP 用 Node 内置 crypto 实现（无外部依赖）
 - **Webhook 通知**：把操作日志事件（创建/打开环境、增删代理、团队变更、AI Agent 执行等）实时推送到你自己的服务，用于自动化与审计；HMAC-SHA256 签名校验来源、设置页「发送测试」即时验证、按事件分类订阅（含「全部事件」），详见下节
+- **操作日志导出**：操作日志页一键把当前筛选结果导出为 CSV / JSON，便于审计留存；导出本身记入操作日志（属敏感操作），四语支持，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -192,6 +193,15 @@ app.post('/roxy-webhook', (req, res) => {
 app.listen(4000)
 ```
 
+### 操作日志导出（CSV / JSON）
+
+操作日志页把当前筛选结果（关键词 / 只看敏感）一键导出为 CSV 或 JSON 文件，便于审计留存与离线分析。
+
+- **后端**：`GET /api/logs/export?format=csv|json`（需登录），仅导出当前团队数据，复用与列表一致的关键词筛选，并额外支持 `sensitive=1` / `action` / `from` / `to` 过滤。CSV 带 UTF-8 BOM（Excel 直接打开中文不乱码），字段为 `id, createdAt, teamId, userId, username, action, detail, sensitive`，`createdAt` 输出 ISO UTC（审计溯源 unambiguous），字段含逗号 / 引号 / 换行时自动转义加引号。
+- **导出即审计**：导出动作本身写入操作日志（`export_logs`，属敏感操作），保证「谁导出了日志」也有据可查。
+- **前端**：`Logs.tsx` 工具栏「导出」下拉（CSV / JSON），带 Bearer 头取回文件后本地下载（令牌不进 URL），文件名取自响应头 `Content-Disposition`。
+- **纯函数可单测**：CSV 拼装抽为 `src/main/logExport.ts`（与 `webhook.ts` 同构，无 express 依赖），离线单测覆盖转义 / BOM / 字段顺序 / JSON 往返（19 项全绿）。
+
 ## 目录结构
 
 ```
@@ -200,6 +210,7 @@ src/
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
 │   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
+│   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
 │   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发

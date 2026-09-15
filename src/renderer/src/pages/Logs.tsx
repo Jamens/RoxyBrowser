@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Table, Input, Tag, Typography, Space, Switch } from 'antd'
-import { SearchOutlined } from '@ant-design/icons'
+import { Card, Table, Input, Tag, Typography, Space, Switch, Dropdown, Button, message } from 'antd'
+import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { api } from '../api'
+import { api, getToken, API_BASE } from '../api'
 import type { LogDTO } from '@shared/types'
 import { countryTimezone } from '@shared/countries'
 import { formatDateTimeInZone } from '@shared/timezone'
+import { downloadText, nowStamp } from '../utils/download'
+import { useI18n } from '../i18n'
 
 const ACTION_COLORS: Record<string, string> = {
   create_profile: 'green',
@@ -45,9 +47,55 @@ const ACTION_LABELS: Record<string, string> = {
 }
 
 export default function Logs() {
+  const { t } = useI18n()
   const [list, setList] = useState<LogDTO[]>([])
   const [keyword, setKeyword] = useState('')
   const [onlySensitive, setOnlySensitive] = useState(false)
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
+
+  // 导出当前筛选条件下的操作日志（CSV / JSON）。带 Bearer 头取回文件文本后本地下载，
+  // 避免把令牌拼进 URL（防泄漏），文件名取自响应头的 Content-Disposition。
+  const exportLogs = useCallback(
+    async (format: 'csv' | 'json') => {
+      try {
+        setExporting(format)
+        const params = new URLSearchParams()
+        params.set('format', format)
+        if (keyword) params.set('keyword', keyword)
+        if (onlySensitive) params.set('sensitive', '1')
+        const res = await fetch(`${API_BASE}/api/logs/export?${params.toString()}`, {
+          headers: { Authorization: `Bearer ${getToken()}` }
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          throw new Error((data as { message?: string }).message || `导出失败 (${res.status})`)
+        }
+        const text = await res.text()
+        const cd = res.headers.get('Content-Disposition') || ''
+        const m = cd.match(/filename="?([^";]+)"?/)
+        const filename = m?.[1] || `operation-logs-${nowStamp()}.${format}`
+        const mime = format === 'json' ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8'
+        downloadText(text, filename, mime)
+        message.success(t('logs.exported'))
+      } catch (e) {
+        message.error((e as Error).message || t('logs.exportFailed'))
+      } finally {
+        setExporting(null)
+      }
+    },
+    [keyword, onlySensitive]
+  )
+
+  const exportMenu = useMemo(
+    () => ({
+      items: [
+        { key: 'csv', label: t('logs.exportCsv') },
+        { key: 'json', label: t('logs.exportJson') }
+      ],
+      onClick: ({ key }: { key: string }) => void exportLogs(key as 'csv' | 'json')
+    }),
+    [exportLogs]
+  )
 
   const shown = useMemo(
     () => (onlySensitive ? list.filter((l) => l.sensitive) : list),
@@ -120,6 +168,11 @@ export default function Logs() {
           <Switch checked={onlySensitive} onChange={setOnlySensitive} />
           <Typography.Text>只看敏感操作</Typography.Text>
         </Space>
+        <Dropdown menu={exportMenu} disabled={exporting !== null}>
+          <Button icon={<DownloadOutlined />} loading={exporting !== null}>
+            {t('logs.export')}
+          </Button>
+        </Dropdown>
       </Space>
       <Table rowKey="id" size="middle" columns={columns} dataSource={shown} pagination={{ pageSize: 15 }} />
     </Card>

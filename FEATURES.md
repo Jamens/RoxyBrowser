@@ -328,6 +328,17 @@ app.post('/roxy-webhook', (req, res) => {
 app.listen(4000)
 ```
 
+### 7.6 操作日志导出（CSV / JSON）
+
+操作日志页把当前筛选结果（关键词 / 只看敏感）一键导出为 CSV 或 JSON 文件，便于审计留存与离线分析。
+
+- **接口**：`GET /api/logs/export?format=csv|json`（需登录），仅导出当前团队数据。复用与列表一致的关键词筛选，并额外支持 `sensitive=1`（只看敏感）、`action`（精确动作）、`from` / `to`（按 `createdAt` 的时间区间）过滤。
+- **CSV 细节**：带 UTF-8 BOM（`\uFEFF`），字段顺序 `id, createdAt, teamId, userId, username, action, detail, sensitive`；`createdAt` 输出 ISO UTC（审计溯源 unambiguous）；字段含逗号 / 引号 / 换行时整体加双引号、内部引号翻倍（`escapeCsvField`）；`sensitive` 输出 `0` / `1`。
+- **JSON 细节**：直接返回 `OperationLogEntity[]` 数组（缩进 2），`createdAt` 同样为 ISO UTC。
+- **导出即审计**：导出动作本身写入操作日志（`action = export_logs`，因命中敏感词 `export` 自动标记敏感），保证「谁导出了日志」也有据可查；该写日志动作不会递归触发新的导出。
+- **前端**：`src/renderer/src/pages/Logs.tsx` 工具栏「导出」下拉（CSV / JSON），用 `fetch` 带 `Authorization: Bearer` 头取回文件文本，再用 `downloadText` 本地下载（令牌不拼进 URL，防泄漏）；文件名取自响应头 `Content-Disposition`。
+- **纯函数可单测**：CSV 拼装抽为 `src/main/logExport.ts`（与 `webhook.ts` 同构，无 express 依赖），导出 `escapeCsvField` / `logsToCsv` / `logsToJson` / `exportStamp`；离线单测覆盖转义 / BOM / 字段顺序 / 多行字段 / JSON 往返（19 项全绿）。
+
 ### 8. 操作日志
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。
