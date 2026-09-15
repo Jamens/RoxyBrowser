@@ -339,7 +339,20 @@ app.listen(4000)
 - **前端**：`src/renderer/src/pages/Logs.tsx` 工具栏「导出」下拉（CSV / JSON），用 `fetch` 带 `Authorization: Bearer` 头取回文件文本，再用 `downloadText` 本地下载（令牌不拼进 URL，防泄漏）；文件名取自响应头 `Content-Disposition`。
 - **纯函数可单测**：CSV 拼装抽为 `src/main/logExport.ts`（与 `webhook.ts` 同构，无 express 依赖），导出 `escapeCsvField` / `logsToCsv` / `logsToJson` / `exportStamp`；离线单测覆盖转义 / BOM / 字段顺序 / 多行字段 / JSON 往返（19 项全绿）。
 
+### 7.7 团队切换器（多团队工作区切换）
+
+一个登录账号可属于多个团队（`team_members` 表）。登录时下发的会话令牌写入「当前团队 `tid`」，全部业务数据按 `tid` 隔离。团队切换器让你不退出登录就能换工作区。
+
+- **列表接口**：`GET /api/auth/teams`（需登录）查 `team_members` 中 `userId = 当前用户` 的全部成员关系，补出团队名，返回 `[{ id, name, role, isCurrent }]`（`isCurrent = id === req.tid`）。
+- **切换接口**：`POST /api/auth/switch-team`（需登录，body `{ teamId }`）——先校验 `team_members` 中存在 `{ userId, teamId }`，否则 403；用该成员的**实时角色** `jwt.sign({ uid, tid: teamId, username, role: member.role }, 7d)` 重发令牌（不重新验 2FA，沿用已通过登录态）。
+- **切换前置清理**：切换前 `await import('./browserManager')` 取 `getRunningWindowIds()` 并逐个 `closeWindow`，关掉旧团队运行中的环境窗口（动态 import 与既有路由一致，避免与 `browserManager` 循环依赖）；否则切换后这些窗口的请求会因 `teamId` 不匹配而 404/403。
+- **审计**：切换写一条 `OperationLogEntity`（action = `switch_team`，记在**新团队** `tid` 下，`detail = 切换到团队「{name}」`），保证「谁在何时切到哪个团队」有迹可循。
+- **前端**：`src/renderer/src/pages/Layout.tsx` 顶栏团队切换下拉——挂载时拉 `/auth/teams`，显示当前团队名；选中其他团队调 `/auth/switch-team` → `setToken(newToken)` → `window.location.reload()`，刷新后所有列表按新 `tid` 重新归属。仅 1 个团队时下拉只显示当前团队、不可选。
+- **角色实时性**：新角色直接读 `team_members.role`（DB 实时），不取自旧 JWT，规避「改了成员角色却要重新登录才生效」的旧问题（与 `freshRole` 思路一致）。
+- **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron + MySQL 多团队成员切换 + 窗口关闭）本沙箱未跑，沿用「用户自测」惯例。
+
 ### 8. 操作日志
+
 
 所有关键操作（创建 / 修改 / 删除 / 打开环境、代理、成员、令牌）记录**操作人 + 时间 + 详情**，便于责任追溯。
 

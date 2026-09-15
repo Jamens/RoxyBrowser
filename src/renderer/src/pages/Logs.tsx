@@ -43,7 +43,8 @@ const ACTION_LABELS: Record<string, string> = {
   clone_template: '套用模板',
   agent_start: 'AI 执行开始',
   agent_done: 'AI 执行完成',
-  agent_failed: 'AI 执行失败'
+  agent_failed: 'AI 执行失败',
+  switch_team: '切换团队'
 }
 
 export default function Logs() {

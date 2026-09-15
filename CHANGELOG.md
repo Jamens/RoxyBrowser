@@ -56,6 +56,18 @@
   - 离线单测：`logsToCsv` 转义 / BOM / 字段顺序 / 多行字段 / JSON 往返（19 项全绿）。
   - 提交：`dd807db`（feat + 离线单测 + 文档）。
 
+## 2026-09-15 · 团队切换器（多团队工作区切换）
+
+### 新增
+
+- **团队切换器**：顶栏一键在「我所属团队」间切换工作区，无需退出登录。
+  - 后端：`GET /api/auth/teams`（需登录）返回成员关系列表 `[{ id, name, role, isCurrent }]`；`POST /api/auth/switch-team`（需登录，body `{ teamId }`）校验成员关系后，用该团队**实时角色** `jwt.sign({ uid, tid: teamId, username, role }, 7d)` 重发令牌。
+  - 切换前关闭所有运行中的环境窗口（`await import('./browserManager')` → `getRunningWindowIds()` + `closeWindow`，动态 import 避免循环依赖），避免旧团队窗口请求因 `teamId` 不匹配报错；并写审计日志 `switch_team`（记在新团队下）。
+  - 安全：重发令牌沿用已通过登录态（含 2FA），不重新验码；新角色读 `team_members` 表实时值，不取自旧 JWT。
+  - 前端：`Layout.tsx` 顶栏团队切换下拉，选中即 `setToken` + 整页 `reload`，刷新后数据按新 `tid` 重新归属；仅 1 团队时下拉只显示当前团队。
+  - 四语 i18n（`team.switch` / `team.current` / `team.switched` / `team.switchedShort` / `team.switchFailed`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `switch_team`。
+  - 提交：`33e94c9`（feat + 文档）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

@@ -16,15 +16,19 @@ import {
   AppstoreAddOutlined,
   VideoCameraOutlined,
   DashboardOutlined,
-  RobotOutlined
+  RobotOutlined,
+  DownOutlined,
+  SwapOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { api, getToken, clearToken } from '../api'
+import { api, getToken, clearToken, setToken } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
 import SystemStats from '../components/SystemStats'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { useIsDark } from '../theme'
 import { useI18n, type TranslateFn } from '../i18n'
+
+type TeamItem = { id: number; name: string; role: string; isCurrent: boolean }
 
 const { Sider, Header, Content } = Layout
 
@@ -50,9 +54,18 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)
+  const [teams, setTeams] = useState<TeamItem[]>([])
+  const [switching, setSwitching] = useState(false)
   const { token } = theme.useToken()
   const isDark = useIsDark()
   const { t } = useI18n()
+
+  const loadTeams = () => {
+    api
+      .get<TeamItem[]>('/api/auth/teams')
+      .then(setTeams)
+      .catch(() => setTeams([]))
+  }
 
   useEffect(() => {
     if (!getToken()) {
@@ -66,7 +79,24 @@ export default function AppLayout() {
         clearToken()
         navigate('/login')
       })
+    loadTeams()
   }, [navigate])
+
+  // 切换团队：后端校验成员关系后用新 teamId 重发令牌，并关闭旧团队运行中的环境窗口。
+  // 这里只负责换本地令牌 + 整页 reload，reload 后所有数据自然归属新团队。
+  const switchTeam = async (teamId: number) => {
+    try {
+      setSwitching(true)
+      const res = await api.post<{ token: string }>('/api/auth/switch-team', { teamId })
+      setToken(res.token)
+      const next = teams.find((x) => x.id === teamId)
+      message.success(next ? t('team.switched', { name: next.name }) : t('team.switchedShort'))
+      window.location.reload()
+    } catch (e) {
+      message.error((e as Error).message || t('team.switchFailed'))
+      setSwitching(false)
+    }
+  }
 
   const logout = () => {
     clearToken()
@@ -108,6 +138,26 @@ export default function AppLayout() {
         >
           <SystemStats isDark={isDark} />
           <ThemeSwitch />
+          {teams.length > 0 && (
+            <Dropdown
+              trigger={['click']}
+              disabled={switching}
+              menu={{
+                items: teams.map((tm) => ({
+                  key: String(tm.id),
+                  label: tm.isCurrent ? `${tm.name}（${t('team.current')}）` : tm.name,
+                  disabled: tm.isCurrent,
+                  onClick: () => void switchTeam(tm.id)
+                }))
+              }}
+            >
+              <Space style={{ cursor: 'pointer', padding: '0 8px' }}>
+                <SwapOutlined />
+                <Typography.Text>{teams.find((x) => x.isCurrent)?.name || t('team.switch')}</Typography.Text>
+                <DownOutlined style={{ fontSize: 10 }} />
+              </Space>
+            </Dropdown>
+          )}
           <Dropdown
             menu={{
               items: [

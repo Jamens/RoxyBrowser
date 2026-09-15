@@ -900,6 +900,64 @@ function buildApiRouter(): express.Router {
     })
   })
 
+  // 列出当前登录用户所属的全部团队（成员关系），并标注哪个是当前团队。
+  // 当前团队上下文来自登录时下发的 JWT（req.tid），切换团队需走 /auth/switch-team 重发令牌。
+  router.get('/auth/teams', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
+    const members = await memberRepo.find({ where: { userId: req.uid } })
+    const teamRepo = AppDataSource.getRepository(TeamEntity)
+    const teams = await teamRepo.find({ where: { id: In(members.map((m) => m.teamId)) } })
+    const nameById = new Map(teams.map((t) => [t.id, t.name]))
+    res.json(
+      members.map((m) => ({
+        id: m.teamId,
+        name: nameById.get(m.teamId) || `团队 ${m.teamId}`,
+        role: m.role,
+        isCurrent: m.teamId === req.tid
+      }))
+    )
+  })
+
+  // 切换当前工作团队：校验用户确为该团队成员，用其在该团队的实时角色重发会话令牌（tid 变更）。
+  // 切换前关闭所有运行中的环境窗口（它们属于旧团队，若不关，切换后其请求会因 teamId 不匹配而报错），
+  // 并写一条审计日志（switch_team）记在新团队下。前端拿到新令牌后整页 reload，所有数据自然重新归属新团队。
+  router.post('/auth/switch-team', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const teamId = Number((req.body || {}).teamId)
+    if (!teamId) return res.status(400).json({ message: '缺少 teamId' })
+    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
+    const member = await memberRepo.findOne({ where: { userId: req.uid, teamId } })
+    if (!member) return res.status(403).json({ message: '你不是该团队成员，无法切换' })
+    const teamRepo = AppDataSource.getRepository(TeamEntity)
+    const team = await teamRepo.findOne({ where: { id: teamId } })
+    // 关闭旧团队运行中的环境窗口（动态 import 避免与 browserManager 循环依赖，与其它路由一致）
+    try {
+      const bm = await import('./browserManager')
+      for (const id of bm.getRunningWindowIds()) {
+        try {
+          await bm.closeWindow(id)
+        } catch {
+          /* 忽略单个窗口关闭失败 */
+        }
+      }
+    } catch {
+      /* browserManager 未就绪时跳过 */
+    }
+    const token = jwt.sign(
+      { uid: req.uid, tid: teamId, username: req.username, role: member.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    )
+    await AppDataSource.getRepository(OperationLogEntity).save({
+      teamId,
+      userId: req.uid,
+      username: req.username || 'api',
+      action: 'switch_team',
+      detail: `切换到团队「${team?.name || teamId}」`,
+      sensitive: isSensitiveAction('switch_team')
+    })
+    res.json({ token, user: { id: req.uid, username: req.username, nickname: req.username, role: member.role } })
+  })
+
   // ===== 登录二次验证（TOTP）=====
   // 生成密钥 + 二维码（pending：写入 secret 但暂不启用，待 confirm 通过再置 enabled）
   router.post('/auth/2fa/setup', authMiddleware, async (req: AuthedRequest, res: Response) => {
