@@ -100,7 +100,7 @@
   - 开关：`Fingerprint.blockTrackers`，新建环境默认开启；预设确定开启、克隆继承母本；`normalizeFingerprint` 对老数据兜底。上线前创建的环境默认不拦截，表单开启后生效。
   - 前端：`ProfileForm.tsx` 高级设置加「追踪器屏蔽」Switch（说明用 tooltip 避免撑高同排项）。
   - 验证：离线单测 98 项全绿（68 项判定 + 30 项指纹联动）；node / web 双 `tsc --noEmit` EXIT 0；build EXIT 0。
-  - 提交：`__PENDING__`（feat + 文档）。
+  - 提交：`4bf8bb1`（feat）+ `docs: CHANGELOG` 同功能文档提交。
 
 ## 2026-09-16 · 自动化 API 审计留痕（令牌操作进操作日志）
 
