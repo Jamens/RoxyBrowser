@@ -101,7 +101,7 @@
   - 稳定性：三张 slide 绝对定位堆叠（容器高度恒定），文案区保底高度 110px——中/英/德三语行数差异大，不设保底会让切换时下方指示点抖动。
   - 窄屏（≤900px）左侧整体 `display: none`，轮播不影响移动端布局。
   - 验证：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
-  - 提交：`__PENDING__`（ui + 文档）。
+  - 提交：`302e312`（ui）+ `docs: CHANGELOG` 同功能文档提交。
 
 ## 2026-09-16 · 追踪器屏蔽（隐身增强）
 
