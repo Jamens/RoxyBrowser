@@ -111,7 +111,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **AI Agent**：本地 Ollama（默认，零 token）+ 云端 BYOK 可选，支持「看屏 → 决策 → 操作」执行闭环
 - **AI 定时自动化**：自然语言指令 + 定时触发 AI Agent 在运行态环境自动执行，跑完把动作序列沉淀为 RPA 模板（下次离线零 token 回放），详见下节
 - **团队协作 / 账号中心 / Cookie / 扩展**：成员角色控权、账号批量导入、Cookie 按环境隔离与批量导入、按环境加载 Chrome 扩展
-- **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器
+- **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器；**令牌的写操作统一落操作日志**（操作人记为 `api:<令牌名>`，删除 / 导入 / 导出自动标敏感），审计不留盲区
 - **登录二次验证（2FA / TOTP）**：登录除密码外还需验证器动态码；设置页扫码启用 / 关闭，TOTP 用 Node 内置 crypto 实现（无外部依赖）
 - **Webhook 通知**：把操作日志事件（创建/打开环境、增删代理、团队变更、AI Agent 执行等）实时推送到你自己的服务，用于自动化与审计；HMAC-SHA256 签名校验来源、设置页「发送测试」即时验证、按事件分类订阅（含「全部事件」），详见下节
 - **操作日志导出**：操作日志页一键把当前筛选结果导出为 CSV / JSON，便于审计留存；导出本身记入操作日志（属敏感操作），四语支持，详见下节
@@ -247,6 +247,7 @@ src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
 │   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
+│   ├── apiAudit.ts           # 自动化 API 审计：method+path → action / detail 推导（纯函数，可单测）
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
 │   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）

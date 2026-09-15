@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import { logsToCsv, logsToJson, exportStamp } from './logExport'
+import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
 import { HttpProxyAgent } from 'http-proxy-agent'
@@ -121,7 +122,18 @@ async function freshRole(req: AuthedRequest): Promise<string> {
 }
 
 // ---------- 工具 ----------
-type AuthedRequest = Request & { uid?: number; tid?: number; username?: string; role?: string }
+type AuthedRequest = Request & {
+  uid?: number
+  tid?: number
+  username?: string
+  role?: string
+  /**
+   * API 令牌身份（v1 的 tokenAuthMiddleware 注入）。
+   * 令牌调用没有登录态、拿不到 uid，但审计必须能追溯「哪个令牌、谁创建的」，
+   * 否则令牌能建环境 / 删数据 / 导出 Cookie 却零留痕，形成审计盲区。
+   */
+  apiToken?: { id: number; name: string; ownerId: number }
+}
 
 function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization || ''
@@ -150,8 +162,11 @@ function tokenAuthMiddleware(req: Request, res: Response, next: NextFunction) {
     .findOne({ where: { token } })
     .then((t) => {
       if (!t) return res.status(401).json({ code: 401, message: 'invalid api token' })
-      ;(req as AuthedRequest).tid = t.teamId
-      ;(req as AuthedRequest).role = 'api'
+      const r = req as AuthedRequest
+      r.tid = t.teamId
+      r.role = 'api'
+      // 记录令牌身份，供审计日志追溯（ownerId 即创建该令牌的用户）
+      r.apiToken = { id: t.id, name: t.name, ownerId: t.ownerId ?? 0 }
       next()
     })
     .catch(() => res.status(500).json({ code: 500, message: 'db error' }))
@@ -183,13 +198,19 @@ function isSensitiveAction(action: string): boolean {
 }
 
 async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
-  if (!req.tid || !req.uid) return
+  // API 令牌调用没有登录态、拿不到 uid；原先 `!req.uid` 直接 return 会让令牌操作
+  // 完全不留痕——而令牌能建环境 / 删数据 / 导出 Cookie，这是实打实的审计盲区。
+  // 改为：有 tid 且（有 uid 或有令牌身份）即记；userId 取令牌创建者（取不到记 0），
+  // username 记为 `api:<令牌名>`，界面上一眼能区分是人操作还是脚本操作。
+  const api = req.apiToken
+  if (!req.tid || (!req.uid && !api)) return
+  const actorName = api ? `api:${api.name}` : req.username || 'api'
   const repo = AppDataSource.getRepository(OperationLogEntity)
   await repo.save(
     repo.create({
       teamId: req.tid,
-      userId: req.uid,
-      username: req.username || 'api',
+      userId: req.uid ?? api?.ownerId ?? 0,
+      username: actorName,
       action,
       detail: typeof detail === 'string' ? detail : JSON.stringify(detail),
       sensitive: isSensitiveAction(action)
@@ -198,7 +219,7 @@ async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
   // 触发 Webhook 通知（fire-and-forget，绝不阻塞主流程）
   dispatchWebhook(action, {
     teamId: req.tid,
-    actor: { uid: req.uid, username: req.username || 'api', role: req.role || 'member' },
+    actor: { uid: req.uid ?? 0, username: actorName, role: req.role || 'member' },
     detail
   })
 }
@@ -2477,6 +2498,21 @@ function buildApiRouter(): express.Router {
   // ===== 自动化 API (v1，令牌鉴权，供脚本调用) =====
   const v1 = express.Router()
   v1.use(tokenAuthMiddleware)
+
+  // ===== v1 审计：令牌调用统一留痕 =====
+  // 令牌能创建 / 删除环境、导出 Cookie、跑 RPA，若完全不落日志就无法追溯
+  // 「谁在何时用哪个令牌做了什么」——这是实打实的审计盲区。
+  // 用中间件统一兜底而不是逐个路由手写 writeLog：既省事，也杜绝以后新增 v1 接口漏记。
+  // 推导逻辑抽到 `apiAudit.ts` 纯函数模块（与 webhook.ts / logExport.ts 同构），可离线单测。
+  v1.use((req, res, next) => {
+    res.on('finish', () => {
+      if (!apiShouldAudit(req.method, req.path)) return
+      const action = apiActionName(req.method, req.path)
+      if (!action) return
+      void writeLog(req as AuthedRequest, action, apiAuditDetail(req.method, req.path, req.body))
+    })
+    next()
+  })
 
   v1.get('/profiles', async (req: Request, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)

@@ -24,7 +24,29 @@ const ACTION_COLORS: Record<string, string> = {
   clone_template: 'geekblue',
   agent_start: 'purple',
   agent_done: 'green',
-  agent_failed: 'red'
+  agent_failed: 'red',
+  // 自动化 API（v1）令牌调用：由 v1 审计中间件统一记录
+  api_create_profile: 'green',
+  api_update_profile: 'blue',
+  api_delete_profile: 'red',
+  api_open_profile: 'cyan',
+  api_close_profile: 'default',
+  api_create_proxy: 'green',
+  api_update_proxy: 'blue',
+  api_delete_proxy: 'red',
+  api_allocate_proxy: 'geekblue',
+  api_check_proxy: 'default',
+  api_create_account: 'green',
+  api_update_account: 'blue',
+  api_delete_account: 'red',
+  api_create_cookie: 'green',
+  api_update_cookie: 'blue',
+  api_delete_cookie: 'red',
+  api_import_cookie: 'orange',
+  api_export_cookie: 'orange',
+  api_apply_cookie: 'default',
+  api_run_rpa: 'purple',
+  api_random_fingerprint: 'default'
 }
 const ACTION_LABELS: Record<string, string> = {
   create_profile: '创建环境',
@@ -46,7 +68,29 @@ const ACTION_LABELS: Record<string, string> = {
   agent_failed: 'AI 执行失败',
   switch_team: '切换团队',
   transfer_profile: '转移环境',
-  screenshot_profile: '环境截图'
+  screenshot_profile: '环境截图',
+  // 自动化 API（v1）令牌调用；操作人显示为 api:<令牌名>
+  api_create_profile: 'API 创建环境',
+  api_update_profile: 'API 修改环境',
+  api_delete_profile: 'API 删除环境',
+  api_open_profile: 'API 打开环境',
+  api_close_profile: 'API 关闭环境',
+  api_create_proxy: 'API 添加代理',
+  api_update_proxy: 'API 修改代理',
+  api_delete_proxy: 'API 删除代理',
+  api_allocate_proxy: 'API 分配代理',
+  api_check_proxy: 'API 检测代理',
+  api_create_account: 'API 添加账号',
+  api_update_account: 'API 修改账号',
+  api_delete_account: 'API 删除账号',
+  api_create_cookie: 'API 新增 Cookie',
+  api_update_cookie: 'API 修改 Cookie',
+  api_delete_cookie: 'API 删除 Cookie',
+  api_import_cookie: 'API 导入 Cookie',
+  api_export_cookie: 'API 导出 Cookie',
+  api_apply_cookie: 'API 应用 Cookie',
+  api_run_rpa: 'API 运行 RPA',
+  api_random_fingerprint: 'API 生成指纹'
 }
 
 export default function Logs() {

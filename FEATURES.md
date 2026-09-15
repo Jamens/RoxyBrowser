@@ -417,6 +417,19 @@ curl http://127.0.0.1:39100/api/v1/proxies  -H "Authorization: Bearer <令牌>"
 
 成功响应统一为 `{ "code": 0, "data": ... }`；失败为 `{ "code": <HTTP 状态码>, "message": "..." }` 且带对应 HTTP 状态码。
 
+#### 审计留痕（v1 令牌操作同样进操作日志）
+
+令牌能创建 / 删除环境、导入导出 Cookie、跑 RPA，若不落日志就完全无法追溯「谁在何时用哪个令牌做了什么」——这是实打实的审计盲区（改造前 `writeLog` 有 `if (!req.uid) return` 守卫，而令牌鉴权不设 uid，导致 v1 的写操作**零留痕**）。
+
+- **统一中间件兜底**：`v1` 在 `tokenAuthMiddleware` 之后挂一个审计中间件，**响应完成后**（`res.on('finish')`）按 `method + path` 推导 action 并落一条操作日志。用中间件而非逐个路由手写 `writeLog`，杜绝以后新增 v1 接口漏记。
+- **推导逻辑抽成纯函数**：`src/main/apiAudit.ts`（与 `webhook.ts` / `logExport.ts` 同构、可离线单测）导出 `apiActionName` / `apiShouldAudit` / `apiAuditDetail`。末段命中动作词优先（`/profiles/1/open` → `api_open_profile`，语义是开窗而非创建），其余按 HTTP 方法推导（POST→create / PUT→update / DELETE→delete）。
+- **只读不记、导出必记**：GET 属于查询，不记（避免日志被列表轮询刷屏）；但 `/cookies/export` 虽是 GET，属数据外泄，单独放行记录。
+- **敏感自动继承**：action 走既有的 `isSensitiveAction()` 子串匹配，因此 `api_delete_profile` / `api_export_cookie` / `api_import_cookie` 自动标记敏感，与界面上的删除 / 导出同等对待。
+- **操作人可区分**：令牌没有登录态 `uid`，日志里 `userId` 记令牌创建者（`ApiTokenEntity.ownerId`，取不到记 0），`username` 记为 `api:<令牌名>`——界面上一眼能分辨是人操作还是脚本调用。为此 `writeLog` 的守卫从「必须有 uid」放宽为「有 uid **或**有令牌身份」，并把令牌身份（id / name / ownerId）挂到 `AuthedRequest.apiToken`。
+- **detail 不泄密**：只记录「方法 + 路径 + 资源 id + 名称」，绝不写入 token / password / Cookie value 等凭据字段（审计日志本身会被团队成员看到）。
+- **前端**：`Logs.tsx` 的 `ACTION_LABELS` / `ACTION_COLORS` 补 `api_*` 一整套中文标签与配色（21 项）。
+- **验证**：离线单测 **49 项全绿**（`tsc` 转 CJS 后 `.tmp/test_apiaudit.cjs` 对拍：五类资源 action 推导 / 只读与导出的留痕判定 / detail 格式与凭据不泄露 / 与敏感关键词联动 / 空路径与异常 body 兜底）。
+
 #### 写入类接口（供脚本调度）
 
 **环境（Profile）**

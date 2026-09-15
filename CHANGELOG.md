@@ -89,6 +89,21 @@
   - 四语 i18n（`env.screenshot` / `env.screenshotTitle` / `env.screenshotNotRunning` / `env.screenshotDownload` / `env.screenshotCapturing` / `env.screenshotEmpty` / `env.screenshotCapturedAt`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile`。
   - 提交：`6e857b8`（feat + 文档，amend 后 hash 由 6c32c9d 变更为此值）。
 
+## 2026-09-16 · 自动化 API 审计留痕（令牌操作进操作日志）
+
+### 修复
+
+- **自动化 API（v1）的令牌操作此前完全不落操作日志**：`writeLog` 有 `if (!req.tid || !req.uid) return` 守卫，而令牌鉴权（`tokenAuthMiddleware`）只设 `tid` / `role`，不设 `uid`——结果令牌能建环境、删数据、导出 Cookie 却零留痕，形成审计盲区。
+  - `writeLog` 守卫放宽为「有 uid **或**有令牌身份」；`AuthedRequest` 新增 `apiToken`（id / name / ownerId），由 `tokenAuthMiddleware` 注入。
+  - 日志 `userId` 记令牌创建者（`ApiTokenEntity.ownerId`，取不到记 0），`username` 记为 `api:<令牌名>`，界面上一眼分辨是人操作还是脚本调用。
+  - `v1` 新增统一审计中间件（响应完成后 `res.on('finish')` 落日志），而非逐个路由手写，杜绝新增接口漏记。
+  - 推导逻辑抽为纯函数模块 `src/main/apiAudit.ts`（与 `webhook.ts` / `logExport.ts` 同构）：`apiActionName` / `apiShouldAudit` / `apiAuditDetail`。
+  - 只读 GET 不记（避免日志被列表查询刷屏），但 `/cookies/export` 属数据外泄单独记录；删除 / 导入 / 导出类 action 自动命中既有敏感词，标为敏感操作。
+  - detail 只记「方法 + 路径 + 资源 id + 名称」，绝不写入 token / password / Cookie value。
+  - `Logs.tsx` 补 `api_*` 中文标签与配色 21 项。
+  - 离线单测 49 项全绿；node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
+  - 提交：`__PENDING__`（fix + 文档）。
+
 ## 2026-09-16 · 地理位置伪装（GEO / navigator.geolocation）
 
 ### 新增
