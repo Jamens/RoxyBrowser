@@ -3,11 +3,12 @@ import {
   Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
+import { useI18n } from '../i18n'
 import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
-  SafetyCertificateOutlined
+  SafetyCertificateOutlined, ShareAltOutlined
 } from '@ant-design/icons'
 import type { HealthReport } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
@@ -50,6 +51,7 @@ const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '
 
 export default function Environments() {
   const { message } = useAppCtx()
+  const { t } = useI18n()
   const [list, setList] = useState<ProfileDTO[]>([])
   const [groups, setGroups] = useState<GroupDTO[]>([])
   const [proxies, setProxies] = useState<ProxyDTO[]>([])
@@ -83,6 +85,14 @@ export default function Environments() {
   const [cloneAccounts, setCloneAccounts] = useState(false)
   const [cloneLoading, setCloneLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 环境转移到其他团队（跨团队分享）：把环境及其 Cookie / 账号归属改写到目标团队。
+  // 操作人必须同时是两团队的成员，可复用团队切换器打通的 /api/auth/teams 接口拉取可选目标。
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferSrc, setTransferSrc] = useState<ProfileDTO | null>(null)
+  const [transferTarget, setTransferTarget] = useState<number | undefined>()
+  const [transferTeams, setTransferTeams] = useState<{ id: number; name: string }[]>([])
+  const [transferLoading, setTransferLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -459,6 +469,42 @@ export default function Environments() {
     }
   }
 
+  // 打开转移弹窗：拉取「我所属的团队」并排除当前团队作为目标候选
+  const openTransfer = async (r: ProfileDTO) => {
+    try {
+      const teams = await api.get<{ id: number; name: string; isCurrent: boolean }[]>('/api/auth/teams')
+      const candidates = teams.filter((tm) => !tm.isCurrent)
+      if (!candidates.length) {
+        message.info(t('env.noOtherTeam'))
+        return
+      }
+      setTransferSrc(r)
+      setTransferTeams(candidates)
+      setTransferTarget(undefined)
+      setTransferOpen(true)
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const submitTransfer = async () => {
+    if (!transferSrc || transferTarget === undefined) return
+    setTransferLoading(true)
+    try {
+      const target = transferTeams.find((tm) => tm.id === transferTarget)
+      await api.post(`/api/profiles/${transferSrc.id}/transfer`, { teamId: transferTarget })
+      message.success(t('env.transferred', { team: target?.name || transferTarget }))
+      setTransferOpen(false)
+      setTransferSrc(null)
+      setTransferTarget(undefined)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTransferLoading(false)
+    }
+  }
+
   const columns: ColumnsType<ProfileDTO> = [
     { title: '序号', dataIndex: 'seq', width: 70 },
     {
@@ -554,6 +600,9 @@ export default function Environments() {
           </Tooltip>
           <Tooltip title="复制环境（含账号资料迁移）">
             <Button size="small" icon={<CopyOutlined />} onClick={() => duplicate(r.id)} />
+          </Tooltip>
+          <Tooltip title={t('env.transfer')}>
+            <Button size="small" icon={<ShareAltOutlined />} onClick={() => openTransfer(r)} />
           </Tooltip>
           <Popconfirm title="删除后进入回收站，可随时恢复。确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -935,6 +984,31 @@ export default function Environments() {
           因此批量号不会因共用同一套设备特征而被一锅端。
           <br />
           不会复制 Cookie（登录态复制过去等于主动制造关联），也不继承代理绑定，需另行分配。
+        </div>
+      </Modal>
+
+      {/* 环境转移到其他团队：跨团队分享，关联 Cookie / 账号一并迁移 */}
+      <Modal
+        title={t('env.transferTitle')}
+        open={transferOpen}
+        onOk={submitTransfer}
+        onCancel={() => setTransferOpen(false)}
+        okText={t('env.transfer')}
+        cancelText={t('common.cancel')}
+        confirmLoading={transferLoading}
+        okButtonProps={{ disabled: transferTarget === undefined }}
+      >
+        <div style={{ marginBottom: 8 }}>{t('env.transferConfirm')}</div>
+        <div style={{ marginBottom: 6 }}>{t('env.transferTo')}</div>
+        <Select
+          style={{ width: '100%' }}
+          placeholder={t('env.transferTo')}
+          value={transferTarget}
+          onChange={setTransferTarget}
+          options={transferTeams.map((tm) => ({ value: tm.id, label: tm.name }))}
+        />
+        <div style={{ fontSize: 12, color: '#888', marginTop: 12, lineHeight: 1.7 }}>
+          {t('env.transferHint')}
         </div>
       </Modal>
     </div>

@@ -174,7 +174,7 @@ function wrapAsync(router: express.Router): express.Router {
 }
 
 // 敏感操作：导出（数据外泄）/ 删除 / 改角色 / 成员与令牌管理 / 密码重置等
-const SENSITIVE_LOG_KEYWORDS = ['delete', 'purge', 'export', 'import', 'role', 'member', 'token', 'password', 'reset']
+const SENSITIVE_LOG_KEYWORDS = ['delete', 'purge', 'export', 'import', 'role', 'member', 'token', 'password', 'reset', 'transfer']
 function isSensitiveAction(action: string): boolean {
   const a = action.toLowerCase()
   return SENSITIVE_LOG_KEYWORDS.some((k) => a.includes(k))
@@ -1460,6 +1460,34 @@ function buildApiRouter(): express.Router {
     )
     await writeLog(req, 'clone_template', `从模板「${tpl.name}」创建环境「${p.name}」(#${p.id})`)
     res.json(mapProfile(p))
+  })
+
+  // 环境转移到其他团队：团队切换器打通的多团队模型下，数据按 teamId 强隔离，
+  // 「转移」= 把环境及其关联 Cookie / 账号的归属 teamId 改写为目标团队（即把数据分享给目标团队）。
+  // 仅当操作人本人也是目标团队成员时才允许移入，避免把数据塞进无权访问的团队；
+  // 转移前必须关闭运行中的窗口（与删除同等约束），并级联迁移关联数据，避免产生跨团队孤儿记录。
+  router.post('/profiles/:id/transfer', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid, ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口，再转移' })
+    const targetTeamId = Number((req.body || {}).teamId)
+    if (!targetTeamId || targetTeamId === req.tid) return res.status(400).json({ message: '请选择不同的目标团队' })
+    // 操作人必须是目标团队成员，否则无权把数据移入该团队
+    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
+    const targetMember = await memberRepo.findOne({ where: { userId: req.uid, teamId: targetTeamId } })
+    if (!targetMember) return res.status(403).json({ message: '你不是目标团队成员，无法转移' })
+    const targetTeam = await AppDataSource.getRepository(TeamEntity).findOne({ where: { id: targetTeamId } })
+    // 改写环境归属
+    p.teamId = targetTeamId
+    p.ownerId = req.uid!
+    await repo.save(p)
+    // 级联：该环境的 Cookie / 账号一并归属到目标团队（保持同团队，避免孤儿数据）。
+    // Cookie 自带 teamId 列需改写；账号无 teamId 列、靠 profileId 隐式归属新团队，只同步 ownerId。
+    await AppDataSource.getRepository(CookieEntity).update({ profileId: p.id }, { teamId: targetTeamId, ownerId: req.uid! })
+    await AppDataSource.getRepository(AccountEntity).update({ profileId: p.id }, { ownerId: req.uid! })
+    await writeLog(req, 'transfer_profile', `将环境「${p.name}」(#${p.id}) 转移到团队「${targetTeam?.name || targetTeamId}」`)
+    res.json({ ok: true, profile: mapProfile(p) })
   })
 
   // 生成随机指纹

@@ -68,6 +68,16 @@
   - 四语 i18n（`team.switch` / `team.current` / `team.switched` / `team.switchedShort` / `team.switchFailed`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `switch_team`。
   - 提交：`33e94c9`（feat + 文档）。
 
+## 2026-09-15 · 环境分享转移（跨团队）
+
+### 新增
+
+- **环境分享转移**：环境列表每行「转移」即可把环境分享到其他团队。跨团队数据按 `teamId` 强隔离，「转移」= 把环境及其关联数据的归属 `teamId` 改写为目标团队。
+  - 后端：`POST /api/profiles/:id/transfer`（需登录，body `{ teamId }`）——校验环境属于当前团队且未运行；校验操作人同时是目标团队成员（否则 403）；改写 `ProfileEntity.teamId/ownerId`，并级联把该环境的 `Cookie`（自带 `teamId` 列）迁到目标团队、把 `Account`（靠 `profileId` 隐式归属，无独立 `teamId` 列）同步 `ownerId`；写敏感审计日志 `transfer_profile`（已把 `transfer` 加入 `SENSITIVE_LOG_KEYWORDS`）。
+  - 前端：`Environments.tsx` 行内「转移」按钮（`ShareAltOutlined`）打开 Modal，从 `GET /api/auth/teams` 拉取「我所属且非当前」的团队作目标候选；确认后环境即从当前团队列表消失，成功提示标注目标团队；只属 1 团队时提示无法转移。
+  - 四语 i18n（`env.transfer` / `env.transferTitle` / `env.transferTo` / `env.transferConfirm` / `env.transferHint` / `env.transferred` / `env.noOtherTeam`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `transfer_profile`。
+  - 提交：`709be64`（feat + 文档）。
+
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 
 ### 新增

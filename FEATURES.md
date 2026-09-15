@@ -351,6 +351,19 @@ app.listen(4000)
 - **角色实时性**：新角色直接读 `team_members.role`（DB 实时），不取自旧 JWT，规避「改了成员角色却要重新登录才生效」的旧问题（与 `freshRole` 思路一致）。
 - **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron + MySQL 多团队成员切换 + 窗口关闭）本沙箱未跑，沿用「用户自测」惯例。
 
+### 7.8 环境分享转移（跨团队）
+
+团队切换器打通了多团队模型，而全部业务数据按 `tid` 强隔离。环境分享转移把某个环境**移动 / 分享**到其他团队——因为隔离靠 `teamId`，「转移」的本质是把环境及其关联数据的归属 `teamId` 改写为目标团队（即把数据分享给目标团队）。
+
+- **转移接口**：`POST /api/profiles/:id/transfer`（需登录，body `{ teamId }`）。
+  - 先 `findOne({ id, teamId: req.tid, ...ownerScope(req) })` 锁定当前团队内、且账户隔离可见的环境；不存在 → 404；`status === 'running'` → 400（与删除同等约束，先关窗口）。
+  - 校验 `teamId` 合法且与当前团队不同；再查 `team_members` 确认操作人**同时是目标团队成员**，否则 403（无权把数据塞进该团队）。
+  - 改写 `ProfileEntity.teamId / ownerId` 并 `save`；级联：该环境的 `CookieEntity`（自带 `teamId` 列）一并改写 `teamId / ownerId` 迁到目标团队；`AccountEntity`（无独立 `teamId` 列，靠 `profileId` 隐式归属父环境所在团队）只同步 `ownerId`。
+  - 写敏感审计日志 `transfer_profile`（已把 `transfer` 加入 `SENSITIVE_LOG_KEYWORDS`，自动标记 sensitive 并触发 Webhook），`detail = 将环境「{name}」(#id) 转移到团队「{name}」`（记在源团队 `req.tid` 下）。
+- **前端**：`src/renderer/src/pages/Environments.tsx` 环境列表每行「转移」按钮（`ShareAltOutlined`）打开 Modal，从 `GET /api/auth/teams` 拉取「我所属且非当前」的团队作目标候选；确认后调转移接口、成功提示标注目标团队、刷新列表（环境即从当前团队消失）。只属于 1 个团队时 `message.info(t('env.noOtherTeam'))` 提示无法转移。
+- **i18n**：四语新增 `env.transfer / env.transferTitle / env.transferTo / env.transferConfirm / env.transferHint / env.transferred / env.noOtherTeam`；`Logs.tsx` 的 `ACTION_LABELS` 补 `transfer_profile: '转移环境'`。
+- **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron + MySQL 多团队转移 + Cookie/账号级联归属）本沙箱未跑，沿用「用户自测」惯例。
+
 ### 8. 操作日志
 
 
