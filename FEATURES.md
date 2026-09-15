@@ -374,6 +374,21 @@ app.listen(4000)
 - **i18n**：四语新增 `env.screenshot / env.screenshotTitle / env.screenshotNotRunning / env.screenshotDownload / env.screenshotCapturing / env.screenshotEmpty / env.screenshotCapturedAt`；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile: '环境截图'`。
 - **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。真实 E2E（Electron 开窗 → 截图返回 PNG）本沙箱未跑，沿用「用户自测」惯例。
 
+### 7.10 地理位置伪装（GEO / navigator.geolocation）
+
+对标 RoxyBrowser「突破地域限制 / GEO 定位」。此前只伪装时区、语言、代理出口 IP，页面调用 `navigator.geolocation` 时会暴露宿主真实坐标——这是指纹维度上最后一个缺口。
+
+- **数据模型**：`src/shared/types.ts` 的 `Fingerprint` 新增 `geoLatitude / geoLongitude / geoAccuracy`；`src/shared/fingerprint.ts` 的 `TZ_POOL` 每项加「代表城市坐标」`geo`（`Asia/Tokyo → [35.6762, 139.6503]` 等 12 个时区）。
+- **生成**：新增 `geoFor(tz, jitter = true)` 与 `tzGeo(tz)`（导出）。`jitter=false` 返回该时区代表城市的**确定坐标**（供指纹预设可复现、`normalizeFingerprint` 归一不漂移）；`jitter=true` 在同城内抖动 ±0.04°（≈4km）。
+- **注入**：`src/main/browser-preload.ts` 整体替换 `navigator.geolocation`（`getCurrentPosition` 异步回调 / `watchPosition` 30s 轮询 / `clearWatch` 清理 timer），回灌指纹坐标并伪造 `coords`（altitude/heading/speed 为 null，贴近桌面浏览器形态）。**整体替换而非只改方法**——原生实现会走 Chromium 定位权限流程（弹窗 / 被拒），替换后不再触发。
+- **自洽性（本功能的关键）**：
+  - `normalizeFingerprint` 对「本功能上线前创建、无 GEO 字段」的历史环境，按该环境**自身的 timezone** 反查坐标补齐，**绝不能沿用 `randomFingerprint(os)` 的随机基准**——后者时区是随机的，会产出「时区东京、坐标纽约」的矛盾信号（与 `tzOffset` 曾踩的坑同源，见长期记忆 12）。
+  - `deriveJitteredFingerprint`（克隆工厂）继承母本坐标并只做 ±0.03° 微抖：与分辨率 / CPU 那类必须互异的高区分度项不同，坐标要留在同一城市才自洽。
+  - 已有显式 geo 的环境归一后**保留原值**（尊重用户手工设定），不做强制纠正。
+- **前端**：`ProfileForm.tsx` 时区选择器下新增纬度 / 经度 / 精度三个输入框；`setFpField('timezone', v)` 时坐标自动跟随到该时区代表城市（与 `tzOffset` 联动同一处）。
+- **i18n**：本功能文案沿用环境表单既有硬编码风格，未新增 key。
+- **验证**：node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0；**离线单测 57 项全绿**（`tsc` 转 CJS 后 `.tmp/test_geo.cjs` 对拍：坐标准确性 / 未知时区回落 / 确定性 / 抖动幅度受控 / random 与派生自洽 / 历史数据按自身时区反查 / 无效输入兜底 / 克隆不漂出母本城市）。真实 E2E（开窗后页面读 geolocation）本沙箱未跑，沿用「用户自测」惯例。
+
 ### 8. 操作日志
 
 

@@ -73,22 +73,51 @@ const GPU_MAC = [
   { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 655, OpenGL 4.1)' }
 ]
 
-// 时区 / 语言 / 分辨率联动池
-// 分辨率越多样，批量派生时越不容易撞成同一款（此前多数时区只有 1–2 种）
-const TZ_POOL: Array<{ tz: string; languages: string[]; resolutions: Array<[number, number]> }> = [
-  { tz: 'America/New_York', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900], [2560, 1440]] },
-  { tz: 'America/Los_Angeles', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1536, 864], [2560, 1440]] },
-  { tz: 'America/Chicago', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1440, 900], [1920, 1200]] },
-  { tz: 'Europe/London', languages: ['en-GB', 'en'], resolutions: [[1920, 1080], [1366, 768], [2560, 1440]] },
-  { tz: 'Europe/Berlin', languages: ['de-DE', 'de', 'en-US', 'en'], resolutions: [[1920, 1080], [1680, 1050], [2560, 1440]] },
-  { tz: 'Europe/Paris', languages: ['fr-FR', 'fr', 'en-US', 'en'], resolutions: [[1920, 1080], [1440, 900]] },
-  { tz: 'Asia/Singapore', languages: ['en-SG', 'en', 'zh-CN', 'zh'], resolutions: [[1920, 1080], [2560, 1440], [1366, 768]] },
-  { tz: 'Asia/Tokyo', languages: ['ja-JP', 'ja', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900]] },
-  { tz: 'Asia/Shanghai', languages: ['zh-CN', 'zh', 'en-US', 'en'], resolutions: [[1920, 1080], [2560, 1440], [1600, 900]] },
-  { tz: 'Australia/Sydney', languages: ['en-AU', 'en'], resolutions: [[1920, 1080], [2560, 1440]] },
-  { tz: 'America/Sao_Paulo', languages: ['pt-BR', 'pt', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768]] },
-  { tz: 'Europe/Amsterdam', languages: ['nl-NL', 'nl', 'en-US', 'en'], resolutions: [[1920, 1080], [3440, 1440]] }
+// 时区 / 语言 / 分辨率 / 地理位置联动池
+// 分辨率越多样，批量派生时越不容易撞成同一款（此前多数时区只有 1–2 种）。
+// geo 是该时区的「代表城市坐标」：地理位置必须与时区自洽，否则「东京时区 + 纽约坐标」
+// 是自相矛盾的关联信号，比干脆不伪装更可疑。
+const TZ_POOL: Array<{ tz: string; languages: string[]; resolutions: Array<[number, number]>; geo: [number, number] }> = [
+  { tz: 'America/New_York', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900], [2560, 1440]], geo: [40.7128, -74.006] },
+  { tz: 'America/Los_Angeles', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1536, 864], [2560, 1440]], geo: [34.0522, -118.2437] },
+  { tz: 'America/Chicago', languages: ['en-US', 'en'], resolutions: [[1920, 1080], [1440, 900], [1920, 1200]], geo: [41.8781, -87.6298] },
+  { tz: 'Europe/London', languages: ['en-GB', 'en'], resolutions: [[1920, 1080], [1366, 768], [2560, 1440]], geo: [51.5074, -0.1278] },
+  { tz: 'Europe/Berlin', languages: ['de-DE', 'de', 'en-US', 'en'], resolutions: [[1920, 1080], [1680, 1050], [2560, 1440]], geo: [52.52, 13.405] },
+  { tz: 'Europe/Paris', languages: ['fr-FR', 'fr', 'en-US', 'en'], resolutions: [[1920, 1080], [1440, 900]], geo: [48.8566, 2.3522] },
+  { tz: 'Asia/Singapore', languages: ['en-SG', 'en', 'zh-CN', 'zh'], resolutions: [[1920, 1080], [2560, 1440], [1366, 768]], geo: [1.3521, 103.8198] },
+  { tz: 'Asia/Tokyo', languages: ['ja-JP', 'ja', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768], [1600, 900]], geo: [35.6762, 139.6503] },
+  { tz: 'Asia/Shanghai', languages: ['zh-CN', 'zh', 'en-US', 'en'], resolutions: [[1920, 1080], [2560, 1440], [1600, 900]], geo: [31.2304, 121.4737] },
+  { tz: 'Australia/Sydney', languages: ['en-AU', 'en'], resolutions: [[1920, 1080], [2560, 1440]], geo: [-33.8688, 151.2093] },
+  { tz: 'America/Sao_Paulo', languages: ['pt-BR', 'pt', 'en-US', 'en'], resolutions: [[1920, 1080], [1366, 768]], geo: [-23.5505, -46.6333] },
+  { tz: 'Europe/Amsterdam', languages: ['nl-NL', 'nl', 'en-US', 'en'], resolutions: [[1920, 1080], [3440, 1440]], geo: [52.3676, 4.9041] }
 ]
+
+/** 取某时区的代表城市坐标；未知时区回落到纽约（与池首项一致） */
+export function tzGeo(tz: string): [number, number] {
+  return TZ_POOL.find((t) => t.tz === tz)?.geo ?? [40.7128, -74.006]
+}
+
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6
+
+/**
+ * 按 IANA 时区生成「与该时区自洽」的地理位置。
+ * jitter=false 时返回确定坐标（无随机、精度固定），供指纹预设复现使用。
+ *
+ * 抖动幅度刻意压得很小（±0.04° ≈ 4km）：既能让不同环境的坐标互不相同，
+ * 又不会飘到邻市 / 邻国而与设定的时区、语言产生矛盾。
+ */
+export function geoFor(
+  tz: string,
+  jitter = true
+): { geoLatitude: number; geoLongitude: number; geoAccuracy: number } {
+  const [lat, lon] = tzGeo(tz)
+  const j = jitter ? 0.04 : 0
+  return {
+    geoLatitude: round6(lat + (j ? (rand() - 0.5) * 2 * j : 0)),
+    geoLongitude: round6(lon + (j ? (rand() - 0.5) * 2 * j : 0)),
+    geoAccuracy: jitter ? randInt(20, 150) : 50
+  }
+}
 
 // 移动设备池（Android：Chrome Mobile；iOS：Safari —— Electron 是 Chromium 内核，
 // iOS 场景只能伪装 UA/无 UA-CH 的形态，真实 iOS 上 Chrome 也是 WebKit，语义上一致）
@@ -234,6 +263,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         doNotTrack: 'unspecified',
         touch: true,
         devicePixelRatio: dev.dpr,
+        ...geoFor(tzInfo.tz),
         fonts: randomFonts('android')
       }
     }
@@ -259,6 +289,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         doNotTrack: 'unspecified',
         touch: true,
         devicePixelRatio: dev.dpr,
+        ...geoFor(tzInfo.tz),
         fonts: randomFonts('ios')
       }
   }
@@ -295,6 +326,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
     audioNoise: true,
     webrtc: 'disable',
     doNotTrack: 'unspecified',
+    ...geoFor(tzInfo.tz),
     fonts: randomFonts(chosenOs)
   }
 }
@@ -336,11 +368,25 @@ export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerpr
     typeof fp.coreVersion === 'number' && fp.coreVersion > 0
       ? fp.coreVersion
       : Number(String(fp.uaFullVersion || '').split('.')[0]) || base.coreVersion
+  // GEO 自洽：本功能上线前创建的环境没有 geo 字段，此时必须按「该环境自己的 timezone」
+  // 反查坐标——绝不能沿用 base 的 geo：base 由 randomFingerprint(os) 生成、时区是随机的，
+  // 直接套用会产生「时区东京、坐标纽约」这种自相矛盾的关联信号（与 tzOffset 那个坑同源）。
+  // 归一用确定坐标（jitter=false），避免同一环境每次编辑 / 导入都往不同方向漂。
+  const tz = typeof fp.timezone === 'string' ? fp.timezone : base.timezone
+  const geo =
+    typeof fp.geoLatitude === 'number' && typeof fp.geoLongitude === 'number'
+      ? {
+          geoLatitude: fp.geoLatitude,
+          geoLongitude: fp.geoLongitude,
+          geoAccuracy: typeof fp.geoAccuracy === 'number' ? fp.geoAccuracy : 50
+        }
+      : geoFor(tz, false)
   return {
     ...base,
     ...fp,
     coreVersion,
-    fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind)
+    fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind),
+    ...geo
   } as Fingerprint
 }
 
@@ -358,6 +404,8 @@ function presetFingerprint(
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
+    // 预设要求可复现 → 用确定坐标（jitter=false），与 tzOffset 一样按 preset 的时区算
+    ...geoFor(core.timezone, false),
     fonts: osFontList(core.os),
     coreVersion: Number(core.uaFullVersion.split('.')[0]),
     ...core
@@ -645,6 +693,16 @@ export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
     touch: src.touch,
     devicePixelRatio: src.devicePixelRatio,
     canvasNoise: src.canvasNoise,
-    audioNoise: src.audioNoise
+    audioNoise: src.audioNoise,
+    // 地理位置：继承母本坐标并做极小抖动（±0.03° ≈ 3km）。
+    // 与分辨率 / CPU 那类「必须互不相同」的高区分度项不同，坐标要留在同一城市——
+    // 同一批号同时区同城市才自洽，抖动只是避免 N 个号精确重合在同一点。
+    geoLatitude: round6(
+      (typeof src.geoLatitude === 'number' ? src.geoLatitude : tzGeo(src.timezone)[0]) + (rand() - 0.5) * 0.06
+    ),
+    geoLongitude: round6(
+      (typeof src.geoLongitude === 'number' ? src.geoLongitude : tzGeo(src.timezone)[1]) + (rand() - 0.5) * 0.06
+    ),
+    geoAccuracy: typeof src.geoAccuracy === 'number' ? src.geoAccuracy : 50
   }
 }

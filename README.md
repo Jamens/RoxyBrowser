@@ -118,6 +118,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **团队切换器**：顶栏一键在「我所属的团队」之间切换工作区（无需退出登录）；切换时用该团队的实时角色重发会话令牌，并关闭旧团队运行中的环境窗口，切换后整页刷新、所有数据自动归属新团队，详见下节
 - **环境分享转移**：环境列表每行「转移」即可把环境（含其 Cookie / 账号）分享到其他团队——跨团队数据按 `teamId` 强隔离，「转移」即把归属改写为目标团队；仅可转移到你同为成员的其他团队，详见下节
 - **环境截图**：环境列表每行「截图」即可截取运行中环境窗口的当前视口为 PNG（用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕），弹窗内可一键下载；环境需先打开，详见下节
+- **地理位置伪装（GEO）**：覆盖 `navigator.geolocation`，按环境时区回灌「代表城市」坐标；坐标与时区联动自洽，避免「东京时区 + 纽约坐标」这类自相矛盾的关联信号，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -228,6 +229,15 @@ app.listen(4000)
 - **接口**：`POST /api/profiles/:id/screenshot`（需登录）——校验环境属于当前团队、未软删、且 `status === 'running'`（与体检同理，`capturePage` 只能在真实窗口上下文里截到页面）；经 `browserBridge.captureScreenshot` 调 `webContents.capturePage()` 取 PNG，`Buffer` 转 base64 `data:image/png;base64,...` 回前端；写审计日志 `screenshot_profile`。
 - **前端**：环境列表每行「截图」按钮（`CameraOutlined`）打开弹窗展示图片，标注截图时间，提供「下载 PNG」按钮（`downloadDataUrl` 把 data URL 解码为 Blob 落盘）；环境未运行时按钮提示先打开。
 - **复用**：截图能力底层复用 AI Agent 已有的 `webContents.capturePage()` 采集通道（`src/main/agent/session.ts`），不另起一套。
+
+### 地理位置伪装（GEO / navigator.geolocation）
+
+此前只伪装了时区、语言与代理出口 IP，页面一旦调用 `navigator.geolocation.getCurrentPosition()` 就会暴露宿主真实坐标（或报错穿帮）——这是指纹维度上的最后一个缺口。
+
+- **数据模型**：`Fingerprint` 新增 `geoLatitude` / `geoLongitude` / `geoAccuracy` 三字段，与 `timezone` 联动——`TZ_POOL` 每个时区都带一组「代表城市坐标」（如 `Asia/Tokyo → 35.6762, 139.6503`）。
+- **注入**：`browser-preload.ts` 整体替换 `navigator.geolocation`（`getCurrentPosition` / `watchPosition` / `clearWatch`），回灌指纹坐标；整体替换而非只改方法，是为了绕开 Chromium 原生的定位权限弹窗流程。
+- **自洽性（关键）**：坐标抖动幅度刻意压得很小（随机 ±0.04° ≈ 4km、克隆派生 ±0.03°），既让不同环境坐标互不相同，又不会飘到邻市 / 邻国而与设定的时区、语言矛盾。历史环境（本功能上线前创建、无 GEO 字段）在 `normalizeFingerprint` 中按其**自身的 timezone** 反查坐标补齐，不会套用随机基准而产生矛盾。
+- **联动**：环境表单里切换时区，纬度 / 经度 / 精度会自动跟随到该时区代表城市；也可手工微调。
 
 ## 目录结构
 

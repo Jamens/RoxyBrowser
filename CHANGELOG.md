@@ -87,7 +87,19 @@
   - 后端：`POST /api/profiles/:id/screenshot`（需登录）——校验环境属当前团队、未软删、且 `status === 'running'`（与体检同约束），取 PNG 转 base64 `data:image/png;base64,...` 回前端，写审计日志 `screenshot_profile`。
   - 前端：`Environments.tsx` 行内「截图」按钮（`CameraOutlined`）+ 弹窗展示图片 / 截图时间 /「下载 PNG」（`downloadDataUrl` 解码 data URL 为 Blob）；`utils/download.ts` 新增 `downloadDataUrl`。环境未运行时提示先打开。
   - 四语 i18n（`env.screenshot` / `env.screenshotTitle` / `env.screenshotNotRunning` / `env.screenshotDownload` / `env.screenshotCapturing` / `env.screenshotEmpty` / `env.screenshotCapturedAt`）；`Logs.tsx` 的 `ACTION_LABELS` 补 `screenshot_profile`。
-  - 提交：`6c32c9d`（feat + 文档）。
+  - 提交：`6e857b8`（feat + 文档，amend 后 hash 由 6c32c9d 变更为此值）。
+
+## 2026-09-16 · 地理位置伪装（GEO / navigator.geolocation）
+
+### 新增
+
+- **地理位置伪装（GEO）**：覆盖 `navigator.geolocation`，按环境时区回灌「代表城市」坐标——补齐了指纹维度上最后一个缺口（此前页面调用定位 API 会暴露宿主真实坐标或报错穿帮）。
+  - 数据模型：`Fingerprint` 新增 `geoLatitude / geoLongitude / geoAccuracy`；`shared/fingerprint.ts` 的 `TZ_POOL` 每个时区带一组代表城市坐标，新增 `geoFor(tz, jitter)` / `tzGeo(tz)`。
+  - 注入：`main/browser-preload.ts` 整体替换 `navigator.geolocation`（`getCurrentPosition` / `watchPosition` / `clearWatch`），回灌指纹坐标并伪造 `coords`；整体替换而非只改方法，以绕开 Chromium 原生定位权限弹窗流程。
+  - 自洽性（关键）：历史环境（本功能上线前创建、无 GEO 字段）在 `normalizeFingerprint` 中按其**自身 timezone** 反查坐标补齐，不套用随机基准，避免「东京时区 + 纽约坐标」；克隆派生只做 ±0.03° 同城微抖，不漂出母本城市。
+  - 前端：`ProfileForm.tsx` 时区下新增纬度 / 经度 / 精度输入，切换时区时坐标自动跟随到该时区代表城市。
+  - 验证：离线单测 57 项全绿；node / web 双 `tsc --noEmit` EXIT 0；`electron-vite build` EXIT 0。
+  - 提交：`__PENDING__`（feat + 文档）。
 
 ## 2026-09-15 · 代码签名与自动更新（electron-builder 签名 + electron-updater）
 

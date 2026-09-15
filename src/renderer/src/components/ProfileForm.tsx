@@ -5,7 +5,7 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
-import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint, applyCoreVersion, CHROME_MAJORS } from '@shared/fingerprint'
+import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint, applyCoreVersion, CHROME_MAJORS, geoFor } from '@shared/fingerprint'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -156,7 +156,15 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
     setFp((prev) => {
       if (!prev) return prev
       const next = { ...prev, [key]: value } as Fingerprint
-      if (key === 'timezone') next.tzOffset = getTimezoneOffsetMinutes(String(value))
+      if (key === 'timezone') {
+        next.tzOffset = getTimezoneOffsetMinutes(String(value))
+        // 地理位置与时区联动：改时区时坐标自动跟随到该时区的代表城市，
+        // 避免出现「东京时区 + 纽约坐标」——页面会把这两项交叉验证，矛盾比不伪装更可疑。
+        const g = geoFor(String(value), false)
+        next.geoLatitude = g.geoLatitude
+        next.geoLongitude = g.geoLongitude
+        next.geoAccuracy = g.geoAccuracy
+      }
       if (key === 'os') {
         // 切换 OS 时同步 platform / UA
         next.platform = value === 'mac' ? 'MacIntel' : 'Win32'
@@ -430,7 +438,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       tokenSeparators={[',', ' ']}
                     />
                   </Form.Item>
-                  <Form.Item label="时区">
+                  <Form.Item label="时区" extra="切换时区时，下方地理位置会自动跟随到该时区的代表城市以保持自洽；页面调用 navigator.geolocation 时回灌该坐标">
                     <Select
                       showSearch
                       value={fp.timezone}
@@ -438,6 +446,37 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                       options={TIMEZONES.map((t) => ({ value: t, label: t }))}
                     />
                   </Form.Item>
+                  <Space size="middle" style={{ display: 'flex' }} wrap>
+                    <Form.Item label="纬度" style={{ marginBottom: 0 }}>
+                      <InputNumber
+                        min={-90}
+                        max={90}
+                        step={0.0001}
+                        value={fp.geoLatitude}
+                        onChange={(v) => setFpField('geoLatitude', typeof v === 'number' ? v : 0)}
+                        style={{ width: 150 }}
+                      />
+                    </Form.Item>
+                    <Form.Item label="经度" style={{ marginBottom: 0 }}>
+                      <InputNumber
+                        min={-180}
+                        max={180}
+                        step={0.0001}
+                        value={fp.geoLongitude}
+                        onChange={(v) => setFpField('geoLongitude', typeof v === 'number' ? v : 0)}
+                        style={{ width: 150 }}
+                      />
+                    </Form.Item>
+                    <Form.Item label="精度 (米)" style={{ marginBottom: 0 }}>
+                      <InputNumber
+                        min={1}
+                        max={5000}
+                        value={fp.geoAccuracy}
+                        onChange={(v) => setFpField('geoAccuracy', typeof v === 'number' ? v : 50)}
+                        style={{ width: 120 }}
+                      />
+                    </Form.Item>
+                  </Space>
                   <Space size="middle" style={{ display: 'flex' }} wrap>
                     <Form.Item label="屏幕宽" style={{ marginBottom: 0 }}>
                       <InputNumber min={320} max={7680} value={fp.screenWidth} onChange={(v) => setFpField('screenWidth', v || 1920)} />

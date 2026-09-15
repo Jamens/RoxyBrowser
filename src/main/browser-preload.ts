@@ -23,6 +23,9 @@
     touch?: boolean
     devicePixelRatio?: number
     fonts?: string[]
+    geoLatitude: number
+    geoLongitude: number
+    geoAccuracy: number
   }
 
   // ipcRenderer 提前到最前：起始页的 window.roxy.navigate 闭包要用它
@@ -171,6 +174,66 @@
     const options = realResolved.apply(this, args as [])
     options.timeZone = fp.timezone
     return options
+  }
+
+  // ===== 地理位置（navigator.geolocation）=====
+  // 必须与时区自洽：页面拿到坐标后会与时区 / 语言交叉验证，
+  // 「东京时区 + 纽约坐标」这种矛盾比干脆不伪装更可疑。
+  // 做法上整体替换 geolocation 对象而不是只改方法——原生实现会走 Chromium 的
+  // 定位权限流程（弹窗 / 被拒），替换后直接回灌指纹坐标，不再触发权限。
+  const geoLat = typeof fp.geoLatitude === 'number' ? fp.geoLatitude : 40.7128
+  const geoLon = typeof fp.geoLongitude === 'number' ? fp.geoLongitude : -74.006
+  const geoAcc = typeof fp.geoAccuracy === 'number' ? fp.geoAccuracy : 50
+  // 原生 Position / Coordinates 的属性是原型上的只读 getter，这里用普通对象冒充：
+  // 页面只读 latitude / longitude / accuracy 等字段，不会做 instanceof 校验。
+  const makePosition = (): any => ({
+    coords: {
+      latitude: geoLat,
+      longitude: geoLon,
+      altitude: null,
+      accuracy: geoAcc,
+      altitudeAccuracy: null,
+      heading: null,
+      speed: null
+    },
+    timestamp: Date.now()
+  })
+  try {
+    let geoWatchId = 1
+    const geoTimers = new Map<number, ReturnType<typeof setInterval>>()
+    const geolocation: any = {
+      // 异步回调，贴近真实定位的耗时表现（同步回调会被部分站点判定为可疑）
+      getCurrentPosition: (success?: (p: unknown) => void, _error?: (e: unknown) => void) => {
+        if (typeof success === 'function') setTimeout(() => success(makePosition()), 10)
+      },
+      watchPosition: (success?: (p: unknown) => void) => {
+        const id = geoWatchId++
+        if (typeof success === 'function') {
+          setTimeout(() => success(makePosition()), 10)
+          geoTimers.set(
+            id,
+            setInterval(() => success(makePosition()), 30000)
+          )
+        }
+        return id
+      },
+      clearWatch: (id?: number) => {
+        if (typeof id !== 'number') return
+        const t = geoTimers.get(id)
+        if (t) {
+          clearInterval(t)
+          geoTimers.delete(id)
+        }
+      }
+    }
+    try {
+      delete (navigator as any).geolocation
+    } catch {
+      /* ignore */
+    }
+    def(navigator, 'geolocation', geolocation)
+  } catch {
+    /* ignore */
   }
 
   // ===== Canvas 噪声 =====

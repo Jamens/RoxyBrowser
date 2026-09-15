@@ -32,6 +32,12 @@ export interface Fingerprint {
   // 伪造的「已安装字体」列表。按 OS 取一致基础集 + 随机子集，运行时通过
   // document.fonts.check/load 与 Canvas measureText 防护，杜绝宿主机真实字体泄漏。
   fonts: string[]
+  // ---- 地理位置（navigator.geolocation 注入） ----
+  // 由时区池给出「该时区代表城市」的坐标，运行时整体替换 geolocation API 回灌给页面。
+  // 必须与 timezone 自洽：否则「时区东京、坐标纽约」是自相矛盾的关联信号，比不伪装更可疑。
+  geoLatitude: number
+  geoLongitude: number
+  geoAccuracy: number // 精度（米）
 }
 
 /** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */
