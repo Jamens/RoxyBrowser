@@ -9,6 +9,13 @@
 
 ---
 
+## 2026-09-16 · 应用品牌图标替换
+
+### 新增
+
+- **应用图标替换**：去除 Electron 默认图标，生成品牌图标（蓝紫渐变圆角方块 + 浏览器窗口 + 指纹）。产出 `resources/icon.ico`（16–256 七尺寸）、`resources/icon.png`（512）、`tray.png`（32，同步更新保持一致）。`src/main/index.ts` 新增 `appIconPath()` 并挂到 `BrowserWindow`，dev 态任务栏/标题栏立即生效；打包 exe 图标走既有 `win.icon`。
+- 提交：`9925318`（feat）。
+
 ## 2026-09-16 · 智能助手 Planner（AI 客服 / 全项目自然语言查询）
 
 ### 新增
