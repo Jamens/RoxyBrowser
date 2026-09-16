@@ -16,7 +16,7 @@
 - **脚本市场**：RPA 页新增「脚本市场」Tab（`Tabs` 拆「我的脚本 / 脚本市场」），展示 6 个内置预设自动化（SEO / 电商 / 账号 / 社媒四类），支持「查看步骤」预览与「安装」克隆。
 - **预设数据**：`src/main/rpaMarket.ts`（主进程专用纯数据模块，离线可单测）导出 `MARKET_SCRIPTS` 与 `getMarketScript`。预设以 `navigate` + `wait`/`scroll` 为主、跨站点通用；`input`/`click` 留作模板并附 `note` 提示按站点微调；变量用 `{{变量名}}` 暴露。
 - **后端路由**：`GET /api/rpa/market`（罗列目录 DTO：id/名称/描述/分类/标签/步骤数/变量/备注/步骤）、`POST /api/rpa/market/install/:id`（克隆为当前团队新脚本，归属当前用户、定时重置、备注带 `[市场]` 前缀、写 `install_rpa_market` 审计）。路由排在 `/rpa/:id` 之前（静态前缀优先约定）。
-- 提交：`__PENDING__`（feat + 文档）。
+- 提交：`da78bbb`（feat + 文档）。
 
 ## 2026-09-15 · 内核版本切换（指纹层 Chrome 大版本可选）
 
