@@ -381,7 +381,28 @@ const zhCN = {
   'webhook.group.cookie': 'Cookie',
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
-  'webhook.group.auth': '登录'
+  'webhook.group.auth': '登录',
+
+  // ---- 智能助手（全局悬浮）----
+  'assistant.open': '智能助手',
+  'assistant.placeholder': '问问助手，如「哪些环境快过期了」',
+  'assistant.send': '发送',
+  'assistant.thinking': '正在思考…',
+  'assistant.empty': '我是你的本地智能助手，可查询环境 / 代理 / 账号 / Cookie / 扩展 / RPA / 日志 / 分组 / 团队。例如：\n• 哪些环境快过期了\n• 哪个代理 3 天内到期\n• 最近删了哪些环境\n• 帮我打开环境 #12',
+  'assistant.sensitiveTitle': '敏感数据',
+  'assistant.sensitiveHint': '该数据属于敏感凭据（令牌 / 密码 / 密钥等），暂不提供查询，请到对应模块手动操作。',
+  'assistant.queryTitle': '查询结果',
+  'assistant.jump': '跳转处理',
+  'assistant.usedBy': '被以下环境使用',
+  'assistant.dangerSafe': '安全操作',
+  'assistant.dangerMedium': '需确认',
+  'assistant.dangerDestructive': '危险操作',
+  'assistant.confirmAction': '确认执行',
+  'assistant.confirmDestructive': '此操作不可恢复，将影响：{list}。确认继续？',
+  'assistant.actionDone': '已执行：{msg}',
+  'assistant.actionFailed': '执行失败：{msg}',
+  'assistant.clear': '清空',
+  'assistant.examples': '试试：'
 }
 
 export type MessageDict = typeof zhCN
@@ -760,7 +781,28 @@ const enUS: MessageDict = {
   'webhook.group.cookie': 'Cookies',
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
-  'webhook.group.auth': 'Auth'
+  'webhook.group.auth': 'Auth',
+
+  // ---- Assistant (global floating) ----
+  'assistant.open': 'Assistant',
+  'assistant.placeholder': 'Ask, e.g. "which environments are expiring"',
+  'assistant.send': 'Send',
+  'assistant.thinking': 'Thinking…',
+  'assistant.empty': 'Your local AI assistant. Query environments / proxies / accounts / cookies / extensions / RPA / logs / groups / teams. For example:\n• which environments are expiring\n• which proxy expires within 3 days\n• which environments were recently deleted\n• open environment #12 for me',
+  'assistant.sensitiveTitle': 'Sensitive data',
+  'assistant.sensitiveHint': 'This is sensitive credential data (tokens / passwords / secrets). Querying is disabled; please handle it in the relevant module manually.',
+  'assistant.queryTitle': 'Query results',
+  'assistant.jump': 'Open & handle',
+  'assistant.usedBy': 'Used by these environments',
+  'assistant.dangerSafe': 'Safe action',
+  'assistant.dangerMedium': 'Needs confirmation',
+  'assistant.dangerDestructive': 'Destructive action',
+  'assistant.confirmAction': 'Confirm & run',
+  'assistant.confirmDestructive': 'This cannot be undone and will affect: {list}. Continue?',
+  'assistant.actionDone': 'Done: {msg}',
+  'assistant.actionFailed': 'Failed: {msg}',
+  'assistant.clear': 'Clear',
+  'assistant.examples': 'Try:'
 }
 
 const jaJP: MessageDict = {
@@ -1137,7 +1179,28 @@ const jaJP: MessageDict = {
   'webhook.group.cookie': 'Cookie',
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
-  'webhook.group.auth': 'ログイン'
+  'webhook.group.auth': 'ログイン',
+
+  // ---- スマートアシスタント（全体表示）----
+  'assistant.open': 'スマートアシスタント',
+  'assistant.placeholder': '例：「期限が近い環境は？」',
+  'assistant.send': '送信',
+  'assistant.thinking': '考え中…',
+  'assistant.empty': 'ローカルの AI アシスタントです。環境 / プロキシ / アカウント / Cookie / 拡張 / RPA / ログ / グループ / チームを検索できます。例：\n• 期限が近い環境は？\n• 3 日以内に切れるプロキシは？\n• 最近削除した環境は？\n• 環境 #12 を開いて',
+  'assistant.sensitiveTitle': '機密データ',
+  'assistant.sensitiveHint': 'これは機密の認証情報（トークン / パスワード / シークレット）です。検索は無効化されています。該当モジュールで手動でお願いします。',
+  'assistant.queryTitle': '検索結果',
+  'assistant.jump': '開いて処理',
+  'assistant.usedBy': '以下の環境で使用',
+  'assistant.dangerSafe': '安全な操作',
+  'assistant.dangerMedium': '確認が必要',
+  'assistant.dangerDestructive': '破壊的な操作',
+  'assistant.confirmAction': '確認して実行',
+  'assistant.confirmDestructive': '元に戻せません。影響：{list}。続行しますか？',
+  'assistant.actionDone': '完了：{msg}',
+  'assistant.actionFailed': '失敗：{msg}',
+  'assistant.clear': 'クリア',
+  'assistant.examples': '例：'
 }
 
 const deDE: MessageDict = {
@@ -1516,7 +1579,28 @@ const deDE: MessageDict = {
   'webhook.group.cookie': 'Cookies',
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'KI-Agent',
-  'webhook.group.auth': 'Login'
+  'webhook.group.auth': 'Login',
+
+  // ---- Assistent (global schwebend) ----
+  'assistant.open': 'Assistent',
+  'assistant.placeholder': 'Fragen, z. B. „welche Umgebungen laufen bald ab"',
+  'assistant.send': 'Senden',
+  'assistant.thinking': 'Denkt nach…',
+  'assistant.empty': 'Ihr lokaler KI-Assistent. Umgebungen / Proxys / Konten / Cookies / Erweiterungen / RPA / Protokolle / Gruppen / Teams abfragen. Z. B.:\n• welche Umgebungen laufen bald ab\n• welcher Proxy läuft in 3 Tagen ab\n• welche Umgebungen wurden kürzlich gelöscht\n• Umgebung #12 für mich öffnen',
+  'assistant.sensitiveTitle': 'Sensible Daten',
+  'assistant.sensitiveHint': 'Dies sind sensible Anmeldedaten (Tokens / Passwörter / Secrets). Abfrage deaktiviert; bitte im jeweiligen Modul manuell erledigen.',
+  'assistant.queryTitle': 'Suchergebnisse',
+  'assistant.jump': 'Öffnen & bearbeiten',
+  'assistant.usedBy': 'Genutzt von diesen Umgebungen',
+  'assistant.dangerSafe': 'Sichere Aktion',
+  'assistant.dangerMedium': 'Bestätigung nötig',
+  'assistant.dangerDestructive': 'Destruktive Aktion',
+  'assistant.confirmAction': 'Bestätigen & ausführen',
+  'assistant.confirmDestructive': 'Dies ist nicht umkehrbar und betrifft: {list}. Fortfahren?',
+  'assistant.actionDone': 'Erledigt: {msg}',
+  'assistant.actionFailed': 'Fehlgeschlagen: {msg}',
+  'assistant.clear': 'Leeren',
+  'assistant.examples': 'Probieren:'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {

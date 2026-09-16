@@ -4,6 +4,7 @@ import {
   Row, Col, Statistic, DatePicker, Alert
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
+import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
 import {
   PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, SafetyCertificateOutlined,
   ImportOutlined, ExportOutlined, ApiOutlined, QrcodeOutlined
@@ -37,6 +38,7 @@ interface ProfileBrief {
 
 export default function Proxies() {
   const { message } = useAppCtx()
+  useDeepLinkFocus()
   const [list, setList] = useState<ProxyDTO[]>([])
   const [stats, setStats] = useState<PoolStats | null>(null)
   const [open, setOpen] = useState(false)
@@ -424,6 +426,7 @@ export default function Proxies() {
         size="middle"
         columns={columns}
         dataSource={list}
+        onRow={(r: ProxyDTO) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
         pagination={{ pageSize: 10 }}
         scroll={{ x: 1350 }}
       />

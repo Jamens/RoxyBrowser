@@ -7,6 +7,7 @@ import { antdLocaleFor } from './i18n/antdLocale'
 import Login from './pages/Login'
 import AppLayout from './pages/Layout'
 import BrowserTab from './pages/BrowserTab'
+import AssistantChat from './components/AssistantChat'
 
 // 启动速度优化：除登录 / 浏览器全屏页外，其余页面按需懒加载，
 // 首屏只加载 AppLayout 骨架 + 当前路由对应 chunk，其余页面进入时再拉取。
@@ -100,6 +101,7 @@ function AppShell() {
               </Route>
             </Routes>
           </Suspense>
+          <AssistantChat />
         </HashRouter>
       </AntdApp>
     </ConfigProvider>

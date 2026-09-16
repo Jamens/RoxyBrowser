@@ -58,6 +58,7 @@ import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat, checkCloudStatus } from './agent/cloud'
 import { buildSupportSystemPrompt } from './agent/knowledge'
+import { planAssistant, executeAssistantAction, type PlannerCtx } from './assistantPlanner'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -2493,6 +2494,55 @@ function buildApiRouter(): express.Router {
       // Ollama 未启动 / 模型未拉取等场景给可操作的提示
       const detail = e instanceof Error ? e.message : String(e)
       res.status(502).json({ message: `本地模型调用失败：${detail}（请确认 Ollama 已启动且已 pull 模型 ${a.localModel}）` })
+    }
+  })
+
+  // ===== 智能助手（Planner）：自然语言查询全项目 + 危险动作提案 + 确认后执行 =====
+  // body: { message: string, history?: [{role,content}] }
+  // 返回 AssistantResult：understanding / reply / queries(带深链) / actions(待确认提案)
+  router.post('/assistant/chat', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const settings = await getSettings()
+    const a = settings.aiAgent || (DEFAULT_SETTINGS.aiAgent as AIAgentSettings)
+    if (!a.enabled) {
+      res.status(400).json({ message: '智能助手未启用，请先在「设置 → AI Agent」开启' })
+      return
+    }
+    const message = typeof (req.body || {}).message === 'string' ? (req.body as { message: string }).message.trim() : ''
+    if (!message) {
+      res.status(400).json({ message: '请输入要查询的内容' })
+      return
+    }
+    const history: OllamaMessage[] = Array.isArray((req.body || {}).history)
+      ? (req.body as { history: OllamaMessage[] }).history.filter((m) => m && m.role && m.content).slice(-12)
+      : []
+    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: req.role || '', username: req.username || 'assistant' }
+    try {
+      const result = await planAssistant(message, a, ctx, history)
+      res.json(result)
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      res.status(500).json({ message: `助手处理失败：${detail}` })
+    }
+  })
+
+  // 执行已确认的动作（前端分级确认后调用）。body: { kind, params }
+  router.post('/assistant/action', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const kind = (req.body || {}).kind
+    const params = (req.body || {}).params || {}
+    if (!kind || typeof kind !== 'string') {
+      res.status(400).json({ message: '缺少动作 kind' })
+      return
+    }
+    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: req.role || '', username: req.username || 'assistant' }
+    try {
+      const r = await executeAssistantAction(kind, params, ctx)
+      if (!r.ok) {
+        res.status(400).json({ message: r.message })
+        return
+      }
+      res.json(r)
+    } catch (e) {
+      res.status(500).json({ message: `动作执行失败：${e instanceof Error ? e.message : String(e)}` })
     }
   })
 

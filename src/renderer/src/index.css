@@ -208,3 +208,113 @@ body {
     background: radial-gradient(130% 130% at 50% 0%, #163a7a 0%, #0a1530 100%);
   }
 }
+
+/* ===== 智能助手深链定位高亮 ===== */
+.dl-focus {
+  outline: 2px solid #1677ff;
+  outline-offset: 2px;
+  border-radius: 6px;
+  transition: outline-color 0.3s ease;
+  animation: dlPulse 1.2s ease-in-out 2;
+}
+[data-theme='dark'] .dl-focus {
+  outline-color: #4096ff;
+}
+@keyframes dlPulse {
+  0%,
+  100% {
+    outline-color: #1677ff;
+  }
+  50% {
+    outline-color: rgba(22, 119, 255, 0.25);
+  }
+}
+
+/* ===== 智能助手悬浮窗 ===== */
+.assistant-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: #fff;
+  background: linear-gradient(135deg, #1677ff, #4096ff);
+  box-shadow: 0 6px 20px rgba(22, 119, 255, 0.45);
+  z-index: 1000;
+  transition: transform 0.2s ease;
+}
+.assistant-fab:hover {
+  transform: scale(1.06);
+}
+.assistant-msg {
+  margin-bottom: 12px;
+  display: flex;
+}
+.assistant-msg.user {
+  justify-content: flex-end;
+}
+.assistant-bubble {
+  max-width: 88%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.assistant-msg.user .assistant-bubble {
+  background: #1677ff;
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.assistant-msg.bot .assistant-bubble {
+  background: var(--assistant-bot-bg, #f0f3f8);
+  color: var(--assistant-bot-fg, #1f2329);
+  border-bottom-left-radius: 2px;
+}
+[data-theme='dark'] .assistant-msg.bot .assistant-bubble {
+  --assistant-bot-bg: #1f2733;
+  --assistant-bot-fg: #e6edf5;
+}
+.assistant-understand {
+  font-size: 11px;
+  color: #8c9bb0;
+  margin: 0 0 4px;
+}
+.assistant-row {
+  border: 1px solid #eaeef5;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #fff;
+}
+[data-theme='dark'] .assistant-row {
+  border-color: #2a3340;
+  background: #1a212b;
+}
+.assistant-row-title {
+  font-weight: 600;
+  cursor: pointer;
+  color: #1677ff;
+}
+.assistant-row-title:hover {
+  text-decoration: underline;
+}
+[data-theme='dark'] .assistant-row-title {
+  color: #4096ff;
+}
+.assistant-row-meta {
+  font-size: 12px;
+  color: #5b6675;
+  margin-top: 2px;
+}
+[data-theme='dark'] .assistant-row-meta {
+  color: #9aa7b8;
+}

@@ -16,6 +16,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
+import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
 import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 
@@ -52,6 +53,7 @@ const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '
 export default function Environments() {
   const { message } = useAppCtx()
   const { t } = useI18n()
+  useDeepLinkFocus()
   const [list, setList] = useState<ProfileDTO[]>([])
   const [groups, setGroups] = useState<GroupDTO[]>([])
   const [proxies, setProxies] = useState<ProxyDTO[]>([])
@@ -802,7 +804,8 @@ export default function Environments() {
           columns={columns}
           dataSource={list}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
-          pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 个环境` }}
+          onRow={(r: ProfileDTO) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
+          pagination={{ pageSize: 10, showTotal: (tt) => `共 ${tt} 个环境` }}
           scroll={{ x: 1170 }}
         />
       </Card>
@@ -867,6 +870,7 @@ export default function Environments() {
             rowKey="id"
             size="small"
             dataSource={trashList}
+            onRow={(r) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
             pagination={false}
             columns={[
               { title: '环境', dataIndex: 'name', key: 'name', ellipsis: true },
