@@ -82,6 +82,16 @@ function trayIconPath(): string {
   return candidates.find((p) => existsSync(p)) || candidates[0]
 }
 
+/** 主窗口 / 任务栏图标（与 tray 同套路的多形态路径探测），否则 dev 态显示 Electron 默认图标 */
+function appIconPath(): string {
+  const candidates = [
+    resolve(__dirname, '../../resources/icon.png'),
+    resolve(__dirname, '../../../app.asar.unpacked/resources/icon.png'),
+    resolve(__dirname, '../../../resources/icon.png')
+  ]
+  return candidates.find((p) => existsSync(p)) || candidates[0]
+}
+
 function createTray(apiBase: string) {
   try {
     const image = nativeImage.createFromPath(trayIconPath())
@@ -131,6 +141,7 @@ async function createMainWindow() {
     show: false,
     backgroundColor: '#f5f6f8',
     title: 'RoxyBrowser Clone — 指纹浏览器',
+    icon: appIconPath(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
