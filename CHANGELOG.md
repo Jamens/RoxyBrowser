@@ -9,6 +9,17 @@
 
 ---
 
+## 2026-09-16 · 智能助手 Planner（AI 客服 / 全项目自然语言查询）
+
+### 新增
+
+- **智能助手 Planner**：右下角悬浮气泡 + 抽屉式 AI 客服，支持对全项目数据用自然语言提问，并给出可点击深链定位到对应页面处理；可执行动作按危险分级（safe 直执行 / medium 确认条 / destructive 强确认弹窗 + 审计）。
+  - 三道闸（后端硬兜底，不信任模型自觉）：① 敏感拦截——`api_tokens`/`users` 整体禁查，`password`/`token`/`secret` 等字段后端直接剔除；② 只读白名单——entity/field/filter 必须落在白名单，QueryBuilder 参数化 + 强制 team/owner 隔离；③ 动作映射——8 个动作白名单，危险分级决定确认强度。
+  - 新增 `src/main/assistantSchema.ts`（查询白名单 + 动态时间系统提示）、`src/main/assistantPlanner.ts`（引擎 `planAssistant`/`executeAssistantAction`）、`src/renderer/src/components/AssistantChat.tsx`（悬浮 UI）、`src/renderer/src/hooks/useDeepLinkFocus.ts`（深链定位脉冲）。
+  - 路由：`POST /api/assistant/chat`、`POST /api/assistant/action`（均 `authMiddleware` 保护）。环境 / 代理 两张表接 `data-dl-id` 深链；「环境快过期」语义映射为所绑代理 `expiresAt` 7 天内。
+- **多轮对话修复**：归一化历史消息角色（`bot`→`assistant`），修复云端模型因非法 role 返回 400 的问题（`assistantPlanner.ts` 的 `normalizeRole` + 前端 history 构建）。
+- 提交：`fdd15e2`（feat + 多轮对话修复）。
+
 ## 2026-09-16 · RPA 脚本市场（内置预设一键安装）
 
 ### 新增
