@@ -37,6 +37,7 @@ import {
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { substituteSteps } from '../shared/rpa'
+import { MARKET_SCRIPTS } from './rpaMarket'
 import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig } from '../shared/types'
@@ -3449,6 +3450,45 @@ function buildApiRouter(): express.Router {
     if (!created.length) return res.status(400).json({ message: '没有有效的脚本可导入（需含 name 与 steps）' })
     await writeLog(req, 'import_rpa_script', `导入 RPA 脚本 ${created.length} 个`)
     res.json({ ok: true, created })
+  })
+
+  // ===== RPA 市场（内置预设脚本目录）=====
+  // 注意：/rpa/market 与 /rpa/market/install/:id 是静态前缀，必须排在 /rpa/:id 之前（既有约定）。
+  router.get('/rpa/market', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    res.json(
+      MARKET_SCRIPTS.map((m) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description,
+        category: m.category,
+        tags: m.tags,
+        stepCount: m.steps.length,
+        variables: m.variables,
+        note: m.note || '',
+        steps: m.steps
+      }))
+    )
+  })
+
+  // 从市场安装一个预设脚本到当前团队（克隆为一个新脚本，定时配置重置；用户可随后编辑/回放）
+  router.post('/rpa/market/install/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const m = MARKET_SCRIPTS.find((x) => x.id === req.params.id)
+    if (!m) return res.status(404).json({ message: '市场脚本不存在' })
+    const saved = await rpaRepo().save(
+      rpaRepo().create({
+        teamId: req.tid!,
+        ownerId: req.uid!,
+        name: m.name,
+        remark: `[市场] ${m.description}`.slice(0, 512),
+        steps: m.steps,
+        variables: normalizeVariables(m.variables),
+        scheduleEnabled: false,
+        scheduleIntervalMin: 30,
+        scheduleProfileId: null
+      })
+    )
+    await writeLog(req, 'install_rpa_market', `从市场安装脚本「${m.name}」(#${saved.id})`)
+    res.json({ ok: true, id: saved.id })
   })
 
   router.get('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {

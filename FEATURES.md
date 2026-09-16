@@ -272,7 +272,20 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 - **运行日志**（对标官方 4.0.2 实时监控）：RPA 页底部「运行日志」面板滚动展示本团队 RPA 相关记录（手动回放 / 定时完成 / 定时失败 / 定时跳过 / 录制），最新在上、固定高度滚动、每 5 秒自动刷新。
 - **隔离**：脚本按账户隔离（同其他业务数据一致）。
 
-后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`GET /api/rpa/export/:id`（导出）、`POST /api/rpa/import`（导入）、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`（回放，body 可带 `profileId` 与覆盖 `variables`）。
+#### 7.3.1 脚本市场（内置预设目录）
+
+把跨境 / 社媒运营的高频重复流程固化为**内置预设**，用户在 RPA 页「脚本市场」Tab 一键安装到自己的脚本库，省去从零录制。
+
+- **预设清单（6 个，按场景分类）**：
+  - SEO：`Google SERP 抓取`（搜索结果滚动采集）、`收录检测 site:`（站群收录核验）
+  - 电商：`亚马逊商品搜索比价`、`竞品价格监控`（配「定时执行」可周期巡检）
+  - 账号：`每日登录签到`（填账号密码自动登录）
+  - 社媒：`社媒定时发帖`（填正文自动发布）
+- **安装即克隆**：`POST /api/rpa/market/install/:id` 把预设克隆成当前团队的一条新脚本（归属当前用户、定时配置重置、备注带 `[市场]` 前缀），之后可像普通脚本一样编辑 / 回放 / 定时。
+- **预设结构**：每条预设含 `name / description / category / tags / steps(RpaStep[]) / variables / note`。设计原则：以 `navigate` + `wait` / `scroll` 为主、跨站点通用；`input` / `click` 这类依赖 DOM 选择器的步骤留作模板，附 `note` 提示按真实站点微调。变量用 `{{变量名}}` 暴露，回放时由 `shared/rpa.ts` 的 `substituteVars` 替换，账号密码等绝不写死。
+- **数据位置**：`src/main/rpaMarket.ts`（主进程专用纯数据模块，离线可单测）；`GET /api/rpa/market` 罗列目录、`POST /api/rpa/market/install/:id` 安装。前端在 `Rpa.tsx` 用 `Tabs` 拆出「我的脚本 / 脚本市场」两个视图，市场卡片支持「查看步骤」与「安装」。
+
+后端接口：`GET/POST /api/rpa`、`PUT/DELETE /api/rpa/:id`、`GET /api/rpa/export/:id`（导出）、`POST /api/rpa/import`（导入）、`GET /api/rpa/market`（预设目录）、`POST /api/rpa/market/install/:id`（安装）、`POST /api/rpa/record/start|stop`、`GET /api/rpa/record/status`、`POST /api/rpa/:id/run`（回放，body 可带 `profileId` 与覆盖 `variables`）。
 
 ```bash
 # 导出脚本（保存为 rpa-<id>-<name>.json）

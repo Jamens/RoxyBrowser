@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Space, Select, Input, InputNumber, Switch, Tag, Modal, Form, Popconfirm, Typography, Descriptions, Empty, Tooltip
+  Card, Table, Button, Space, Select, Input, InputNumber, Switch, Tag, Modal, Form, Popconfirm, Typography, Descriptions, Empty, Tooltip, Tabs, Row, Col
 } from 'antd'
 import {
   ReloadOutlined, VideoCameraOutlined, StopOutlined, CaretRightOutlined,
@@ -96,6 +96,57 @@ export default function Rpa() {
   // 编辑名称/备注
   const [editScript, setEditScript] = useState<RpaScriptDTO | null>(null)
   const [editForm] = Form.useForm()
+
+  // RPA 市场（内置预设脚本目录）
+  interface MarketScriptView {
+    id: string
+    name: string
+    description: string
+    category: string
+    tags: string[]
+    stepCount: number
+    variables: Record<string, string>
+    note: string
+    steps: RpaStep[]
+  }
+  const [activeTab, setActiveTab] = useState<'mine' | 'market'>('mine')
+  const [marketScripts, setMarketScripts] = useState<MarketScriptView[]>([])
+  const [marketLoading, setMarketLoading] = useState(false)
+  const [installedIds, setInstalledIds] = useState<Set<string>>(new Set())
+  const [viewMarketSteps, setViewMarketSteps] = useState<RpaStep[] | null>(null)
+  const [marketViewTitle, setMarketViewTitle] = useState('')
+
+  const loadMarket = useCallback(async () => {
+    setMarketLoading(true)
+    try {
+      const list = await api.get<MarketScriptView[]>('/api/rpa/market')
+      setMarketScripts(list)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setMarketLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    loadMarket()
+  }, [loadMarket])
+
+  const installMarket = async (m: MarketScriptView) => {
+    try {
+      const res = await api.post<{ id: number }>(`/api/rpa/market/install/${m.id}`)
+      message.success(`已安装「${m.name}」到「我的脚本」（#${res.id}）`)
+      setInstalledIds((prev) => new Set(prev).add(m.id))
+      setActiveTab('mine')
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  /** 市场分类 → Tag 颜色（与步骤标签同色系约定） */
+  function catColor(c: string): string {
+    return { SEO: 'geekblue', 电商: 'orange', 社媒: 'purple', 账号: 'green' }[c] || 'default'
+  }
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -358,9 +409,18 @@ export default function Rpa() {
           e.target.value = ''
         }}
       />
-      <Card
-        title="RPA 脚本 — 录制与回放"
-        extra={
+      <Tabs
+        activeKey={activeTab}
+        onChange={(k) => setActiveTab(k as 'mine' | 'market')}
+        items={[
+          {
+            key: 'mine',
+            label: '我的脚本',
+            children: (
+              <>
+                <Card
+                  title="RPA 脚本 — 录制与回放"
+                  extra={
           <Space>
             <Button icon={<UploadOutlined />} onClick={() => importInputRef.current?.click()}>
               导入
@@ -455,7 +515,77 @@ export default function Rpa() {
             })}
           </div>
         )}
-      </Card>
+                </Card>
+              </>
+            )
+          },
+          {
+            key: 'market',
+            label: '脚本市场',
+            children: (
+              <Card
+                title="脚本市场 — 一键安装预设自动化"
+                extra={<Tag color="blue">内置 {marketScripts.length} 个预设</Tag>}
+                loading={marketLoading}
+              >
+                {marketScripts.length === 0 && !marketLoading ? (
+                  <Empty description="暂无预设脚本" />
+                ) : (
+                  <Row gutter={[16, 16]}>
+                    {marketScripts.map((m) => (
+                      <Col xs={24} sm={12} lg={8} key={m.id}>
+                        <Card
+                          size="small"
+                          title={m.name}
+                          extra={<Tag color={catColor(m.category)}>{m.category}</Tag>}
+                        >
+                          <Typography.Paragraph type="secondary" style={{ minHeight: 66 }} ellipsis={{ rows: 3 }}>
+                            {m.description}
+                          </Typography.Paragraph>
+                          <Space wrap style={{ marginBottom: 8 }}>
+                            {m.tags.map((t) => (
+                              <Tag key={t}>{t}</Tag>
+                            ))}
+                          </Space>
+                          <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
+                            步骤 {m.stepCount} · 变量：
+                            {Object.keys(m.variables).map((k) => ` {{${k}}}`).join('、') || ' 无'}
+                          </div>
+                          {m.note && (
+                            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+                              提示：{m.note}
+                            </Typography.Paragraph>
+                          )}
+                          <Space>
+                            <Button
+                              size="small"
+                              icon={<EyeOutlined />}
+                              onClick={() => {
+                                setMarketViewTitle(m.name)
+                                setViewMarketSteps(m.steps)
+                              }}
+                            >
+                              查看步骤
+                            </Button>
+                            <Button
+                              size="small"
+                              type="primary"
+                              icon={<DownloadOutlined />}
+                              onClick={() => installMarket(m)}
+                            >
+                              {installedIds.has(m.id) ? '再次安装' : '安装'}
+                            </Button>
+                          </Space>
+                        </Card>
+                      </Col>
+                    ))}
+                  </Row>
+                )}
+              </Card>
+            )
+          }
+        ]}
+      />
 
       {/* 保存录制 */}
       <Modal
@@ -542,6 +672,22 @@ export default function Rpa() {
         width={640}
       >
         {viewScript?.steps.map((s, i) => (
+          <div key={i} style={{ fontSize: 12, lineHeight: '22px' }}>
+            <Tag color={s.type === 'navigate' ? 'geekblue' : undefined}>{i + 1}</Tag>
+            {stepText(s)}
+          </div>
+        ))}
+      </Modal>
+
+      {/* 市场脚本步骤预览 */}
+      <Modal
+        title={`步骤明细 — ${marketViewTitle}`}
+        open={!!viewMarketSteps}
+        footer={null}
+        onCancel={() => setViewMarketSteps(null)}
+        width={640}
+      >
+        {viewMarketSteps?.map((s, i) => (
           <div key={i} style={{ fontSize: 12, lineHeight: '22px' }}>
             <Tag color={s.type === 'navigate' ? 'geekblue' : undefined}>{i + 1}</Tag>
             {stepText(s)}
