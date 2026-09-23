@@ -418,6 +418,50 @@ app.listen(4000)
 - **验证**：离线单测 **98 项全绿** —— `test_trackers.cjs` 68 项（21 类追踪域命中 / 子域匹配 / **不误杀主域 13 项** / 不误杀 CDN 与错误上报 / 非法与 file·chrome·data 协议放过 / 大小写 / 自定义 extra / 清单不得含主域且无重复）+ `test_blocktrackers.cjs` 30 项（四 OS 默认开启 / 预设 / 老数据归一 / 显式开关保留 / 克隆继承 / 无效输入兜底）。node / web `tsc --noEmit` EXIT 0；build EXIT 0。真实 E2E（开窗访问带 GA 的站点看请求是否被拦）本沙箱未跑，沿用「用户自测」惯例。
 - **单测抓到的真实缺陷**：Mixpanel 的 SDK 实际走 `cdn.mxpnl.com`，清单里只写了 `mixpanel.com` 会漏拦，已补 `mxpnl.com`。
 
+### 7.12 指纹深度补齐（WebGPU + WebAudio）
+
+对标官方近期迭代方向：Chromium 150→153 的多次内核更新都在调 WebGL 输出规则、WebAudio、WebGPU，说明**竞争重心已从功能广度转向指纹深度**。本项目此前在这两个维度是空的，属于「会因为自相矛盾而主动暴露」的缺口——矛盾信号比不伪装更可疑，等于告诉检测方「这个环境被改过」。
+
+#### WebGPU（`src/shared/webgpu.ts`，纯函数可单测）
+
+真实 Chrome 的 `navigator.gpu.requestAdapter()` 会暴露 `GPUAdapterInfo`（`vendor` / `architecture`），creepjs / pixelscan / browserleaks 已普遍采集。此前只伪造 WebGL 而放过 WebGPU，会产出「WebGL 说 RTX 4090、WebGPU 说宿主机集显」的矛盾。
+
+- **不加数据库字段**：`webGpuInfoFor(os, webglVendor, webglRenderer)` 完全由既有 WebGL 字段推导，天然自洽，且**历史环境零迁移、自动生效**（无需 `normalizeFingerprint` 兜底，也不用改指纹表单）。
+- **在真实实例上改写**：只在原生 `GPUAdapterInfo` 实例上用不可枚举 getter 覆盖 `vendor` / `architecture`。这样 `instanceof GPUAdapterInfo` 成立、`subgroupMinSize` / `subgroupMaxSize` / `isFallbackAdapter` 等字段继续由原生提供、`Object.keys` 仍为空。早期「塞一个自制普通对象」的写法会让这些维度变成 `undefined` 且 `instanceof` 判 `false`，反而制造出真实浏览器不可能出现的值。
+- **不识别就放弃伪造**：遇到未见过的型号（用户可在 `webglRenderer` 手填）返回空信息，体检项标记为「不适用」，而不是兜底成某个架构去和 WebGL 打架。
+- **`device` / `description` 留空串**：真实 Chrome 未开启 WebGPU 开发者特性时这两项就是空串，填 ANGLE 字符串会与绝大多数真实用户不符。
+- **iOS 整体隐藏**：iOS WebKit 不支持 WebGPU，伪装成 iOS 时必须移除 `navigator.gpu`。注意这里**不能用 `delete`**——WebIDL 属性定义在 `Navigator.prototype` 上，`delete` 只删自身属性、对原型属性静默无效；本项目用 own getter 返回 `undefined` 来遮蔽（同一坑此前也存在于 `userAgentData` 的 iOS 分支，已一并修复）。
+- 架构推导覆盖指纹池全部 17 项（NVIDIA Ada/Ampere/Turing/Pascal、Intel Xe-LPG/Gen12LP/Gen9、AMD RDNA1-3、Apple、Adreno、Mali），离线单测逐项核对。
+
+#### WebAudio（`src/shared/webaudio.ts`，纯函数可单测）
+
+音频指纹是 fingerprintjs 的核心熵源之一。此前只给 `AudioBuffer.getChannelData` 加了噪声（**1 个维度**），而检测站更常采集的向量全部裸奔。
+
+| 向量 | 处理 |
+| --- | --- |
+| `AudioContext.sampleRate` | 44100 / 48000 按 seed 派生（桌面 48000 约 72%） |
+| `AudioContext.baseLatency` | `bufferSize / sampleRate`，bufferSize ∈ {128, 256, 512}，与采样率自洽 |
+| `destination.maxChannelCount` | 2（约 90%）/ 6 / 8 |
+| `DynamicsCompressorNode.reduction` | 小幅负 dB（-0.001 ~ -3），贴合真实量级 |
+| `AudioBuffer.getChannelData` | 既有：确定性微扰噪声（seed 派生） |
+
+- **不动 `OfflineAudioContext`**：它的采样率必须等于构造参数，改了会让渲染结果与预期长度对不上，比不改更糟。补丁打在 `BaseAudioContext.prototype`（`sampleRate` 真正所在处）并用 `instanceof OfflineAudioContext` 放过它。
+- **刻意不注入 `outputLatency`**：真实 AudioContext 在无音频播放时该值为 0，强行填 0.015~0.045 会与真实人群脱节，而它几乎不泄漏硬件信息——收益不足以抵消穿帮风险（宁缺毋滥）。
+- 复用既有 `audioNoise` 开关：关闭即完全不伪装，尊重用户显式设置。
+
+#### 体检接入
+
+新增三个检查项，可在「环境体检」报告里直接看到注入是否生效：
+
+| 检查项 | 权重 | 实测来源 |
+| --- | --- | --- |
+| `WebGPU 显卡` | 8 | `requestAdapter().info.vendor / architecture`（无 GPU 时标记不适用） |
+| `音频特征（采样率/延迟/声道）` | 6 | `new AudioContext()` 的 sampleRate / baseLatency / maxChannelCount |
+| `音频压缩器 reduction` | 3 | `createDynamicsCompressor().reduction` |
+
+- 采集走 `Promise`（`requestAdapter` 异步），带 **3 秒超时**保护，避免 GPU 进程卡住导致体检请求悬挂。
+- 环境限制不误报：`AudioContext` 建不起来、或 WebGPU 拿不到 adapter 时，对应项标记「不适用」（权重 0），与既有 WebGL 的处理一致。
+
 ### 8. 操作日志
 
 
@@ -667,6 +711,43 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 - **执行日志**：AI 执行的开始 / 完成 / 失败写入操作日志（见 §8），日志页可用 `AI 执行开始 / 完成 / 失败` 标签追溯每次运行的指令、环境与结果
 - **对话态跨页保活**：对话内容、输入框残值、当前标签页（自动 / 对话 / 客服 / 执行）通过模块级 `src/renderer/src/agentChatStore.ts`（`useSyncExternalStore` 单例）持久化。切到其它页面再切回不会清空对话，也不会回落到默认的「自动」标签，停留在离开前的标签继续对话（提交 `45171b4`）
 - **AI 定时自动化**：把执行闭环升级为无人值守的定时任务。设置页「AI 定时自动化」可增删改多条任务（自然语言指令 + 目标环境 + 触发间隔 + 单次最大步数 + 沉淀 RPA 开关），`AgentRunner.startAutoTaskScheduler()` 每 60s 重读 `AppSettings.aiAutoTasks` 按 `intervalMin` 去抖触发；触发时复用 `agent:start` 同款视觉预检、仅驱动运行态环境（未运行自动跳过、绝不自动开窗），跑完若开启「沉淀为 RPA 模板」则把动作序列（`rpaSteps`）落库为新的 RPA 脚本（默认关闭定时）供离线零 token 回放。调度与执行逻辑集中在 `src/main/agent/runner.ts` 的 `runScheduledTask()` / `tickAutoTasks()`，RPA 落库走 `server.ts` 的 `saveRpaFromSteps()`（按源环境取团队 / 创建者）。
+
+## 14. 智能助手 Planner（AI 客服 / 全项目自然语言查询）
+
+右下角悬浮气泡 + 抽屉式 AI 客服（登录页与全屏浏览器页不显示）。用自然语言问全项目的数据，结果带**深链**可一键跳转定位处理；可顺手执行动作，按危险分级确认。
+
+### 三道闸（后端硬兜底，不信任模型自觉）
+
+模型的输出只是「提案」，所有校验都在后端：
+
+1. **敏感拦截**：`api_tokens` / `users` 整体禁查；`proxies.username|password`、`accounts.password`、`cookies.value`、`api_tokens.token`、`users.passwordHash|twoFactorSecret` 等字段后端直接剔除。命中时返回「该数据敏感，暂不提供查询，请到对应模块手动操作」，而不是查询结果。
+2. **只读白名单**：`src/main/assistantSchema.ts` 定义可查实体与字段；`entity` / `field` / `filter` 必须落在白名单内，否则降级或拒绝。查询走 TypeORM QueryBuilder **参数化**，并强制 `teamId` + `ownerId` 隔离（admin 不加 ownerId），`limit` 限制 1~50。
+3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 8 个动作，按 `danger` 分级——
+
+| 分级 | 动作 | 前端确认方式 |
+| --- | --- | --- |
+| `safe` | `openEnv` / `runRpa` | 直接执行 |
+| `medium` | `assignProxy` / `renameProfile` | 确认条 |
+| `destructive` | `deleteEnv` / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
+
+动作执行严格复用 server 既有逻辑（删代理先解绑引用、转移环境级联 Cookie / 账号），保证与手动操作行为一致。
+
+### 接口
+
+- `POST /api/assistant/chat`（需登录）——body `{ message, history? }`。校验 `aiAgent.enabled`，构造 `PlannerCtx` 后调 `planAssistant()`；返回 `{ ok, understanding, reply, intent, sensitiveBlocked?, queries[], actions[] }`。`queries[]` 每行带 `_deepLink`，点「跳转处理 →」直达对应页面。
+- `POST /api/assistant/action`（需登录）——body `{ kind, params }`，前端分级确认后调用，返回 `{ ok, message }`。
+
+### 关键语义
+
+「环境快过期」本身没有过期字段，映射为**所绑定代理的 `expiresAt` 落在 `now ~ now+7天`**（阈值可配，说「3天内」即用 3 天）。系统提示里注入 `CURRENT_TIME` / `NOW_PLUS_3D` / `NOW_PLUS_7D`，模型据此生成 `between` 过滤条件；结果还会经 `enrich` 反向补出「使用该代理的环境」，更贴近用户真实意图。
+
+### 深链定位
+
+结果行的 `_deepLink` 形如 `#/envs?focus=12`，前端 `useDeepLinkFocus()` 读 `focus` 参数后滚动到 `[data-dl-id="12"]` 并加脉冲高亮。环境页与代理页已接入；账号 / Cookie / 扩展 / RPA / 日志 / 团队页目前只跳不定位。
+
+### 前置条件
+
+需在「设置 → AI Agent」开启。默认本地 Ollama（`qwen2.5:7b`，零 token），也可在设置里切云端 BYOK。历史消息角色会归一化（`bot` → `assistant`），否则云端厂商会因非法 role 返回 400。
 
 ## 运行时验证（真实窗口 E2E）
 

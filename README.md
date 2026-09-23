@@ -35,7 +35,9 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 首次启动会自动建库、建表，并创建默认账号：**`admin` / `123456`**。
 
-**运行行为**：关闭主窗口不会退出程序，而是最小化到系统托盘，本地 API 与自动化接口继续提供服务；**单击托盘图标即可重新打开主窗口**，彻底退出请右键托盘图标 → 「退出」。托盘图标由 `node scripts/gen-tray-icon.mjs` 生成到 `resources/tray.png`（纯 Node 实现，无第三方依赖）。
+**运行行为**：关闭主窗口不会退出程序，而是最小化到系统托盘，本地 API 与自动化接口继续提供服务；**单击托盘图标即可重新打开主窗口**，彻底退出请右键托盘图标 → 「退出」。
+
+**应用图标**（`resources/`）：`icon.ico` 为品牌图标（蓝紫渐变圆角方块 + 浏览器窗口 + 指纹），含 16–256 七种尺寸，供 exe / 安装包 / 任务栏使用；`icon.png`（512）用于 Linux 与开发态窗口；`tray.png`（32）为托盘图标。三者在 `src/main/index.ts` 里按「asar 内 / asar.unpacked / extraResources」三种路径依次探测。
 
 > **端口说明**：默认监听 `39100`，若被占用会自动递增。外部脚本不要硬编码端口，启动后读取 `~/.roxy-clone/api-base.json` 获取真实地址：
 >
@@ -101,7 +103,7 @@ mysql -uroot -p1234560 < db/schema.sql
 ## 核心功能
 
 - **环境管理**：无限创建隔离环境（每个独立 `persist:env-{id}` session），批量开关、分组筛选、回收站、整环境导出 / 导入迁移、手动切换线路
-- **浏览器指纹**：UA / UA-CH / 平台 / 语言 / 时区 / 分辨率 / CPU·内存 / Canvas·Audio 噪声 / WebGL / WebRTC / 字体防泄漏，桌面 + 移动端四形态，另附指纹预设库；支持内核版本（Chrome 127–132 大版本）切换，UA 与 UA-CH 客户端提示同步一致
+- **浏览器指纹**：UA / UA-CH / 平台 / 语言 / 时区 / 分辨率 / CPU·内存 / Canvas·Audio 噪声 / **WebGL + WebGPU** / **WebAudio 完整特征** / WebRTC / 字体防泄漏 / 地理位置，桌面 + 移动端四形态，另附指纹预设库；支持内核版本（Chrome 127–132 大版本）切换，UA 与 UA-CH 客户端提示同步一致
 - **代理 IP**：HTTP(S) / SOCKS5，一键检测（出口 IP / 地区 / 延迟 / 匿名度）、IP 池视角、一键分配、定时巡检、扫码导出
 - **环境体检**：伪装度评分 + 一致性红绿灯——把「设定指纹」与「环境窗口内实测回读值」逐项对撞（详见下节）
 - **环境克隆工厂**：以某个环境为母本一键派生 N 个副本——行为一致（系统 / UA / 语言 / 时区）、指纹各异（分辨率 / CPU / 内存 / 显卡 / 字体），详见下节
@@ -120,6 +122,8 @@ mysql -uroot -p1234560 < db/schema.sql
 - **环境截图**：环境列表每行「截图」即可截取运行中环境窗口的当前视口为 PNG（用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕），弹窗内可一键下载；环境需先打开，详见下节
 - **地理位置伪装（GEO）**：覆盖 `navigator.geolocation`，按环境时区回灌「代表城市」坐标；坐标与时区联动自洽，避免「东京时区 + 纽约坐标」这类自相矛盾的关联信号，详见下节
 - **追踪器屏蔽**：环境级开关，拦截已知分析 / 广告 / 埋点域名的请求（GA、GTM、Facebook Pixel、Hotjar、Mixpanel 等），避免反复调研竞品时被对方埋点、Cookie 或第三方脚本识别甚至反监控；只拦明确的统计 / 广告子域，不影响登录与正常 CDN 资源，详见下节
+- **指纹深度补齐（WebGPU / WebAudio）**：补齐此前缺失的两个高熵指纹维度，消除「WebGL 与 WebGPU 说法不一致」「音频特征裸奔」这类**自相矛盾而主动暴露**的缺口，详见下节
+- **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -250,6 +254,25 @@ app.listen(4000)
 - **开关**：`Fingerprint.blockTrackers`，新建环境**默认开启**（与 Canvas / Audio 噪声一致），可在环境表单「高级设置」里单独关闭；克隆派生继承母本设置，保持批量号行为一致。
 - **兼容性**：本功能上线前创建的环境没有该字段，按「不改变既有环境行为」的原则默认不拦截，在表单里开启后生效。
 
+### 指纹深度补齐（WebGPU + WebAudio）
+
+官方产品的迭代重心已从「功能广度」转向**指纹深度**（Chromium 150→153 多次内核更新都在调 WebGL 输出规则、WebAudio、WebGPU）。本项目此前在这两个维度上是空的，属于**会因为自相矛盾而主动暴露**的缺口。
+
+**WebGPU**（`src/shared/webgpu.ts`）：真实 Chrome 的 `navigator.gpu.requestAdapter()` 会暴露 `GPUAdapterInfo`（vendor / architecture），creepjs、pixelscan、browserleaks 等检测站已普遍采集。此前只伪造了 WebGL 而放过 WebGPU，会产出「WebGL 说 RTX 4090、WebGPU 说宿主机集显」的矛盾信号——**矛盾比不伪装更可疑**，等于告诉检测方「这个环境被改过」。
+
+- **不加数据库字段**：`info` 完全由已有的 `webglVendor` / `webglRenderer` 推导，天然与 WebGL 自洽，且历史环境**零迁移、自动生效**。
+- **在真实实例上改写**：只在原生 `GPUAdapterInfo` 实例上覆盖 `vendor` / `architecture` 两个不可枚举 getter，这样 `instanceof GPUAdapterInfo` 依然成立、`subgroupMinSize` 等其余字段继续由原生提供。早期塞一个自制普通对象的做法会让这些维度变成 `undefined` 且 `instanceof` 判 false，反而制造「真实浏览器不可能出现的值」。
+- **不识别就放弃伪造**：遇到没见过的型号（用户手填的 `webglRenderer`）返回空信息，让体检项标记为「不适用」，而不是兜底成某个架构去和 WebGL 打架。
+- **iOS 整体隐藏**：iOS WebKit 不支持 WebGPU，伪装成 iOS 时必须移除 `navigator.gpu`。
+
+**WebAudio**（`src/shared/webaudio.ts`）：音频指纹是 fingerprintjs 的核心熵源之一。此前只给 `AudioBuffer.getChannelData` 加了噪声（**1 个维度**），而检测站更常采集的 `sampleRate`、`baseLatency`、`maxChannelCount`、`DynamicsCompressorNode.reduction` 全部裸奔。
+
+- 由环境 seed 确定性派生，保证「同环境稳定、异环境不同」；`baseLatency` 恒等于 `bufferSize / sampleRate`（128 / 256 / 512），不会出现自相矛盾的数值组合。
+- **不动 `OfflineAudioContext`**：它的采样率必须等于构造参数，改了会让渲染结果与预期长度对不上，比不改更糟。补丁打在 `BaseAudioContext.prototype` 上并用 `instanceof` 放过它。
+- **刻意不注入 `outputLatency`**：真实 AudioContext 在无音频播放时该值为 0，强行填 0.015~0.045 会与真实人群脱节，而它本身几乎不泄漏硬件信息——收益不足以抵消穿帮风险。
+
+两项均已接入**环境体检**（新增 `WebGPU 显卡` / `音频特征` / `音频压缩器 reduction` 三个检查项），可在体检报告里直接看到注入是否生效。
+
 ### 脚本市场（RPA 预设目录）
 
 指纹浏览器的核心场景是跨境电商 / 海外社媒矩阵运营，这类账号的日常操作高度重复。脚本市场把这些高频流程固化为**内置预设**，用户在 RPA 页「脚本市场」Tab 一键安装到自己的脚本库即可回放，省去从零录制。
@@ -258,6 +281,16 @@ app.listen(4000)
 - **安装即克隆**：`POST /api/rpa/market/install/:id` 把预设克隆成当前团队的一条新脚本（归属当前用户，定时配置重置），之后可像普通脚本一样编辑 / 回放 / 定时。
 - **预设设计原则**：以 `navigate`（开 URL）+ `wait` / `scroll` 为主，跨站点通用、装完即跑；`input` / `click` 这类依赖 DOM 选择器的步骤留作模板，附 `note` 提示用户按自己站点的真实 DOM 微调。所有可参数化部分用 `{{变量名}}` 暴露（`shared/rpa.ts` 的 `substituteVars` 回放时替换），账号密码等绝不写死在脚本里。
 - **数据位置**：`src/main/rpaMarket.ts`（主进程专用纯数据模块），`GET /api/rpa/market` 罗列目录、`POST /api/rpa/market/install/:id` 安装；前端在 `Rpa.tsx` 用 Tabs 拆出「我的脚本 / 脚本市场」两个视图。
+
+### 智能助手 Planner（AI 客服）
+
+右下角悬浮气泡（登录页与全屏浏览器页不显示），打开即用自然语言问全项目的数据，例如「哪些环境快过期了」「哪个代理 3 天内到期」「最近删了哪些环境」。
+
+- **查得到**：覆盖环境 / 代理 / 账号 / Cookie / 扩展 / RPA 脚本 / 操作日志 / 分组 / 团队。每条结果都带**深链**，点「跳转处理 →」直接定位到对应页面并高亮该行（环境页与代理页已接入）。
+- **答得了语义**：「环境快过期」本身没有过期字段，会映射为「所绑定代理的 `expiresAt` 在未来 7 天内」，并在结果里补出「使用该代理的环境」。
+- **做得到（且可控）**：可顺手执行动作，按危险分级确认——`safe`（打开环境、跑 RPA）直接执行；`medium`（分配代理、重命名）确认条；`destructive`（删除环境 / 代理、转团队、移除成员）强确认弹窗 + 写敏感审计。
+- **敏感数据后端硬拦截**：`api_tokens` / `users` 整体禁查，密码 / 令牌 / Cookie 值等字段后端直接剔除，返回「该数据敏感，请到对应模块手动操作」。三道闸（敏感拦截 → 只读白名单 → 动作映射）全在后端兜底，**不依赖模型自觉**；查询走白名单 + QueryBuilder 参数化，并强制 team / owner 隔离。
+- **前置条件**：需在「设置 → AI Agent」开启；默认本地 Ollama（`qwen2.5:7b`，零 token），也可切云端 BYOK。
 
 ## 目录结构
 
@@ -282,6 +315,8 @@ src/
 │   ├── types.ts              # DTO 与指纹类型
 │   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池 / GEO 坐标 / 反追踪开关）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
+│   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
+│   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
 │   ├── countries.ts          # 16 个主流跨境电商国家（国家码 / 中英文名 / IANA 时区 / 默认语言）
 │   ├── locales.ts            # 支持的语言（zh-CN / en-US / ja-JP / de-DE）与 antd·dayjs 包名映射
 │   ├── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）

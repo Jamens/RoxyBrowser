@@ -9,6 +9,28 @@
 
 ---
 
+## 2026-09-24 · 指纹深度补齐（WebGPU 伪装 + WebAudio 完整特征）
+
+### 新增
+
+- **WebGPU 指纹伪装**：真实 Chrome 的 `navigator.gpu.requestAdapter()` 会暴露 `GPUAdapterInfo`（vendor / architecture），creepjs / pixelscan / browserleaks 已普遍采集。此前只伪造了 WebGL 而放过 WebGPU，会产出「WebGL 说 RTX 4090、WebGPU 说宿主机集显」的矛盾信号——**矛盾比不伪装更可疑**，等于告诉检测方「这个环境被改过」。
+  - `src/shared/webgpu.ts`（纯函数、可单测）的 `webGpuInfoFor(os, webglVendor, webglRenderer)` 由**既有 WebGL 字段推导**，不加数据库字段，因此历史环境**零迁移、自动生效**（无需 `normalizeFingerprint` 兜底，也不用改指纹表单）。
+  - **在真实实例上改写**：只在原生 `GPUAdapterInfo` 实例上用不可枚举 getter 覆盖 `vendor` / `architecture`，使 `instanceof GPUAdapterInfo` 成立、`subgroupMinSize` / `subgroupMaxSize` / `isFallbackAdapter` 继续由原生提供、`Object.keys` 仍为空。塞自制普通对象的写法会让这些维度变成 `undefined` 且 `instanceof` 判 `false`，反而制造出真实浏览器不可能出现的值。
+  - **识别不出就放弃伪造**：`webglRenderer` 允许手填，遇到未见过的型号返回空信息（体检项标记为「不适用」），而不是兜底成某个架构去和 WebGL 打架。`device` / `description` 保持空串——真实 Chrome 未开启开发者特性时就是空串。
+  - iOS WebKit 不支持 WebGPU，伪装成 iOS 时整体隐藏 `navigator.gpu`。
+- **WebAudio 完整指纹**：音频指纹是 fingerprintjs 的核心熵源之一，此前只给 `AudioBuffer.getChannelData` 加了噪声（**1 个维度**），而检测站更常采集的 `sampleRate` / `baseLatency` / `maxChannelCount` / `DynamicsCompressorNode.reduction` 全部裸奔。
+  - `src/shared/webaudio.ts`（纯函数、可单测）由环境 seed 确定性派生，保证「同环境稳定、异环境不同」；`baseLatency` 恒等于 `bufferSize / sampleRate`（128 / 256 / 512），不会出现自相矛盾的数值组合。
+  - **不动 `OfflineAudioContext`**：其采样率必须等于构造参数，改了会让渲染结果与预期长度对不上。补丁打在 `BaseAudioContext.prototype`（`sampleRate` 真正所在处）并用 `instanceof` 放过它。
+  - **刻意不注入 `outputLatency`**：真实 AudioContext 在无音频播放时该值为 0，强行填 0.015~0.045 会与真实人群脱节，而它几乎不泄漏硬件信息——收益不足以抵消穿帮风险。
+  - 复用既有 `audioNoise` 开关：关闭即完全不伪装。
+- **体检新增三项**：「WebGPU 显卡」（权重 8）、「音频特征（采样率/延迟/声道）」（6）、「音频压缩器 reduction」（3），可在体检报告里直接看到注入是否生效。采集走 `Promise`（`requestAdapter` 异步）并带 **3 秒超时**，避免 GPU 进程卡住导致体检请求悬挂。
+- 提交：`82adf9b`（feat + 修复）。
+
+### 修复
+
+- **iOS 下移除 `navigator.userAgentData` 一直失效**（既有缺陷，本次顺带修复）：原实现用 `delete navigator.userAgentData`，但 WebIDL 定义的属性在 `Navigator.prototype` 上，而 `delete` **只能删除自身属性**——对原型属性返回 `true` 却什么也不删，是彻底的静默失效。结果是伪装成 iOS 时 UA-CH 仍然暴露（体检 `uaData` 项必然报红）。现改为用返回 `undefined` 的 own getter 遮蔽原型 getter；同因修复也避免了新增的 `navigator.gpu` 重蹈覆辙。
+- 提交：`82adf9b`（feat + 修复）。
+
 ## 2026-09-16 · 应用品牌图标替换
 
 ### 新增
