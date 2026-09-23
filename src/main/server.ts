@@ -59,6 +59,7 @@ import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollam
 import { cloudChat, checkCloudStatus } from './agent/cloud'
 import { buildSupportSystemPrompt } from './agent/knowledge'
 import { planAssistant, executeAssistantAction, type PlannerCtx } from './assistantPlanner'
+import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -82,6 +83,8 @@ export interface BrowserBridge {
   probeFingerprint(profileId: number): Promise<FingerprintProbe | null>
   /** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer，窗口未运行抛错 */
   captureScreenshot(profileId: number): Promise<Buffer>
+  /** 在线检测站实战验证：导航到第三方检测站并抓回文本与截图，窗口未运行抛错 */
+  scanSite(profileId: number, siteId: string): Promise<ScanResult>
 }
 let browserBridge: BrowserBridge | null = null
 export function setBrowserBridge(b: BrowserBridge) {
@@ -1477,6 +1480,40 @@ function buildApiRouter(): express.Router {
       res.json({ ok: true, image: dataUrl, capturedAt: new Date().toISOString() })
     } catch (e) {
       res.status(400).json({ message: (e as Error).message })
+    }
+  })
+
+  // ===== 在线检测站实战验证 =====
+  // 与环境体检互补：体检是「自己出题自己判卷」（设定值 ↔ 回读值），
+  // 这里则是让第三方检测站从外部视角评判，能发现设定值互相矛盾、
+  // 或某项指标落在真实人群分布之外这类体检抓不到的问题。
+  // 站点清单不含凭据，直接下发即可；扫描结果含截图，故需登录鉴权。
+  router.get('/scan-sites', authMiddleware, (_req: AuthedRequest, res: Response) => {
+    res.json(
+      SCAN_SITES.map((s) => ({ id: s.id, name: s.name, url: s.url, desc: s.desc }))
+    )
+  })
+
+  router.post('/profiles/:id/scan', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: req.tid, ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
+    if (p.status !== 'running') return res.status(400).json({ message: '请先打开环境窗口，再执行在线检测' })
+    if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+    const siteId = String((req.body || {}).siteId || '')
+    const site = getScanSite(siteId)
+    if (!site) return res.status(400).json({ message: `未知检测站：${siteId}` })
+    try {
+      const result: ScanResult = await browserBridge.scanSite(p.id, siteId)
+      // 抓取异常（网络不通 / 被验证拦截）同样要留痕：这类记录恰恰最需要追溯
+      const tail = result.error ? `（抓取异常：${result.error}）` : ''
+      await writeLog(req, 'scan_profile', `对环境「${p.name}」(#${p.id}) 执行在线检测（${site.name}）${tail}`)
+      res.json(result)
+    } catch (e) {
+      const detail = (e as Error).message
+      await writeLog(req, 'scan_profile', `对环境「${p.name}」(#${p.id}) 执行在线检测失败（${site.name}）：${detail}`)
+      res.status(400).json({ message: detail })
     }
   })
 

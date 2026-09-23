@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress
+  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { useI18n } from '../i18n'
@@ -21,6 +21,30 @@ import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types
 import { osLabel } from '@shared/types'
 
 // 体检项中文标签（后端只回 key 与「设定值/实测值」，展示名放前端）
+// 在线检测站（后端 SCAN_SITES 只把这几个前端可见字段下发，waitMs / hints 属内部配置）
+interface ScanSiteItem {
+  id: string
+  name: string
+  url: string
+  desc: string
+}
+interface ScanResultItem {
+  siteId: string
+  name: string
+  url: string
+  title: string
+  /** 实际落地 URL（与 url 不同说明发生了跳转或撞上人机验证页） */
+  finalUrl: string
+  /** 页面可见文本（后端已去噪截断） */
+  text: string
+  /** 按关键词摘录的关键行 */
+  highlights: string[]
+  /** 截图 data URL（证据留存） */
+  screenshot: string
+  checkedAt: string
+  error?: string
+}
+
 const HEALTH_LABELS: Record<string, string> = {
   userAgent: 'User Agent',
   platform: '平台 Platform',
@@ -82,6 +106,11 @@ export default function Environments() {
   const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [healthName, setHealthName] = useState('')
+  // 在线检测站实战验证：体检是「自己出题自己判卷」，这里让第三方站点从外部视角评判
+  const [healthId, setHealthId] = useState(0)
+  const [scanSites, setScanSites] = useState<ScanSiteItem[]>([])
+  const [scanLoading, setScanLoading] = useState('')
+  const [scanResult, setScanResult] = useState<ScanResultItem | null>(null)
   // 环境克隆工厂（以某环境为母本批量派生，指纹微抖动）
   const [cloneOpen, setCloneOpen] = useState(false)
   const [cloneSrc, setCloneSrc] = useState<ProfileDTO | null>(null)
@@ -192,16 +221,41 @@ export default function Environments() {
       return
     }
     setHealthName(r.name)
+    setHealthId(r.id)
     setHealthReport(null)
+    setScanResult(null)
     setHealthLoading(true)
     setHealthOpen(true)
     try {
       setHealthReport(await api.post<HealthReport>(`/api/profiles/${r.id}/healthcheck`, {}))
+      // 站点清单与体检报告同屏展示，顺带拉一次即可（不随每次体检重复请求）
+      if (scanSites.length === 0) {
+        try {
+          setScanSites(await api.get<ScanSiteItem[]>('/api/scan-sites'))
+        } catch {
+          /* 拉取失败不阻断体检报告 */
+        }
+      }
     } catch (e) {
       message.error((e as Error).message)
       setHealthOpen(false)
     } finally {
       setHealthLoading(false)
+    }
+  }
+
+  // 在线检测：把环境窗口导航到第三方检测站，抓回页面文本与截图。
+  // 会占用环境窗口（导航过去），因此同一时间只允许跑一个站点。
+  const runScan = async (siteId: string) => {
+    if (!healthId) return
+    setScanLoading(siteId)
+    setScanResult(null)
+    try {
+      setScanResult(await api.post<ScanResultItem>(`/api/profiles/${healthId}/scan`, { siteId }))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setScanLoading('')
     }
   }
 
@@ -983,6 +1037,118 @@ export default function Environments() {
             <div style={{ fontSize: 12, color: '#888', marginTop: 16 }}>
               实测值取自环境窗口内真实读取（含原型函数是否被改写），因此能反映指纹注入是否真的生效，而不只是配置是否保存成功。
             </div>
+
+            {/* 在线检测：第三方外部视角，与上面的自证式体检互补 */}
+            <Typography.Title level={5} style={{ marginTop: 24 }}>
+              在线检测（外部视角）
+            </Typography.Title>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 10 }}
+              message="检测会把该环境的真实指纹信息发送给第三方站点"
+              description={
+                <span style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  上面的体检是「自己出题自己判卷」，只能证明注入生效；这里让第三方检测站从外部评判，
+                  能发现设定值互相矛盾、或某项指标落在真实人群分布之外的问题。
+                  点击站点会<b>把环境窗口导航到该站点</b>（约 10–30 秒，取决于站点与网络），结果回写到这里。
+                  为免丢失登录态，<b>窗口不会自动跳回</b>，需要时请自行后退。
+                  对高价值账号环境请谨慎使用——检测站会记录来访指纹，
+                  并会在该环境留下 Cookie / localStorage（长期把环境与该站点绑定）。
+                </span>
+              }
+            />
+            <Space wrap style={{ marginBottom: 12 }}>
+              {scanSites.map((s) => (
+                <Tooltip key={s.id} title={s.desc}>
+                  <Button
+                    size="small"
+                    loading={scanLoading === s.id}
+                    // 注意：antd 的 loading 并**不会**自动禁用按钮，必须显式 disabled。
+                    // 且不能写成 `scanLoading !== s.id`——那样正在跑的那个按钮反而可点，
+                    // 双击就会并发发起两次扫描。
+                    disabled={!!scanLoading}
+                    onClick={() => runScan(s.id)}
+                  >
+                    {s.name}
+                  </Button>
+                </Tooltip>
+              ))}
+            </Space>
+            {scanLoading && (
+              <div style={{ fontSize: 12, color: '#1677ff', marginBottom: 10 }}>
+                正在打开检测站并等待渲染…（页面越复杂等待越久，最长约 40 秒）
+              </div>
+            )}
+            {scanResult && (
+              <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, padding: 12, background: '#fafafa' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ fontWeight: 500 }}>
+                    {scanResult.name}
+                    {scanResult.title ? ` — ${scanResult.title}` : ''}
+                  </span>
+                  <span style={{ fontSize: 12, color: '#888' }}>
+                    {dayjs(scanResult.checkedAt).format('YYYY-MM-DD HH:mm:ss')}
+                  </span>
+                </div>
+                {scanResult.error && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`抓取异常：${scanResult.error}`}
+                    description="可能是网络不通 / 代理失效 / 站点要求人机验证（Cloudflare）/ 页面结构与预期不符。可结合下方截图判断实际情况。"
+                    style={{ marginBottom: 10 }}
+                  />
+                )}
+                {/* 实际落地 URL 与站点地址不同，通常意味着跳转或撞上了人机验证页 */}
+                {scanResult.finalUrl && scanResult.finalUrl !== scanResult.url && (
+                  <div style={{ fontSize: 12, color: '#d46b08', marginBottom: 8 }}>
+                    实际落地页与站点地址不同：<span style={{ wordBreak: 'break-all' }}>{scanResult.finalUrl}</span>
+                  </div>
+                )}
+                {scanResult.highlights.length > 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>关键行摘录：</div>
+                    {scanResult.highlights.map((h, i) => (
+                      <div key={i} style={{ fontSize: 12, padding: '2px 0', color: '#333', wordBreak: 'break-all' }}>
+                        · {h}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {scanResult.screenshot && (
+                  <div style={{ marginBottom: 10 }}>
+                    <img
+                      src={scanResult.screenshot}
+                      alt={`${scanResult.name} 检测截图`}
+                      style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: 4, background: '#fff' }}
+                    />
+                  </div>
+                )}
+                {scanResult.text && (
+                  <details>
+                    <summary style={{ fontSize: 12, color: '#888', cursor: 'pointer' }}>
+                      查看页面原文（前 8000 字，检测站改版时以原文为准）
+                    </summary>
+                    <pre
+                      style={{
+                        fontSize: 11,
+                        maxHeight: 220,
+                        overflow: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        background: '#fff',
+                        padding: 8,
+                        border: '1px solid #eee',
+                        borderRadius: 4,
+                        marginTop: 6
+                      }}
+                    >
+                      {scanResult.text}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
           </div>
         )}
       </Drawer>

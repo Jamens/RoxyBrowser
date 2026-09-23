@@ -7,6 +7,7 @@ import type { Fingerprint, RpaStep } from '../shared/types'
 import type { FingerprintProbe } from '../shared/healthcheck'
 import { isTrackerUrl } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
+import { getScanSite, runSiteScan, type ScanResult } from './fingerprintScan'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
 async function setElectronCookie(ses: Electron.Session, c: CookieEntity) {
@@ -143,6 +144,36 @@ export function getRunningWindows(): { id: number; title: string }[] {
   return [...windows.entries()]
     .filter(([, w]) => !w.isDestroyed())
     .map(([id]) => ({ id, title: windowTitles.get(id) || `环境 #${id}` }))
+}
+
+/**
+ * 每个环境同时只允许一个检测在跑。
+ *
+ * 为什么必须加锁：同一 webContents 上叠加两次导航会让**前一次 reject**，
+ * 而前一次后续的执行 JS / 截图读到的却是后一个站点的页面——
+ * 结果是「siteId 写着 A、text 和 screenshot 却是 B」。
+ * 本功能的全部价值就在于「证据可信」，这种静默的张冠李戴比直接报错更糟。
+ */
+const scanInFlight = new Map<number, Promise<ScanResult>>()
+
+/**
+ * 在线检测站实战验证：把环境窗口导航到第三方指纹检测站，抓回页面文本与截图。
+ * 窗口未运行抛错（与体检 / 截图同约束）；检测站 id 非法亦抛错；重复发起返回「正在检测中」。
+ */
+export async function scanSite(profileId: number, siteId: string): Promise<ScanResult> {
+  if (scanInFlight.has(profileId)) throw new Error('该环境正在检测中，请等上一次完成')
+  // 先校验站点再占位：避免非法 siteId 占住锁、把后续正常请求挡在门外
+  const site = getScanSite(siteId)
+  if (!site) throw new Error(`未知检测站：${siteId}`)
+  const win = getWindow(profileId)
+  if (!win) throw new Error('环境未运行，请先打开环境窗口')
+  const p = runSiteScan(win, site)
+  scanInFlight.set(profileId, p)
+  try {
+    return await p
+  } finally {
+    scanInFlight.delete(profileId)
+  }
 }
 
 /** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer（窗口未运行抛错） */

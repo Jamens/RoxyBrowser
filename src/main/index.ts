@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain, session } 
 import { join, resolve } from 'path'
 import { existsSync } from 'fs'
 import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings, writeAgentLog, saveRpaFromSteps } from './server'
-import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint, captureScreenshot } from './browserManager'
+import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint, captureScreenshot, scanSite } from './browserManager'
 import { AgentRunner } from './agent/runner'
 import { setupAutoUpdater } from './updater'
 
@@ -200,7 +200,7 @@ if (!gotLock) {
     process.env.ROXY_API_BASE = apiBase
 
     // 2. 注入浏览器窗口桥 + 同步开关
-    setBrowserBridge({ openWindow, closeWindow, probeFingerprint, captureScreenshot })
+    setBrowserBridge({ openWindow, closeWindow, probeFingerprint, captureScreenshot, scanSite })
     setSyncToggle(({ enabled, ids }) => {
       setSyncMode(enabled)
       // ids 为空数组 = 同步到全部已打开窗口
