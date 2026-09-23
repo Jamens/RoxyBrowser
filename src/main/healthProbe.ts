@@ -36,32 +36,96 @@ const PROBE_SCRIPT = `(function(){
     var langs = [];
     try { langs = Array.prototype.slice.call(nav.languages || []); } catch (e) {}
 
-    return {
-      userAgent: String(nav.userAgent || ''),
-      platform: String(nav.platform || ''),
-      language: String(nav.language || ''),
-      languages: langs,
-      hardwareConcurrency: nav.hardwareConcurrency == null ? 0 : nav.hardwareConcurrency,
-      deviceMemory: nav.deviceMemory == null ? 0 : nav.deviceMemory,
-      doNotTrack: nav.doNotTrack == null ? 'unspecified' : String(nav.doNotTrack),
-      maxTouchPoints: nav.maxTouchPoints == null ? 0 : nav.maxTouchPoints,
-      ontouchstart: ('ontouchstart' in window),
-      devicePixelRatio: window.devicePixelRatio || 0,
-      uaDataPresent: !!uad,
-      uaDataPlatform: uad ? String(uad.platform || '') : '',
-      uaDataMobile: uad ? !!uad.mobile : null,
-      screenWidth: window.screen.width,
-      screenHeight: window.screen.height,
-      tzOffset: new Date().getTimezoneOffset(),
-      timezone: String((Intl.DateTimeFormat().resolvedOptions().timeZone) || ''),
-      webglVendor: String(vendor),
-      webglRenderer: String(renderer),
-      webglAvailable: glAvailable,
-      canvasPatched: patched(HTMLCanvasElement.prototype.toDataURL),
-      audioPatched: typeof AudioBuffer !== 'undefined' ? patched(AudioBuffer.prototype.getChannelData) : false,
-      webrtcDisabled: (typeof window.RTCPeerConnection === 'undefined'),
-      fontsGuarded: fontsGuarded
-    };
+    // ---- WebGPU：requestAdapter() 异步，先起 Promise，最后再合并进结果 ----
+    var gpuPresent = false, gpuVendor = '', gpuArch = '', gpuAdapter = false;
+    var gpuP = Promise.resolve();
+    try {
+      gpuPresent = !!nav.gpu;
+      if (gpuPresent && typeof nav.gpu.requestAdapter === 'function') {
+        gpuP = Promise.race([
+          nav.gpu.requestAdapter().then(function (ad) {
+            if (!ad) return;
+            gpuAdapter = true;
+            var info = ad.info;
+            var p2 = info
+              ? Promise.resolve(info)
+              : (typeof ad.requestAdapterInfo === 'function' ? ad.requestAdapterInfo() : Promise.resolve(null));
+            return p2.then(function (i2) {
+              if (i2) { gpuVendor = String(i2.vendor || ''); gpuArch = String(i2.architecture || ''); }
+            });
+          }),
+          // 超时保护：GPU 进程初始化卡住时，不能让这次 executeJavaScript（进而整个体检请求）悬挂
+          new Promise(function (r) { setTimeout(r, 3000); })
+        ]).catch(function () {});
+      }
+    } catch (e) {}
+
+    // ---- WebAudio 完整特征：sampleRate / baseLatency / maxChannelCount / compressor.reduction ----
+    // audioAvailable 标记 AudioContext 是否真的建得起来；建不起来时要让体检项「不适用」，
+    // 否则哨兵值 0/-1/0 会与期望值不等，把环境限制误报成「指纹注入失败」。
+    var audioAvailable = false;
+    var aRate = 0, aBase = -1, aMax = 0, aRed = 0;
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        var ctx = new AC();
+        try {
+          audioAvailable = true;
+          aRate = ctx.sampleRate == null ? 0 : ctx.sampleRate;
+          aBase = ctx.baseLatency == null ? -1 : ctx.baseLatency;
+          aMax = ctx.destination ? ctx.destination.maxChannelCount : 0;
+          var comp = ctx.createDynamicsCompressor();
+          aRed = comp.reduction == null ? 0 : comp.reduction;
+        } finally {
+          // 立刻释放，避免体检动作残留音频上下文
+          try { ctx.close(); } catch (e2) {}
+        }
+      }
+    } catch (e) {}
+
+    // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
+    // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
+    return gpuP.then(function () {
+      try {
+        return {
+        userAgent: String(nav.userAgent || ''),
+        platform: String(nav.platform || ''),
+        language: String(nav.language || ''),
+        languages: langs,
+        hardwareConcurrency: nav.hardwareConcurrency == null ? 0 : nav.hardwareConcurrency,
+        deviceMemory: nav.deviceMemory == null ? 0 : nav.deviceMemory,
+        doNotTrack: nav.doNotTrack == null ? 'unspecified' : String(nav.doNotTrack),
+        maxTouchPoints: nav.maxTouchPoints == null ? 0 : nav.maxTouchPoints,
+        ontouchstart: ('ontouchstart' in window),
+        devicePixelRatio: window.devicePixelRatio || 0,
+        uaDataPresent: !!uad,
+        uaDataPlatform: uad ? String(uad.platform || '') : '',
+        uaDataMobile: uad ? !!uad.mobile : null,
+        screenWidth: window.screen.width,
+        screenHeight: window.screen.height,
+        tzOffset: new Date().getTimezoneOffset(),
+        timezone: String((Intl.DateTimeFormat().resolvedOptions().timeZone) || ''),
+        webglVendor: String(vendor),
+        webglRenderer: String(renderer),
+        webglAvailable: glAvailable,
+        canvasPatched: patched(HTMLCanvasElement.prototype.toDataURL),
+        audioPatched: typeof AudioBuffer !== 'undefined' ? patched(AudioBuffer.prototype.getChannelData) : false,
+        webrtcDisabled: (typeof window.RTCPeerConnection === 'undefined'),
+        fontsGuarded: fontsGuarded,
+        webGpuPresent: gpuPresent,
+        webGpuAdapterAvailable: gpuAdapter,
+        webGpuVendor: gpuVendor,
+        webGpuArchitecture: gpuArch,
+        audioSampleRate: aRate,
+        audioBaseLatency: aBase,
+        audioMaxChannelCount: aMax,
+        audioReduction: aRed,
+        audioAvailable: audioAvailable
+      };
+      } catch (e) {
+        return { error: String(e) };
+      }
+    });
   } catch (e) {
     return { error: String(e) };
   }

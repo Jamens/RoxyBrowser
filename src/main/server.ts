@@ -1451,7 +1451,12 @@ function buildApiRouter(): express.Router {
       const px = await AppDataSource.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } })
       proxyCountry = px?.country || ''
     }
-    const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, { proxyCountry })
+    // audioSeed 必须与 preload 注入端的 seed 同源（profileId * 2654435761），
+    // 否则体检算出的音频期望值与窗口内实际注入的值对不上，会永远判不合格。
+    const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, {
+      proxyCountry,
+      audioSeed: p.id * 2654435761
+    })
     res.json(report)
   })
 

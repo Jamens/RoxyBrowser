@@ -6,6 +6,8 @@
 // 比对与打分在这里，两者通过 FingerprintProbe 结构解耦。
 import type { Fingerprint } from './types'
 import { COUNTRIES } from './countries'
+import { webGpuInfoFor } from './webgpu'
+import { audioProfileFor } from './webaudio'
 
 /** 环境窗口内实际回读到的特征值（由 executeJavaScript 采集） */
 export interface FingerprintProbe {
@@ -36,6 +38,26 @@ export interface FingerprintProbe {
   audioPatched: boolean
   webrtcDisabled: boolean
   fontsGuarded: boolean
+  // ---- WebGPU ----
+  /** navigator.gpu 是否存在（iOS 伪装时必须不存在） */
+  webGpuPresent: boolean
+  /** requestAdapter() 是否成功返回 adapter（无 GPU / 被禁用时为 false） */
+  webGpuAdapterAvailable: boolean
+  /** adapter.info.vendor（小写厂商标识） */
+  webGpuVendor: string
+  /** adapter.info.architecture */
+  webGpuArchitecture: string
+  // ---- WebAudio 完整特征 ----
+  /** AudioContext.sampleRate */
+  audioSampleRate: number
+  /** AudioContext.baseLatency（秒） */
+  audioBaseLatency: number
+  /** destination.maxChannelCount */
+  audioMaxChannelCount: number
+  /** DynamicsCompressorNode.reduction（dB） */
+  audioReduction: number
+  /** AudioContext 是否创建成功（失败时上面几项为哨兵值，体检项须标记不适用） */
+  audioAvailable: boolean
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -109,6 +131,11 @@ function sameCountry(a: string, b: string): boolean {
 export interface BuildReportOptions {
   /** 代理出口国家（ip-api 英文名，如 United States） */
   proxyCountry?: string
+  /**
+   * 音频指纹种子（profileId * 2654435761），用于推导音频特征期望值。
+   * 音频档案由 seed 派生而非存库，所以期望值也必须由同一 seed 现算，才能对撞。
+   */
+  audioSeed?: number
 }
 
 export function buildHealthReport(
@@ -220,6 +247,67 @@ export function buildHealthReport(
     ok: actual.fontsGuarded,
     weight: 5
   })
+
+  // ---- WebGPU：必须与 WebGL 同源 ----
+  // 只伪造 WebGL 而放过 WebGPU，会产出「WebGL 说 RTX 4090、WebGPU 说宿主机集显」的矛盾信号——
+  // 矛盾比不伪装更可疑（等于告诉检测方「这个环境被改过」），所以单独校验两者是否一致。
+  {
+    if (s(e.os) === 'ios') {
+      // iOS WebKit 不支持 WebGPU，伪装成 iOS 时必须整体不存在
+      items.push({
+        key: 'webgpu',
+        expected: '—',
+        actual: actual.webGpuPresent ? s(actual.webGpuVendor) || 'present' : '—',
+        ok: !actual.webGpuPresent,
+        weight: 8
+      })
+    } else {
+      const want = webGpuInfoFor(s(e.os), s(e.webglVendor), s(e.webglRenderer))
+      const wantText = `${want.vendor} / ${want.architecture}`
+      // 真实环境拿不到 adapter（无 GPU / 被禁用）时不参与计分，
+      // 与 WebGL 不可用同理——环境限制不等于注入失败。
+      const applicable = !!want.vendor && actual.webGpuAdapterAvailable
+      items.push({
+        key: 'webgpu',
+        expected: want.vendor ? wantText : '—',
+        actual: actual.webGpuAdapterAvailable
+          ? `${s(actual.webGpuVendor)} / ${s(actual.webGpuArchitecture)}`
+          : 'WebGPU 不可用',
+        ok: applicable ? wantText === `${s(actual.webGpuVendor)} / ${s(actual.webGpuArchitecture)}` : true,
+        weight: applicable ? 8 : 0
+      })
+    }
+  }
+
+  // ---- WebAudio 完整特征 ----
+  // sampleRate / baseLatency / maxChannelCount / compressor.reduction 反映宿主机声卡与驱动特性，
+  // 此前全部裸奔，是音频维度的主要泄漏口。期望值由 seed 现算（与注入端同源，才能对撞）。
+  {
+    const ap = audioProfileFor(opts.audioSeed ?? 0, s(e.os))
+    // 三重前提才参与计分：开关打开 + AudioContext 建得起来 + 调用方传了 audioSeed。
+    // 缺一即标记「不适用」——环境限制（无音频设备 / 页面改写了 AudioContext）不能被误报成
+    // 「指纹注入失败」；缺少 seed 时更不能直接按 0 计算，那会得出与窗口内注入值不同的
+    // 期望值导致永久判红且看不出原因。与 webgl / webgpu 项的处理保持一致。
+    const on = !!e.audioNoise && actual.audioAvailable && typeof opts.audioSeed === 'number'
+    const wantCtx = `${ap.sampleRate} / ${ap.baseLatency} / ${ap.maxChannelCount}`
+    const actCtx = `${actual.audioSampleRate} / ${actual.audioBaseLatency} / ${actual.audioMaxChannelCount}`
+    items.push({
+      key: 'audioProfile',
+      expected: on ? wantCtx : '—',
+      actual: actual.audioAvailable ? actCtx : 'AudioContext 不可用',
+      ok: on ? wantCtx === actCtx : true,
+      weight: on ? 6 : 0
+    })
+    // reduction 是 fingerprintjs 的经典采集向量，单列一项便于定位问题
+    const red = Number(actual.audioReduction)
+    items.push({
+      key: 'audioReduction',
+      expected: on ? String(ap.compressorReduction) : '—',
+      actual: actual.audioAvailable ? String(red) : 'AudioContext 不可用',
+      ok: on ? Math.abs(red - ap.compressorReduction) < 1e-3 : true,
+      weight: on ? 3 : 0
+    })
+  }
 
   // ---- 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）----
   const consistency: ConsistencyItem[] = []

@@ -1,6 +1,8 @@
 // 指纹注入脚本（运行于浏览器环境窗口的每一页面）
 // 通过 webPreferences.additionalArguments 传入 --roxy-fp=<base64>
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { webGpuInfoFor, webGpuSupported } from '../shared/webgpu'
+import { audioProfileFor } from '../shared/webaudio'
 ;(() => {
   interface Fingerprint {
     os: string
@@ -51,6 +53,30 @@
   const def = (obj: any, key: string, value: any) => {
     try {
       Object.defineProperty(obj, key, { get: () => value, configurable: true, enumerable: true })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 隐藏属性：用不可枚举的 own getter 遮蔽原型上的原生 getter。
+  // 不能用 delete —— WebIDL 定义的属性（navigator.gpu / userAgentData / geolocation）
+  // 都在原型（如 Navigator.prototype）上，而 delete **只能删除自身属性**：
+  // 对原型属性执行 delete 会返回 true 却什么也不删，是彻底的静默失效。
+  // 这里改为在实例上定义一个返回 undefined 的 own getter，读取即得到 undefined。
+  const hide = (obj: any, key: string) => {
+    try {
+      Object.defineProperty(obj, key, { get: () => undefined, configurable: true, enumerable: false })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 覆盖属性但保持**不可枚举**：用于「在原生实例上改写个别字段」的场景。
+  // 原生对象（如 GPUAdapterInfo）的 Object.keys() 通常是空的，
+  // 若用 def（enumerable: true）改写，keys 会凭空多出键，一行检测即暴露。
+  const cover = (obj: any, key: string, value: any) => {
+    try {
+      Object.defineProperty(obj, key, { get: () => value, configurable: true, enumerable: false })
     } catch {
       /* ignore */
     }
@@ -119,12 +145,10 @@
   // 真正被读取的实例上，导致宿主 platform（如 Windows）原样泄漏。必须整体替换 getter。
   const isMobile = fp.os === 'android' || fp.os === 'ios'
   if (fp.os === 'ios') {
-    // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮
-    try {
-      delete (navigator as any).userAgentData
-    } catch {
-      /* ignore */
-    }
+    // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮。
+    // 用 hide 而非 delete：该属性定义在 Navigator.prototype 上，
+    // delete 只删自身属性、对原型属性静默无效（本项目此前正是踩了这个坑）。
+    hide(navigator, 'userAgentData')
   } else {
     const uadPlatform = fp.os === 'mac' ? 'macOS' : fp.os === 'android' ? 'Android' : 'Windows'
     const major = fp.uaFullVersion.split('.')[0]
@@ -150,11 +174,7 @@
           wow64: false
         })
     }
-    try {
-      delete (navigator as any).userAgentData
-    } catch {
-      /* ignore */
-    }
+    // 不需要先 delete：def 在实例上建立 own property，天然遮蔽原型上的原生 getter
     def(navigator, 'userAgentData', uad)
   }
 
@@ -299,20 +319,101 @@
   if (typeof WebGLRenderingContext !== 'undefined') patchGetParam(WebGLRenderingContext.prototype)
   if (typeof WebGL2RenderingContext !== 'undefined') patchGetParam(WebGL2RenderingContext.prototype)
 
-  // ===== AudioContext 噪声 =====
-  if (fp.audioNoise && typeof AudioBuffer !== 'undefined') {
-    const rng = mulberry32(seed ^ 0x5e6f7a8b)
-    const origGetChannelData = AudioBuffer.prototype.getChannelData
-    AudioBuffer.prototype.getChannelData = function (...args: any[]) {
-      const data = origGetChannelData.apply(this, args as [number])
-      try {
-        for (let i = 0; i < data.length; i++) {
-          data[i] += (rng() - 0.5) * 1e-7
+  // ===== WebGPU =====
+  // 真实 Chrome 经 navigator.gpu.requestAdapter() 暴露 GPUAdapterInfo（vendor / architecture），
+  // creepjs / pixelscan 等检测站已普遍采集。这里让它与上面伪造的 WebGL 保持一致，
+  // 否则「WebGL 说 RTX 4090、WebGPU 说宿主机集显」是自相矛盾信号——矛盾比不伪装更可疑。
+  if (!webGpuSupported(fp.os)) {
+    // iOS WebKit 至今不支持 WebGPU，伪装成 iOS 时必须整体移除（与 UA-CH 在 iOS 下的处理同理）
+    hide(navigator, 'gpu')
+  } else if (typeof (navigator as any).gpu !== 'undefined') {
+    const gpuInfo = webGpuInfoFor(fp.os, fp.webglVendor, fp.webglRenderer)
+    const gpu = (navigator as any).gpu
+    // 补丁打到 GPU.prototype 而非 navigator.gpu 实例：真实 navigator.gpu 没有任何
+    // own property，在实例上挂 requestAdapter 会留下可检测痕迹
+    // （Object.getOwnPropertyNames(navigator.gpu) 由 [] 变成 ['requestAdapter']）。
+    const gpuProto = (window as any).GPU ? (window as any).GPU.prototype : Object.getPrototypeOf(gpu)
+    const origReq = gpuProto ? gpuProto.requestAdapter : gpu.requestAdapter
+    if (typeof origReq === 'function') {
+      const patchedReq = async function (this: any, ...args: any[]) {
+        const adapter = await origReq.apply(this, args)
+        // 真实不可用（无 GPU / 被禁用）时保持返回 null：那是真实用户也存在的分布，不应强行伪造；
+        // 且 isFallbackAdapter 为 true 时说明跑在 SwiftShader 上，硬伪造显卡名只会自相矛盾。
+        if (!adapter) return adapter
+        try {
+          const real = adapter.info
+          if (real) {
+            // 只在**真实 GPUAdapterInfo 实例**上盖两个 getter：
+            // 这样 instanceof GPUAdapterInfo 依然成立，subgroupMinSize / subgroupMaxSize /
+            // isFallbackAdapter 等其余字段继续由原生提供，Object.keys 也不变。
+            // 早先塞一个自制普通对象的做法会让这些维度变成 undefined、且 instanceof 判 false，
+            // 等于制造出「真实浏览器不可能出现的值」——比不伪装更可疑。
+            cover(real, 'vendor', gpuInfo.vendor)
+            cover(real, 'architecture', gpuInfo.architecture)
+          } else {
+            def(adapter, 'info', gpuInfo)
+          }
+        } catch {
+          /* ignore */
         }
-      } catch {
-        /* ignore */
+        return adapter
       }
-      return data
+      if (gpuProto) def(gpuProto, 'requestAdapter', patchedReq)
+      else gpu.requestAdapter = patchedReq
+    }
+  }
+
+  // ===== WebAudio 指纹（完整特征向量 + 噪声） =====
+  // 此前只给 AudioBuffer.getChannelData 加了噪声（1 个维度），而检测站更常采集
+  // sampleRate / baseLatency / outputLatency / maxChannelCount / compressor.reduction——
+  // 这些直接反映宿主机声卡与驱动特性，此前全部裸奔。
+  if (fp.audioNoise) {
+    const ap = audioProfileFor(seed, fp.os)
+    // sampleRate 定义在 BaseAudioContext.prototype 上（**不是** AudioContext.prototype）。
+    // 若直接 def(AudioContext.prototype, 'sampleRate')，会凭空多出一个 own property——
+    // 真实 AudioContext.prototype 没有它，检测方用 getOwnPropertyNames 即可识别。
+    // 这里在正确的原型上覆盖，并用 instanceof 放过 OfflineAudioContext：
+    // 后者的采样率必须等于构造参数，改了会让渲染结果长度与预期不符（比不改更糟）。
+    if (typeof BaseAudioContext !== 'undefined' && typeof OfflineAudioContext !== 'undefined') {
+      const d = Object.getOwnPropertyDescriptor((BaseAudioContext as any).prototype, 'sampleRate')
+      // 提前取出 getter 存为局部常量：直接在闭包里用 d.get 会因 narrowing 丢失而被判为可能 undefined
+      const origGet = d && d.get
+      if (d && origGet && d.configurable) {
+        Object.defineProperty((BaseAudioContext as any).prototype, 'sampleRate', {
+          get(this: any) {
+            return this instanceof OfflineAudioContext ? origGet.call(this) : ap.sampleRate
+          },
+          configurable: true,
+          enumerable: true
+        })
+      }
+    }
+    // baseLatency 本就是 AudioContext.prototype 的 own property，直接覆盖不会新增痕迹
+    if (typeof AudioContext !== 'undefined') {
+      def(AudioContext.prototype, 'baseLatency', ap.baseLatency)
+    }
+    if (typeof AudioDestinationNode !== 'undefined') {
+      def(AudioDestinationNode.prototype, 'maxChannelCount', ap.maxChannelCount)
+    }
+    if (typeof DynamicsCompressorNode !== 'undefined') {
+      def(DynamicsCompressorNode.prototype, 'reduction', ap.compressorReduction)
+    }
+
+    // 取样值微扰：让 OfflineAudioContext 渲染出的音频哈希带上本环境的确定性噪声
+    if (typeof AudioBuffer !== 'undefined') {
+      const rng = mulberry32(seed ^ 0x5e6f7a8b)
+      const origGetChannelData = AudioBuffer.prototype.getChannelData
+      AudioBuffer.prototype.getChannelData = function (...args: any[]) {
+        const data = origGetChannelData.apply(this, args as [number])
+        try {
+          for (let i = 0; i < data.length; i++) {
+            data[i] += (rng() - 0.5) * 1e-7
+          }
+        } catch {
+          /* ignore */
+        }
+        return data
+      }
     }
   }
 
