@@ -36,6 +36,23 @@
 
 ---
 
+## 2026-09-24 · 范围边界决策：不做 Firefox / Gecko 内核（候选 ⑥）
+
+### 结论
+
+竞品差距分析的候选功能里，⑥「Firefox 内核」**明确不做**。这不是排期问题，而是架构层面的范围边界，已写入 [FEATURES.md](./FEATURES.md) 的「明确范围边界」一节。
+
+### 依据
+
+- **引擎不可替换**：Electron 只内嵌 Chromium，无「Firefox-in-Electron」；引入 Gecko 等于另起一个项目，而非给本克隆加一个内核选项。
+- **指纹注入机制完全不同**：本克隆依赖 Electron `session` + `--roxy-fp` 注入 preload + `session.webRequest` 拦截；Firefox 需走 `prefs.js` 逐项改写，且 `navigator.userAgentData` / WebGPU / `GPUAdapterInfo` / AudioContext 原型等注入点在 Gecko 上不存在或形态不同，`shared/fingerprint.ts` 与 `browser-preload.ts` / `browserManager.ts` 需近乎重写。
+- **代理 / 扩展 / 网络拦截全换栈**：Chromium 的 `session.setProxy` + MV3 扩展与 Firefox 的 `prefs.js` + WebExtensions 不互通。
+- **ROI 极低**：目标场景（跨境电商 / 社媒多账号）以 Chromium 系检测对抗为主，并行维护一套 Gecko 伪装工作量接近重写，仅多覆盖极少数必须用 Firefox UA 的平台。
+
+> 强需求下的务实替代：保持 Chromium 主引擎，仅在 UA / 平台字段「声明」为 Firefox 形态（伪装成 Firefox 的 Chromium），而非真正切换内核——代价是底层信号仍暴露 Chromium，仅作权宜。
+
+---
+
 ## 2026-09-24 · 智能助手 Planner 进阶（多步编排 + 技能库 + 防时间冻结）
 
 ### 新增

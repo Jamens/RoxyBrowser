@@ -939,3 +939,20 @@ main → renderer:
 | 反风控有限 | 文档明示不保证过风控，仅降机械感；敏感业务人工值守 |
 | 矩阵并发吃资源 | 可配置最大并发窗口数；超出排队 |
 | 自带 Key 明文泄露 | `cloudApiKey` 加密存储（OS keychain / 加密字段），不落明文日志 |
+
+## 明确范围边界（本克隆不做的功能）
+
+### 不做 Firefox / Gecko 内核（竞品差距分析候选 ⑥）
+
+**结论：本克隆基于 Electron 内置的 Chromium，明确不做 Firefox/Gecko 内核。** 这不是「还没做」，而是架构层面的范围边界，理由如下：
+
+- **引擎不可替换**：Electron 只内嵌 Chromium，没有「Firefox-in-Electron」方案。要跑 Gecko 必须改用独立的 Firefox 运行时（完全另一套进程模型），等于另起一个项目，而非给本克隆加一个内核选项。
+- **指纹注入机制完全不同**：本克隆的指纹伪装建立在 Electron `session`（`session.fromPartition`）+ 主进程 `additionalArguments --roxy-fp=<base64>` 注入 preload + `session.webRequest.onBeforeRequest` 拦截网络请求之上。Firefox 没有这套 API，伪装要靠 `prefs.js`（`general.useragent.override`、`privacy.resistFingerprinting`、`intl.accept_languages`、`network.proxy.*` 等）逐项改写，且 `navigator.userAgentData`、WebGPU、`GPUAdapterInfo`、AudioContext 原型等注入点在 Gecko 上根本不存在或形态不同——现有 `shared/fingerprint.ts`、`main/browser-preload.ts`、`main/browserManager.ts` 三处指纹逻辑需近乎重写。
+- **代理 / 扩展 / 网络拦截全换栈**：Chromium 走 `session.setProxy` + Chrome MV3 扩展；Firefox 走 `prefs.js` 代理 + WebExtensions（与本项目的扩展加载/注入实现不互通）；`webRequest` 拦截也需改走扩展侧，无法在主进程统一兜。
+- **收益不匹配**：目标用户是「跨境电商 / 海外社媒多账号防关联」，检测站（PixelScan / BrowserLeaks / CreepJS / AmIUnique）对 Chromium 系指纹的对抗最成熟，本克隆的 Chromium 注入已覆盖主流场景；引入一套并行的 Gecko 伪装，工作量接近重写，却只多覆盖「极少数必须用 Firefox UA 的平台」，ROI 极低。
+
+> 若确有强需求（例如某平台只认 Firefox UA），更务实的路线是：**保持 Chromium 主引擎不变，仅在 UA / 平台字段上「声明」为 Firefox 形态**（即伪装成 Firefox 的 Chromium），而非真正切换内核——代价是 Font/Canvas/WebGL 等底层信号仍暴露 Chromium，故仅作权宜，不建议作为卖点。
+
+### 不做平台级账号托管 / 自动化养号
+
+环境内的账号中心只做**本地明文托管 + 一键复制**，不参与平台登录态维持、Cookie 自动续期、行为模拟养号——这类能力依赖各平台私有协议与风控对抗，超出本克隆范围，且触碰平台 ToS 红线。
