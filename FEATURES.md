@@ -127,7 +127,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | Canvas     | `toDataURL` / `getImageData` 注入**确定性噪声**（同环境稳定、异环境不同）               |
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
-| WebRTC     | 可禁用 `RTCPeerConnection`，防止真实 IP 泄漏                                            |
+| WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
@@ -483,6 +483,17 @@ app.listen(4000)
 - **不动 `OfflineAudioContext`**：它的采样率必须等于构造参数，改了会让渲染结果与预期长度对不上，比不改更糟。补丁打在 `BaseAudioContext.prototype`（`sampleRate` 真正所在处）并用 `instanceof OfflineAudioContext` 放过它。
 - **刻意不注入 `outputLatency`**：真实 AudioContext 在无音频播放时该值为 0，强行填 0.015~0.045 会与真实人群脱节，而它几乎不泄漏硬件信息——收益不足以抵消穿帮风险（宁缺毋滥）。
 - 复用既有 `audioNoise` 开关：关闭即完全不伪装，尊重用户显式设置。
+
+#### 7.12.4 指纹深度补齐 2.0（Battery / plugins / SpeechSynthesis / WebRTC 代理模式）
+
+对标竞品 changelog 与检测站高频采集维度，在既有指纹体系上补齐四个常被忽略、却会暴露「自动化」或「语言 / 系统矛盾」的维度（`05643bd`）：
+
+- **Battery API**：`navigator.getBattery()` 返回按环境种子派生的稳定电池状态（未满则充电中、chargingTime 为正；满电则不充电、dischargingTime=Infinity），避免 CreepJS 等采集到宿主机真实电池。仅在宿主原生有该 API 时覆写。
+- **plugins / mimeTypes**：按真实 Chrome 默认形态补 `Chrome PDF Plugin` + `application/pdf`，并设置 `Plugin` / `PluginArray` / `MimeType` / `MimeTypeArray` 对应原型，使 `instanceof` / `toString` 与真实 Chrome 一致，消除「plugins 为空」信号。
+- **SpeechSynthesis 语音对齐**：`getVoices()` 仅保留与 `fp.languages` 匹配的语音，避免宿主机已装语言泄漏、与声明语言自相矛盾。
+- **WebRTC 代理模式**：表单新增第三选项。保留 WebRTC 功能但强制 `iceCandidatePolicy='public'`，丢弃本地私有 IP 的 host 候选、只走经代理出去的 srflx/relay 候选——外部看到的是代理公网 IP 而非局域网 IP。
+
+全部注入复用既有 `def` / `setPrototypeOf` 手法并包在 `try/catch` 内，单维度失败不影响其余；且均「只在宿主原生有该 API 时覆写」，不凭空新增非默认信号。
 
 #### 体检接入
 

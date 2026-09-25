@@ -9,6 +9,24 @@
 
 ---
 
+## 2026-09-25 · 指纹深度补齐 2.0（Battery / plugins·mimeTypes / SpeechSynthesis / WebRTC 代理模式）
+
+### 新增
+
+- **Battery API 伪装**（`src/main/browser-preload.ts`）：`navigator.getBattery()` 返回按环境种子派生的稳定且自洽的电池状态（未满则充电中、chargingTime 为正；满电则不充电、dischargingTime=Infinity）。仅在宿主原生就有该 API 时才覆写——若宿主已移除则绝不凭空新增，避免制造非默认信号。
+- **navigator.plugins / mimeTypes 伪装**：按真实 Chrome 默认形态补一套最小但结构正确的 `Plugin` / `PluginArray` / `MimeType` / `MimeTypeArray`（含 Chrome PDF Plugin + application/pdf），并设置对应原型，使 `instanceof` / `toString` 与真实 Chrome 一致，消除「plugins 为空」这一明显自动化信号。
+- **SpeechSynthesis 语音列表对齐**：`getVoices()` 仅保留与 `fp.languages` 匹配的语音，避免宿主机已安装语言泄漏、与声明语言自相矛盾。
+- **WebRTC 代理模式**（`WebRTCMode` 新增 `'proxy'`）：保留 WebRTC 功能（通话 / 数据通道），但强制 `iceCandidatePolicy='public'`，丢弃本地私有 IP 的 host 候选，只保留经环境代理出去的 srflx/relay 候选——外部看到的是代理公网 IP 而非宿主机局域网 IP，与代理身份自洽。`disable` / `real` 行为不变。
+- **类型与前端**：`src/shared/types.ts` 的 `WebRTCMode` 联合类型增加 `'proxy'`；`ProfileForm.tsx` WebRTC 下拉新增「代理模式（隐藏本地 IP）」选项。
+
+### 设计要点
+
+- 四个维度全部复用既有 `def` / `setPrototypeOf` 注入手法，并包在 `try/catch` 内——单个维度失败不影响其余注入，也不会让页面崩溃。
+- 严格遵循「只在宿主原生就有该 API 时才覆写」原则（呼应指纹不伪造约定）：Battery / SpeechSynthesis 都先判存在再改，不凭空新增非默认信号。
+- 提交：`05643bd`（feat）。
+
+---
+
 ## 2026-09-24 · 邮箱邀请成员（SMTP 发信 + 令牌邀请流 + 接受页）
 
 ### 新增
