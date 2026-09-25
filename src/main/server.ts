@@ -44,7 +44,7 @@ import { normalizeCountry } from '../shared/countries'
 import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig, SmtpSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
-import { buildHealthReport, type FingerprintProbe } from '../shared/healthcheck'
+import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
 import {
   exportProfileFull,
   importProfileItems,
@@ -1480,6 +1480,92 @@ function buildApiRouter(): express.Router {
       audioSeed: p.id * 2654435761
     })
     res.json(report)
+  })
+
+  // 批量体检总览：一次对 N 个选中环境跑体检，聚合出「系统级问题分布」+ 逐环境报告。
+  // 每个环境需处于 running（探针必须在真实窗口内执行，与单环境体检一致）；未运行的环境标记为 skipped，
+  // 不自动开关窗口以免改动用户状态。探针并发受限（默认 10），避免同时几十个窗口 JS 采集把主进程打爆。
+  router.post('/profiles/batch-healthcheck', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const ids = Array.isArray(req.body?.ids)
+      ? (req.body.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n))
+      : []
+    if (!ids.length) return res.status(400).json({ message: '请选择至少一个环境' })
+    if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+    const profiles = await repo.find({ where: { id: In(ids), ...ownerScope(req) } })
+    const byId = new Map(profiles.map((p) => [p.id, p]))
+    const ordered = ids.map((id) => byId.get(id)).filter((p): p is ProfileEntity => !!p)
+
+    const PASS = 80
+    const results: Array<{
+      id: number
+      name: string
+      status: string
+      skipped: boolean
+      reason?: string
+      report?: HealthReport
+    }> = []
+    const itemStats = new Map<string, { passed: number; failed: number; na: number }>()
+    let probed = 0, skipped = 0, scoreSum = 0, passCount = 0
+
+    const probeOne = async (p: ProfileEntity) => {
+      if (p.status !== 'running') return { skipped: true as const, reason: '环境未运行', report: undefined as HealthReport | undefined }
+      const actual = await browserBridge!.probeFingerprint(p.id)
+      if (!actual) return { skipped: true as const, reason: '窗口未运行', report: undefined }
+      if (actual.error) return { skipped: true as const, reason: `采集失败：${actual.error}`, report: undefined }
+      let proxyCountry = ''
+      if (p.proxyId) {
+        const px = await proxyRepo.findOne({ where: { id: p.proxyId } })
+        proxyCountry = px?.country || ''
+      }
+      const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, {
+        proxyCountry,
+        audioSeed: p.id * 2654435761
+      })
+      return { skipped: false as const, reason: undefined as string | undefined, report }
+    }
+
+    const CONCURRENCY = 10
+    for (let i = 0; i < ordered.length; i += CONCURRENCY) {
+      const chunk = ordered.slice(i, i + CONCURRENCY)
+      const chunkRes = await Promise.all(chunk.map((p) => probeOne(p).then((r) => ({ p, r }))))
+      for (const { p, r } of chunkRes) {
+        if (r.skipped || !r.report) {
+          skipped++
+          results.push({ id: p.id, name: p.name, status: p.status, skipped: true, reason: r.reason })
+          continue
+        }
+        const report = r.report
+        probed++
+        scoreSum += report.score
+        if (report.score >= PASS) passCount++
+        for (const it of report.items) {
+          const st = itemStats.get(it.key) || { passed: 0, failed: 0, na: 0 }
+          if (it.weight === 0) st.na++
+          else if (it.ok) st.passed++
+          else st.failed++
+          itemStats.set(it.key, st)
+        }
+        results.push({ id: p.id, name: p.name, status: p.status, skipped: false, report })
+      }
+    }
+
+    const itemStatsArr = Array.from(itemStats.entries())
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => b.failed - a.failed || b.passed - a.passed)
+
+    res.json({
+      total: ordered.length,
+      probed,
+      skipped,
+      avgScore: probed ? Math.round(scoreSum / probed) : 0,
+      passCount,
+      passThreshold: PASS,
+      itemStats: itemStatsArr,
+      profiles: results
+    })
   })
 
   // 环境截图：截取运行中环境窗口当前视口，返回 PNG（data URL）。

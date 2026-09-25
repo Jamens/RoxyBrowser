@@ -10,7 +10,7 @@ import {
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
   SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined
 } from '@ant-design/icons'
-import type { HealthReport } from '@shared/healthcheck'
+import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -82,6 +82,39 @@ const CONSISTENCY_LABELS: Record<string, string> = {
 /** 伪装度配色：≥90 绿 / ≥70 黄 / 其余红 */
 const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '#ff4d4f')
 
+// ===== 批量体检总览：后端聚合数据结构 =====
+interface BatchHealthItemStat {
+  key: string
+  passed: number
+  failed: number
+  na: number
+}
+interface BatchHealthProfile {
+  id: number
+  name: string
+  status: string
+  skipped: boolean
+  reason?: string
+  report?: HealthReport
+}
+interface BatchHealthResult {
+  total: number
+  probed: number
+  skipped: number
+  avgScore: number
+  passCount: number
+  passThreshold: number
+  itemStats: BatchHealthItemStat[]
+  profiles: BatchHealthProfile[]
+}
+
+const Stat = ({ label, value, color }: { label: string; value: string; color?: string }) => (
+  <div style={{ minWidth: 96 }}>
+    <div style={{ fontSize: 12, color: '#888' }}>{label}</div>
+    <div style={{ fontSize: 24, fontWeight: 500, color: color || '#333', lineHeight: 1.25 }}>{value}</div>
+  </div>
+)
+
 export default function Environments() {
   const { message } = useAppCtx()
   const { t } = useI18n()
@@ -113,6 +146,9 @@ export default function Environments() {
   const [healthName, setHealthName] = useState('')
   // 在线检测站实战验证：体检是「自己出题自己判卷」，这里让第三方站点从外部视角评判
   const [healthId, setHealthId] = useState(0)
+  const [batchHealthOpen, setBatchHealthOpen] = useState(false)
+  const [batchHealthLoading, setBatchHealthLoading] = useState(false)
+  const [batchHealthData, setBatchHealthData] = useState<BatchHealthResult | null>(null)
   const [scanSites, setScanSites] = useState<ScanSiteItem[]>([])
   const [scanLoading, setScanLoading] = useState('')
   const [scanResult, setScanResult] = useState<ScanResultItem | null>(null)
@@ -246,6 +282,24 @@ export default function Environments() {
       setHealthOpen(false)
     } finally {
       setHealthLoading(false)
+    }
+  }
+
+  // 批量体检总览：对当前选中的 N 个环境一次性跑体检，后端聚合「系统级问题分布」+ 逐环境报告。
+  // 未运行的环境会被后端标记为 skipped（探针必须在真实窗口内执行），可先「批量打开」再体检。
+  const runBatchHealth = async () => {
+    if (!selected.length) return
+    setBatchHealthLoading(true)
+    setBatchHealthData(null)
+    setBatchHealthOpen(true)
+    try {
+      const data = await api.post<BatchHealthResult>('/api/profiles/batch-healthcheck', { ids: selected })
+      setBatchHealthData(data)
+    } catch (e) {
+      message.error((e as Error).message)
+      setBatchHealthOpen(false)
+    } finally {
+      setBatchHealthLoading(false)
     }
   }
 
@@ -856,6 +910,9 @@ export default function Environments() {
                   批量删除 ({selected.length})
                 </Button>
               </Popconfirm>
+              <Button icon={<SafetyCertificateOutlined />} loading={batchHealthLoading} onClick={runBatchHealth}>
+                批量体检 ({selected.length})
+              </Button>
             </>
           )}
         </Space>
@@ -1154,6 +1211,121 @@ export default function Environments() {
                 )}
               </div>
             )}
+          </div>
+        )}
+      </Drawer>
+
+      {/* 批量体检总览：系统级问题分布 + 逐环境报告（可展开明细） */}
+      <Drawer
+        title="批量体检总览"
+        width={920}
+        open={batchHealthOpen}
+        onClose={() => setBatchHealthOpen(false)}
+      >
+        {batchHealthLoading && <Empty description="正在逐个环境窗口内采集指纹…" />}
+        {!batchHealthLoading && !batchHealthData && <Empty description="暂无报告" />}
+        {!batchHealthLoading && batchHealthData && (
+          <div>
+            <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
+              <Stat label="平均伪装度" value={`${batchHealthData.avgScore}`} color={scoreColor(batchHealthData.avgScore)} />
+              <Stat label="通过数" value={`${batchHealthData.passCount} / ${batchHealthData.probed}`} />
+              <Stat label="已探测 / 跳过" value={`${batchHealthData.probed} / ${batchHealthData.skipped}`} />
+              <Stat label="选中总数" value={`${batchHealthData.total}`} />
+            </div>
+
+            {batchHealthData.itemStats.some((s) => s.failed > 0) && (
+              <>
+                <Typography.Title level={5}>系统级问题分布（按失败环境数排序）</Typography.Title>
+                <div style={{ marginBottom: 20 }}>
+                  {batchHealthData.itemStats
+                    .filter((s) => s.failed > 0)
+                    .map((s) => (
+                      <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <div style={{ width: 220 }}>{HEALTH_LABELS[s.key] || s.key}</div>
+                        <Progress
+                          percent={Math.round((s.failed / batchHealthData.probed) * 100)}
+                          size="small"
+                          status={s.failed > 0 ? 'exception' : 'success'}
+                          format={() => `${s.failed} 环境`}
+                          style={{ flex: 1 }}
+                        />
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
+
+            <Typography.Title level={5}>逐环境报告（点击展开查看逐项明细）</Typography.Title>
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={{ pageSize: 10 }}
+              dataSource={batchHealthData.profiles}
+              columns={[
+                { title: '环境', dataIndex: 'name', width: 200, ellipsis: true },
+                {
+                  title: '伪装度',
+                  key: 'score',
+                  width: 90,
+                  render: (_: unknown, r: BatchHealthProfile) =>
+                    r.skipped ? (
+                      <Tag>跳过</Tag>
+                    ) : r.report ? (
+                      <span style={{ color: scoreColor(r.report.score), fontWeight: 500 }}>{r.report.score}</span>
+                    ) : (
+                      '-'
+                    )
+                },
+                {
+                  title: '状态',
+                  key: 'status',
+                  width: 160,
+                  render: (_: unknown, r: BatchHealthProfile) =>
+                    r.skipped ? (
+                      <Tag color="default">{r.reason}</Tag>
+                    ) : (
+                      <Tag color="success">已探测</Tag>
+                    )
+                },
+                {
+                  title: '不及格项',
+                  key: 'fail',
+                  width: 100,
+                  render: (_: unknown, r: BatchHealthProfile) => {
+                    if (r.skipped || !r.report) return '-'
+                    const f = r.report.items.filter((i) => i.weight > 0 && !i.ok).length
+                    return f ? <Tag color="error">{f}</Tag> : <Tag color="success">0</Tag>
+                  }
+                }
+              ]}
+              expandable={{
+                expandedRowRender: (r: BatchHealthProfile) =>
+                  r.skipped || !r.report ? (
+                    <span style={{ color: '#999' }}>{r.reason}</span>
+                  ) : (
+                    <Table
+                      size="small"
+                      rowKey="key"
+                      pagination={false}
+                      dataSource={r.report.items}
+                      columns={[
+                        { title: '检查项', dataIndex: 'key', width: 200, ellipsis: true, render: (v: string) => HEALTH_LABELS[v] || v },
+                        { title: '设定值', dataIndex: 'expected', ellipsis: true },
+                        { title: '实测值', dataIndex: 'actual', ellipsis: true },
+                        {
+                          title: '状态',
+                          width: 90,
+                          render: (_: unknown, it: HealthItem) =>
+                            it.weight === 0 ? <Tag>不适用</Tag> : it.ok ? <Tag color="success">正常</Tag> : <Tag color="error">不符</Tag>
+                        }
+                      ]}
+                    />
+                  )
+              }}
+            />
+            <div style={{ fontSize: 12, color: '#888', marginTop: 14 }}>
+              仅对「已打开（running）」的环境采集；未运行的环境标记为跳过，可先「批量打开」再体检。系统级问题分布能快速暴露「一批环境共性的配置错误」（如统一选错了 OS 字体、webdriver 未清）。
+            </div>
           </div>
         )}
       </Drawer>
