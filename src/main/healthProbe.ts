@@ -145,6 +145,20 @@ const PROBE_SCRIPT = `(function(){
       apiNfc = (nav.nfc !== undefined)
     } catch (e3) {}
 
+    // ---- 媒体查询偏好（Tier 2 #5）----
+    // 探测环境窗口内 matchMedia 对 prefers-color-scheme / prefers-reduced-motion 的实际回灌值。
+    // 本仓库 preload 已覆写 window.matchMedia，故此处读到的是 fp 驱动的稳定值。
+    var prefersColorScheme = 'light', prefersReducedMotion = false
+    try {
+      var mq = (window as any).matchMedia
+      if (typeof mq === 'function') {
+        if (mq('(prefers-color-scheme: dark)').matches) prefersColorScheme = 'dark'
+        else if (mq('(prefers-color-scheme: light)').matches) prefersColorScheme = 'light'
+        else prefersColorScheme = 'no-preference'
+        prefersReducedMotion = !!mq('(prefers-reduced-motion: reduce)').matches
+      }
+    } catch (e4) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
     return Promise.all([gpuP, emeP]).then(function () {
@@ -196,7 +210,9 @@ const PROBE_SCRIPT = `(function(){
         apiUsb: apiUsb,
         apiSerial: apiSerial,
         apiHid: apiHid,
-        apiNfc: apiNfc
+        apiNfc: apiNfc,
+        prefersColorScheme: prefersColorScheme,
+        prefersReducedMotion: prefersReducedMotion
       };
       } catch (e) {
         return { error: String(e) };

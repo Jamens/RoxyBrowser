@@ -67,7 +67,8 @@ const HEALTH_LABELS: Record<string, string> = {
   audioReduction: '音频压缩器 reduction',
   eme: 'EME / Widevine（DRM 模块）',
   automation: '反自动化痕迹（webdriver / CDP）',
-  platformApis: '平台 API 一致性（Bluetooth/USB/Serial/HID/NFC）'
+  platformApis: '平台 API 一致性（Bluetooth/USB/Serial/HID/NFC）',
+  mediaPrefs: '媒体查询偏好（配色 / 减少动效）'
 }
 
 // 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）

@@ -87,6 +87,10 @@ export interface FingerprintProbe {
   apiHid: boolean
   /** navigator.nfc（Web NFC）是否暴露 */
   apiNfc: boolean
+  /** matchMedia('(prefers-color-scheme: *)') 实际回灌值（dark / light / no-preference） */
+  prefersColorScheme: string
+  /** matchMedia('(prefers-reduced-motion: reduce)').matches 实际回灌值 */
+  prefersReducedMotion: boolean
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -409,6 +413,23 @@ export function buildHealthReport(
         : '无矛盾（应有的缺失不计入）',
       ok,
       weight: 4
+    })
+  }
+
+  // ---- 媒体查询偏好（Tier 2 #5）----
+  // 校验 matchMedia 回灌值与 fp 设定一致：color scheme 的 dark 须与 fp.prefersColorScheme==='dark' 对齐（其余亦然），
+  // reduced motion 须与 fp.prefersReducedMotion 对齐；任一不符即判红（说明 preload 注入未生效或 fp 字段丢失）。
+  {
+    const wantScheme = (e.prefersColorScheme === 'dark' || e.prefersColorScheme === 'light' || e.prefersColorScheme === 'no-preference') ? e.prefersColorScheme : 'light'
+    const schemeOk = actual.prefersColorScheme === wantScheme
+    const motionOk = actual.prefersReducedMotion === !!e.prefersReducedMotion
+    const ok = schemeOk && motionOk
+    items.push({
+      key: 'mediaPrefs',
+      expected: `scheme=${wantScheme} reducedMotion=${!!e.prefersReducedMotion}`,
+      actual: `scheme=${actual.prefersColorScheme} reducedMotion=${actual.prefersReducedMotion}`,
+      ok,
+      weight: 2
     })
   }
 

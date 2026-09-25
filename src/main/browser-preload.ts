@@ -30,6 +30,9 @@ import { audioProfileFor } from '../shared/webaudio'
     geoAccuracy: number
     // 是否注入 HTTP 明文连接安全警告条（仅环境窗口、http:// 且非 localhost 时生效）
     httpWarning: boolean
+    // 媒体查询偏好：prefers-color-scheme / prefers-reduced-motion 的回灌值（Tier 2 #5）
+    prefersColorScheme: 'light' | 'dark' | 'no-preference'
+    prefersReducedMotion: boolean
   }
 
   // ipcRenderer 提前到最前：起始页的 window.roxy.navigate 闭包要用它
@@ -179,6 +182,42 @@ import { audioProfileFor } from '../shared/webaudio'
       if (allowed.indexOf(fp.os) >= 0) continue
       // 仅当宿主原生就有该 API 时才隐藏（不凭空制造 own undefined 属性，否则 'key' in navigator 会误报存在）
       if ((navigator as any)[key] !== undefined) hide(navigator, key)
+    }
+  }
+
+  // ===== 媒体查询偏好（Tier 2 #5，prefers-color-scheme / prefers-reduced-motion 稳定可伪装）=====
+  // 这两个媒体查询反映 OS 级偏好，是平台级指纹向量之一。统一由 fp 驱动，
+  // 避免「同环境每次读到不同值」或「泄漏宿主真实偏好」的矛盾信号。仅在宿主原生有 matchMedia 时才覆写，
+  // 其余媒体查询（响应式断点等）一律透传原生，CSS @media 也不受影响。
+  {
+    const origMql = (window as any).matchMedia
+    if (typeof origMql === 'function') {
+      const scheme = fp.prefersColorScheme || 'light'
+      const reduced = !!fp.prefersReducedMotion
+      const spoofed = (q: string): boolean | null => {
+        const s = String(q)
+        if (/prefers-color-scheme:\s*dark/.test(s)) return scheme === 'dark'
+        if (/prefers-color-scheme:\s*light/.test(s)) return scheme === 'light'
+        if (/prefers-color-scheme:\s*no-preference/.test(s)) return scheme === 'no-preference'
+        if (/prefers-reduced-motion:\s*reduce/.test(s)) return reduced
+        if (/prefers-reduced-motion:\s*no-preference/.test(s)) return !reduced
+        return null
+      }
+      const fakeMql = (matches: boolean, media: string) => ({
+        matches,
+        media,
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() { return false }
+      })
+      ;(window as any).matchMedia = function (query: string) {
+        const m = spoofed(query)
+        if (m !== null) return fakeMql(m, query)
+        return origMql.call(window, query)
+      }
     }
   }
 

@@ -47,6 +47,11 @@ export interface Fingerprint {
   // 环境窗口导航到明文 http:// 站点时，在页面顶部注入警告条提示连接未加密、存在被窃听 / 篡改风险
   // （对标竞品 RoxyChrome 154 的「HTTP 安全警告」）。默认开启；localhost / 127.0.0.1 / file:// 不触发。
   httpWarning: boolean
+  // ---- 媒体查询偏好（prefers-color-scheme / prefers-reduced-motion）----
+  // 这两个媒体查询反映 OS 级偏好，是平台级指纹向量之一。统一由 fp 驱动，
+  // 避免「同环境每次读到不同值」或「泄漏宿主真实偏好」的矛盾信号（对标 Tier 2 #5）。
+  prefersColorScheme: 'light' | 'dark' | 'no-preference'
+  prefersReducedMotion: boolean
 }
 
 /** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */

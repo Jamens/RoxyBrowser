@@ -268,6 +268,8 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         ...geoFor(tzInfo.tz),
         blockTrackers: DEFAULT_BLOCK_TRACKERS,
         httpWarning: true,
+        prefersColorScheme: pick(['light', 'light', 'light', 'dark', 'dark', 'no-preference']),
+        prefersReducedMotion: pick([false, false, false, false, true]),
         fonts: randomFonts('android')
       }
     }
@@ -296,6 +298,8 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         ...geoFor(tzInfo.tz),
         blockTrackers: DEFAULT_BLOCK_TRACKERS,
         httpWarning: true,
+        prefersColorScheme: pick(['light', 'light', 'light', 'dark', 'dark', 'no-preference']),
+        prefersReducedMotion: pick([false, false, false, false, true]),
         fonts: randomFonts('ios')
       }
   }
@@ -335,6 +339,8 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
     ...geoFor(tzInfo.tz),
     blockTrackers: DEFAULT_BLOCK_TRACKERS,
     httpWarning: true,
+    prefersColorScheme: pick(['light', 'light', 'light', 'dark', 'dark', 'no-preference']),
+    prefersReducedMotion: pick([false, false, false, false, true]),
     fonts: randomFonts(chosenOs)
   }
 }
@@ -398,7 +404,13 @@ export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerpr
     // 老数据没有该字段时显式兜底：不能让 `{ ...fp }` 里可能存在的 undefined 把它抹成假值
     blockTrackers: typeof fp.blockTrackers === 'boolean' ? fp.blockTrackers : base.blockTrackers,
     // httpWarning 同理：fp 缺失时回退到 base（随机基准默认开启），避免被 ...fp 的 undefined 抹掉
-    httpWarning: typeof fp.httpWarning === 'boolean' ? fp.httpWarning : base.httpWarning
+    httpWarning: typeof fp.httpWarning === 'boolean' ? fp.httpWarning : base.httpWarning,
+    // prefersColorScheme / prefersReducedMotion 同理：显式兜底，避免老数据缺字段时 ...fp 的 undefined 抹成假值
+    prefersColorScheme:
+      fp.prefersColorScheme === 'light' || fp.prefersColorScheme === 'dark' || fp.prefersColorScheme === 'no-preference'
+        ? fp.prefersColorScheme
+        : base.prefersColorScheme,
+    prefersReducedMotion: typeof fp.prefersReducedMotion === 'boolean' ? fp.prefersReducedMotion : base.prefersReducedMotion
   } as Fingerprint
 }
 
@@ -415,6 +427,8 @@ function presetFingerprint(
     audioNoise: true,
     blockTrackers: DEFAULT_BLOCK_TRACKERS,
     httpWarning: true,
+    prefersColorScheme: 'light',
+    prefersReducedMotion: false,
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
@@ -721,6 +735,12 @@ export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
     // 与 canvasNoise / audioNoise 同属「行为一致」类：母本关则副本也关，保持批量号行为统一
     blockTrackers: typeof src.blockTrackers === 'boolean' ? src.blockTrackers : DEFAULT_BLOCK_TRACKERS,
     // httpWarning 同样继承母本设置（行为一致类）
-    httpWarning: typeof src.httpWarning === 'boolean' ? src.httpWarning : true
+    httpWarning: typeof src.httpWarning === 'boolean' ? src.httpWarning : true,
+    // prefersColorScheme / prefersReducedMotion 同属行为一致类：克隆继承母本（同一批号视觉偏好统一）
+    prefersColorScheme:
+      src.prefersColorScheme === 'light' || src.prefersColorScheme === 'dark' || src.prefersColorScheme === 'no-preference'
+        ? src.prefersColorScheme
+        : 'light',
+    prefersReducedMotion: typeof src.prefersReducedMotion === 'boolean' ? src.prefersReducedMotion : false
   }
 }

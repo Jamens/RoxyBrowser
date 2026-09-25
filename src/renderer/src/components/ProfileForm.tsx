@@ -543,6 +543,30 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     >
                       <Switch checked={!!fp.httpWarning} onChange={(v) => setFpField('httpWarning', v)} />
                     </Form.Item>
+                    <Form.Item
+                      label="配色偏好"
+                      style={{ marginBottom: 0 }}
+                      tooltip="环境窗口对 prefers-color-scheme 媒体查询回灌的视觉偏好，与指纹整体一致；默认 light（多数真实用户）"
+                    >
+                      <Select
+                        value={fp.prefersColorScheme || 'light'}
+                        style={{ width: 160 }}
+                        onChange={(v) => setFpField('prefersColorScheme', v)}
+                        options={[
+                          { value: 'light', label: 'light（浅色）' },
+                          { value: 'dark', label: 'dark（深色）' },
+                          { value: 'no-preference', label: 'no-preference' }
+                        ]}
+                      />
+                    </Form.Item>
+                    <Form.Item
+                      label="减少动效"
+                      style={{ marginBottom: 0 }}
+                      valuePropName="checked"
+                      tooltip="环境窗口对 prefers-reduced-motion 媒体查询的回灌值；开启后 prefers-reduced-motion: reduce 判为 true"
+                    >
+                      <Switch checked={!!fp.prefersReducedMotion} onChange={(v) => setFpField('prefersReducedMotion', v)} />
+                    </Form.Item>
                     <Form.Item label="WebRTC" style={{ marginBottom: 0 }}>
                       <Select
                         value={fp.webrtc}
