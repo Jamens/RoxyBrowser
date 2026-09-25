@@ -9,6 +9,19 @@
 
 ---
 
+## 2026-09-26 · 账号列表检索（搜索 / 筛选 / 收藏，对标环境列表）
+
+### 新增
+
+- **账号列表检索**（`src/main/server.ts` `GET /api/accounts` + `src/renderer/src/pages/Accounts.tsx`，提交 `b4a10f4`）：账号中心原本无任何检索，本次补齐到与环境列表同构：
+  - **关键词搜索**：`?keyword=` 后端在「团队非模板环境归属」过滤之上，再按「平台 + 账号 + 备注」拼接串做大小写不敏感包含匹配。
+  - **筛选**：所属环境下拉（`?profileId=`，只看某环境的账号）+ 平台下拉（`?platform=`，复用 `PLATFORMS`），两者与关键词可叠加。
+  - **收藏**：首列星标按钮 + 工具栏「仅看收藏」开关，收藏集存浏览器 localStorage（key `roxy_starred_accounts`），删除后自动裁剪脏 ID；`viewList` 与后端筛选正交叠加。
+  - 前端 `load` 改为带 query 参数的 `useCallback`，依赖 `[keyword, profileFilter, platformFilter]`，保存/导入/批量关联后回拉时保留当前筛选。
+- **不新增数据库列**：收藏用 localStorage（符合规则 #24）；搜索/筛选走 `GET /api/accounts` 参数。
+
+---
+
 ## 2026-09-26 · 列表搜索 / 筛选 / 收藏（应用层，环境列表）
 
 ### 新增
