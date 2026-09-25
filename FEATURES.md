@@ -131,6 +131,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（含 CENC/CBCS 能力检测；iOS 伪装整体隐藏该 API，Safari 无 EME） |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 | 反自动化   | `navigator.webdriver` 强制 false（iOS 隐藏）；清除 CDP / ChromeDriver 特征全局变量（cdc_ / $cdc_ / __nightmare / callPhantom 等），避免被风控识别为自动化 |
+| 平台 API   | 按 OS 隐藏不该有的平台能力 API（bluetooth/usb 全桌面+Android；serial/hid 仅桌面；nfc 仅 Android；iOS 移除全部），避免「iOS 伪装却暴露桌面 Web API」矛盾 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
 
@@ -516,6 +517,22 @@ app.listen(4000)
 - **自动化特征全局变量清除**：预置已知名单（`cdc_` / `$cdc_` / `$chrome_asyncScriptInfo` / `__nightmare` / `callPhantom` / `_phantom` / `__phantomas` / `selenium` / `__webdriver_evaluate` / `__driver_evaluate` / `__webdriver_script_function` / `__webdriver_script_func` / `__webdriver_script_fn` / `__driver_unwrapped` / `__webdriver_unwrapped` / `__selenium_unwrapped` / `__fxdriver_unwrapped` / `__selenium_evaluate` / `__fxdriver_evaluate`），`window` / `document` 上**存在即删除**（仅 own property，不动原型；本仓库环境由自己启动的 Electron 承载，正常情况下不会存在，属防御性清除，避免任何 CDP 连接意外注入后暴露）。
 - **体检项**：新增 `automation` 项（权重 5），校验 `webdriver=false 且无自动化痕迹`，actual 文案带出 `webdriver` / `automationTraces` 两项状态。
 - **不伪造原则**：`webdriver=false` 与真实非自动化浏览器一致，属「还原真实」而非「伪造」；不存在的自动化变量一律不主动定义，避免反倒制造 `hasOwnProperty` 类破绽。
+
+#### 7.12.7 平台 API 一致性（Tier 2 #4，`56f8807`）
+
+检测站会顺手采集 `navigator` 上的平台能力 API，一旦「iOS 伪装却暴露桌面 Web API」就直接矛盾。真实支持矩阵（Chromium 各平台 vs iOS WebKit）：
+
+| API | windows | mac | android | ios |
+| --- | --- | --- | --- | --- |
+| `bluetooth` (Web Bluetooth) | ✓ | ✓ | ✓ | ✗ |
+| `usb` (WebUSB) | ✓ | ✓ | ✓ | ✗ |
+| `serial` (Web Serial) | ✓ | ✓ | ✗ | ✗ |
+| `hid` (WebHID) | ✓ | ✓ | ✗ | ✗ |
+| `nfc` (Web NFC) | ✗ | ✗ | ✓ | ✗ |
+
+- **preload 按 OS 隐藏**：`fp.os` 不在该 API 的「允许列表」且宿主原生就有该 API 时，用 `hide(navigator, key)` 遮蔽（own getter 返回 `undefined`，遮蔽原型属性），与 EME / `userAgentData` 同源手法；不凭空制造 own `undefined` 属性，否则 `'key' in navigator` 会误报存在。
+- **不伪造原则（规则 #22/#30）**：宿主本来就没有的 API 绝不主动新增，因此「应有的缺失」不处理——这正是「宁缺毋滥」：伪造一套 Web Bluetooth 实现成本极高且极易穿帮，不如如实留空。
+- **体检项**：新增 `platformApis` 项（权重 4），只判「该 OS 不该有、却暴露了」的矛盾信号（如 iOS 暴露 bluetooth/usb/serial/hid/nfc、桌面暴露 nfc、Android 暴露 serial/hid），「该有却因宿主未暴露而缺失」不计入（不伪造）。actual 文案列出具体矛盾项。
 
 #### 体检接入
 

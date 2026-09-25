@@ -9,6 +9,22 @@
 
 ---
 
+## 2026-09-26 · 平台 API 一致性（Tier 2 #4）
+
+### 新增
+
+- **平台 API 一致性（Bluetooth/USB/Serial/HID/NFC 按 OS 暴露）**（`src/main/browser-preload.ts`）：按真实支持矩阵，把「该 OS 不该有、但宿主原生却暴露」的平台能力 API 用 `hide` 遮蔽（iOS 移除全部；Android 移除 serial/hid；桌面移除 nfc）；不凭空制造 own `undefined` 属性，否则 `'key' in navigator` 会误报存在。
+- **环境体检新增 platformApis 项**（权重 4）：只判「不该有却出现」的矛盾信号（如 iOS 暴露 bluetooth/usb/serial/hid/nfc），「该有却因宿主未暴露而缺失」不计入，贯彻「不伪造」原则（`src/shared/healthcheck.ts` + `src/main/healthProbe.ts` + `src/renderer/src/pages/Environments.tsx` 标签）。
+- 离线单测：10 条 healthcheck platformApis 逻辑用例全部通过（ios 全暴露 / windows 有 nfc / android 有 serial·hid / 各 OS 该有的组合 / 全 false 不判红 / actual 文案 / weight=4）。
+
+### 设计要点
+
+- 仅当宿主原生就有该 API 时才隐藏（不凭空新增），与「不伪造」同源；宿主未暴露时如实留空，避免高成本伪造 Web Bluetooth 等实现反而穿帮。
+- 不新增数据库列与表单字段（与 WebGPU / Audio / EME / 反自动化同源，符合规则 #24）。
+- 提交：`56f8807`（feat）。
+
+---
+
 ## 2026-09-26 · 反自动化痕迹清除（Tier 1 #1）
 
 ### 新增
