@@ -8,7 +8,7 @@ import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
-  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined
+  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined
 } from '@ant-design/icons'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
@@ -108,6 +108,18 @@ interface BatchHealthResult {
   profiles: BatchHealthProfile[]
 }
 
+// ===== 智能代理分配：后端返回结构 =====
+interface BatchAllocResult {
+  total: number
+  assigned: number
+  kept: number
+  skippedRunning: number
+  skippedNoProxy: number
+  insufficient: boolean
+  assignedProxyIds: number[]
+  results: Array<{ id: number; name: string; action: 'assigned' | 'kept' | 'skipped'; proxyId?: number; reason?: string }>
+}
+
 const Stat = ({ label, value, color }: { label: string; value: string; color?: string }) => (
   <div style={{ minWidth: 96 }}>
     <div style={{ fontSize: 12, color: '#888' }}>{label}</div>
@@ -149,6 +161,12 @@ export default function Environments() {
   const [batchHealthOpen, setBatchHealthOpen] = useState(false)
   const [batchHealthLoading, setBatchHealthLoading] = useState(false)
   const [batchHealthData, setBatchHealthData] = useState<BatchHealthResult | null>(null)
+  const [allocOpen, setAllocOpen] = useState(false)
+  const [allocCountry, setAllocCountry] = useState<string | undefined>()
+  const [allocType, setAllocType] = useState<string | undefined>()
+  const [allocLoading, setAllocLoading] = useState(false)
+  const [allocPhase, setAllocPhase] = useState<'filter' | 'result'>('filter')
+  const [allocResult, setAllocResult] = useState<BatchAllocResult | null>(null)
   const [scanSites, setScanSites] = useState<ScanSiteItem[]>([])
   const [scanLoading, setScanLoading] = useState('')
   const [scanResult, setScanResult] = useState<ScanResultItem | null>(null)
@@ -301,6 +319,38 @@ export default function Environments() {
     } finally {
       setBatchHealthLoading(false)
     }
+  }
+
+  // 智能代理分配：对选中的 N 个环境，从空闲代理池逐一分配**互不相同**的代理（负载均衡 + 避免同代理复用）。
+  // 某环境已独占合规代理则保留；运行中的环境跳过；池不足时不强行复用（标记 skipped）。
+  const openAlloc = () => {
+    setAllocCountry(undefined)
+    setAllocType(undefined)
+    setAllocResult(null)
+    setAllocPhase('filter')
+    setAllocOpen(true)
+  }
+  const runAllocProxy = async () => {
+    if (!selected.length) return
+    setAllocLoading(true)
+    try {
+      const data = await api.post<BatchAllocResult>('/api/profiles/batch-allocate-proxy', {
+        ids: selected.map(Number),
+        country: allocCountry || undefined,
+        type: allocType || undefined
+      })
+      setAllocResult(data)
+      setAllocPhase('result')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setAllocLoading(false)
+    }
+  }
+  const closeAlloc = () => {
+    setAllocOpen(false)
+    setSelected([])
+    load()
   }
 
   // 在线检测：把环境窗口导航到第三方检测站，抓回页面文本与截图。
@@ -866,6 +916,9 @@ export default function Environments() {
               <Button icon={<ApiOutlined />} onClick={batchBindProxy}>
                 绑定 ({selected.length})
               </Button>
+              <Button icon={<DeploymentUnitOutlined />} onClick={openAlloc}>
+                智能分配 ({selected.length})
+              </Button>
               <Button
                 icon={<ThunderboltOutlined />}
                 onClick={randomizeSelected}
@@ -1329,6 +1382,104 @@ export default function Environments() {
           </div>
         )}
       </Drawer>
+
+      {/* 智能代理分配：负载均衡 + 避免同代理复用 */}
+      <Modal
+        title="智能分配代理（负载均衡 · 避免同代理复用）"
+        open={allocOpen}
+        onCancel={allocPhase === 'result' ? closeAlloc : () => setAllocOpen(false)}
+        footer={null}
+        width={680}
+      >
+        {allocPhase === 'filter' && (
+          <div>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="为选中的环境逐一分配互不相同的空闲代理"
+              description="已独占合规代理的环境会保留；运行中的环境跳过；空闲代理不足时不强行复用（避免多个环境共用同一出口 IP 导致关联）。可按国家 / 类型筛选候选池。"
+            />
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+              <Select
+                placeholder="国家/地区（可选）"
+                allowClear
+                style={{ flex: 1 }}
+                value={allocCountry}
+                onChange={setAllocCountry}
+                options={Array.from(new Set(proxies.map((p) => p.country).filter(Boolean))).map((c) => ({ value: c as string, label: c as string }))}
+              />
+              <Select
+                placeholder="类型（可选）"
+                allowClear
+                style={{ flex: 1 }}
+                value={allocType}
+                onChange={setAllocType}
+                options={Array.from(new Set(proxies.map((p) => p.type).filter(Boolean))).map((t) => ({ value: t as string, label: t as string }))}
+              />
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <Space>
+                <Button onClick={() => setAllocOpen(false)}>取消</Button>
+                <Button type="primary" loading={allocLoading} onClick={runAllocProxy}>
+                  开始分配
+                </Button>
+              </Space>
+            </div>
+          </div>
+        )}
+        {allocPhase === 'result' && allocResult && (
+          <div>
+            <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
+              <Stat label="已分配新代理" value={`${allocResult.assigned}`} color="#52c41a" />
+              <Stat label="保留原代理" value={`${allocResult.kept}`} />
+              <Stat label="跳过（运行中）" value={`${allocResult.skippedRunning}`} />
+              <Stat
+                label="跳过（池不足）"
+                value={`${allocResult.skippedNoProxy}`}
+                color={allocResult.skippedNoProxy ? '#ff4d4f' : '#333'}
+              />
+            </div>
+            {allocResult.insufficient && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="空闲代理数量少于待分配环境，部分环境未分配（已避免同代理复用）。请先补充代理池。"
+              />
+            )}
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={false}
+              dataSource={allocResult.results}
+              columns={[
+                { title: '环境', dataIndex: 'name', ellipsis: true },
+                {
+                  title: '结果',
+                  dataIndex: 'action',
+                  width: 110,
+                  render: (v: string) =>
+                    v === 'assigned' ? (
+                      <Tag color="success">已分配</Tag>
+                    ) : v === 'kept' ? (
+                      <Tag color="blue">保留</Tag>
+                    ) : (
+                      <Tag color="default">跳过</Tag>
+                    )
+                },
+                { title: '代理', dataIndex: 'proxyId', width: 90, render: (v?: number) => (v ? `#${v}` : '-') },
+                { title: '说明', dataIndex: 'reason', ellipsis: true }
+              ]}
+            />
+            <div style={{ textAlign: 'right', marginTop: 16 }}>
+              <Button type="primary" onClick={closeAlloc}>
+                完成
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* 环境克隆工厂：以母本批量派生副本，指纹微抖动 */}
       <Modal

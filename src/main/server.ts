@@ -45,6 +45,7 @@ import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig, SmtpSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
+import { allocateProxies } from '../shared/proxyAllocator'
 import {
   exportProfileFull,
   importProfileItems,
@@ -1804,6 +1805,48 @@ function buildApiRouter(): express.Router {
       if (e instanceof ApiError) return res.status(e.status).json({ message: e.message })
       throw e
     }
+  })
+
+  // 智能代理分配（负载均衡 + 避免同代理复用）：
+  // 对选中的 N 个环境，从「空闲可用代理池」逐一分配**互不相同**的代理，杜绝两个环境共用同一出口 IP（防关联）。
+  // 核心分配逻辑抽到纯函数 allocateProxies（src/shared/proxyAllocator.ts），便于离线单测；此处只负责取数、落库、写日志。
+  router.post('/profiles/batch-allocate-proxy', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const ids = Array.isArray(req.body?.ids)
+      ? (req.body.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n))
+      : []
+    if (!ids.length) return res.status(400).json({ message: '请选择至少一个环境' })
+    const country = typeof req.body?.country === 'string' ? req.body.country.trim() : ''
+    const type = typeof req.body?.type === 'string' ? req.body.type.trim() : ''
+
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+    const profiles = await profileRepo.find({ where: { id: In(ids), ...ownerScope(req) } })
+    const byId = new Map(profiles.map((p) => [p.id, p]))
+    const ordered = ids.map((id) => byId.get(id)).filter((p): p is ProfileEntity => !!p)
+
+    const usage = await computeProxyUsage(req.tid!)
+    const allProxies = await proxyRepo.find({ where: { teamId: req.tid! } })
+
+    const result = allocateProxies(
+      ordered.map((p) => ({ id: p.id, name: p.name, status: p.status, proxyId: p.proxyId })),
+      allProxies.map((p) => ({ id: p.id, status: p.status, country: p.country, type: p.type, expiresAt: p.expiresAt })),
+      usage,
+      { country, type }
+    )
+
+    if (result.updates.length) {
+      const saveMap = new Map(result.updates.map((u) => [u.id, u.proxyId]))
+      const toSave = ordered.filter((p) => saveMap.has(p.id))
+      for (const p of toSave) p.proxyId = saveMap.get(p.id) ?? null
+      await profileRepo.save(toSave)
+      await writeLog(
+        req,
+        'batch_allocate_proxy',
+        `智能分配代理：分配 ${result.assigned} 个、保留 ${result.kept} 个、跳过 ${result.skippedRunning + result.skippedNoProxy} 个`
+      )
+    }
+
+    res.json(result)
   })
 
   // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布
