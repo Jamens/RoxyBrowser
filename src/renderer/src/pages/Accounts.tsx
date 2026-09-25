@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload, Tooltip } from 'antd'
+import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload, Tooltip, Alert } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined, DownloadOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined, DownloadOutlined, LinkOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
@@ -46,6 +46,12 @@ export default function Accounts() {
   // 当前用户角色：member 不可查看明文密码 / 导出（对标官方 3.8.9 账号权限管理）
   const [role, setRole] = useState('owner')
   const isMember = role === 'member'
+
+  // 批量关联环境：选中多个账号 → 统一绑定到某个目标环境
+  const [selectedAcc, setSelectedAcc] = useState<number[]>([])
+  const [assocOpen, setAssocOpen] = useState(false)
+  const [assocProfile, setAssocProfile] = useState<number | undefined>()
+  const [assocLoading, setAssocLoading] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -140,6 +146,33 @@ export default function Accounts() {
     }
   }
 
+  const batchAssociate = async () => {
+    if (!selectedAcc.length) {
+      message.warning('请先勾选账号')
+      return
+    }
+    if (assocProfile === undefined) {
+      message.warning('请选择目标环境')
+      return
+    }
+    setAssocLoading(true)
+    try {
+      const res = await api.post<{ updated: number }>('/api/accounts/batch-associate', {
+        accountIds: selectedAcc,
+        profileId: assocProfile
+      })
+      message.success(`已将 ${res.updated} 个账号关联到所选环境`)
+      setAssocOpen(false)
+      setAssocProfile(undefined)
+      setSelectedAcc([])
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setAssocLoading(false)
+    }
+  }
+
   const columns: ColumnsType<Row> = [
     { title: '所属环境', dataIndex: 'profileName', render: (v) => v || '-' },
     { title: '平台', dataIndex: 'platform', width: 110, render: (v) => (v ? <Tag color="processing">{v}</Tag> : '-') },
@@ -220,7 +253,23 @@ export default function Accounts() {
       <Typography.Paragraph type="secondary">
         将各平台的账号密码保存到对应的浏览器环境中，免去多账号逐一记录的负担；环境成员无需互传密码即可协作。
       </Typography.Paragraph>
-      <Table rowKey="id" size="middle" columns={columns} dataSource={list} pagination={{ pageSize: 10 }} />
+      {selectedAcc.length > 0 && (
+        <Space style={{ marginBottom: 12 }}>
+          <Typography.Text>已选 {selectedAcc.length} 个账号</Typography.Text>
+          <Button type="primary" icon={<LinkOutlined />} onClick={() => setAssocOpen(true)}>
+            批量关联环境
+          </Button>
+          <Button onClick={() => setSelectedAcc([])}>取消选择</Button>
+        </Space>
+      )}
+      <Table
+        rowKey="id"
+        size="middle"
+        columns={columns}
+        dataSource={list}
+        pagination={{ pageSize: 10 }}
+        rowSelection={{ selectedRowKeys: selectedAcc, onChange: (keys) => setSelectedAcc(keys as number[]) }}
+      />
       <Modal title={editing ? '编辑账号' : '添加账号'} open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>
         <Form form={form} layout="vertical">
           <Form.Item name="profileId" label="所属环境" rules={[{ required: true, message: '请选择环境' }]}>
@@ -284,6 +333,36 @@ export default function Accounts() {
               下载模板
             </Button>
           </Space>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="批量关联环境"
+        open={assocOpen}
+        onOk={batchAssociate}
+        confirmLoading={assocLoading}
+        onCancel={() => setAssocOpen(false)}
+        okText="确认关联"
+        destroyOnClose
+      >
+        <Alert
+          style={{ marginBottom: 12 }}
+          type="info"
+          showIcon
+          message={`将为选中的 ${selectedAcc.length} 个账号统一设置所属环境`}
+          description="关联后这些账号的密码不展示给环境成员之外的协作方（成员角色本就看不到明文密码）。"
+        />
+        <Form layout="vertical">
+          <Form.Item label="目标环境" required extra="选中的账号将统一绑定到该环境（一个账号只能属于一个环境）">
+            <Select
+              placeholder="选择浏览器环境"
+              value={assocProfile}
+              onChange={(v) => setAssocProfile(v)}
+              showSearch
+              optionFilterProp="label"
+              options={profiles.map((p) => ({ value: p.id, label: `#${p.seq} ${p.name}` }))}
+            />
+          </Form.Item>
         </Form>
       </Modal>
     </Card>

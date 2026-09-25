@@ -1956,6 +1956,30 @@ function buildApiRouter(): express.Router {
     res.json({ ok: true })
   })
 
+  // 账号-环境批量关联：把选中的多个账号批量绑定到同一个目标环境（设置 account.profileId）。
+  // 仅对 ownerScope 可见的账号生效（member 只能操作自己的账号）；目标环境须为有效的非模板环境。
+  router.post('/accounts/batch-associate', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const accountIds = Array.isArray(req.body?.accountIds)
+      ? (req.body.accountIds as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n))
+      : []
+    const profileId = Number(req.body?.profileId)
+    if (!accountIds.length) return res.status(400).json({ message: '请选择至少一个账号' })
+    if (!Number.isInteger(profileId)) return res.status(400).json({ message: '请选择目标环境' })
+
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const target = await profileRepo.findOne({ where: { id: profileId, isTemplate: false, ...ownerScope(req) } })
+    if (!target) return res.status(400).json({ message: '目标环境不存在或无权访问' })
+
+    const repo = AppDataSource.getRepository(AccountEntity)
+    const accounts = await repo.find({ where: { id: In(accountIds), ...ownerScope(req) } })
+    if (!accounts.length) return res.status(404).json({ message: '未找到可操作的账号' })
+
+    for (const a of accounts) a.profileId = target.id
+    await repo.save(accounts)
+    await writeLog(req, 'batch_associate_account', `批量关联 ${accounts.length} 个账号到环境「${target.name}」`)
+    res.json({ updated: accounts.length })
+  })
+
   // 账号批量导入：每行支持两种格式
   //   格式A（带环境，可还原归属）：`#环境序号|环境名,平台,账号,密码,备注`
   //   格式B（单一环境）：`平台,账号,密码[,备注]`，需配合请求体 profileId 指定归属环境
