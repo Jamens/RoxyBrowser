@@ -9,6 +9,28 @@
 
 ---
 
+## 2026-09-24 · 智能助手 Planner 进阶（多步编排 + 技能库 + 防时间冻结）
+
+### 新增
+
+- **多步编排（forEach fan-out）**：动作可挂 `forEach: { fromQuery, map }`，表示「对第 N 条查询的每一行，用行字段填进参数展开成一组动作」；「查出 N 个快到期代理 → 逐个删除」这类依赖前一步结果的流程不再需要模型枚举 ID（本地小模型枚举极易出错），由后端 `expandActions`（`src/shared/assistantPlan.ts`，纯函数、可单测）确定性展开。
+  - `forEach` 引用的查询**为空 / 越界**时天然产出 **0 条动作**——避免拿空参数去执行 `deleteProxy` 这类危险动作（单元测试覆盖）。
+- **技能库（保存 / 复用计划模板）**：对话里「保存为技能」把本次 LLM 产出的结构化计划存进 `assistant_skills` 表（`AssistantSkillEntity`），之后在技能面板一键运行 / 删除；运行时不调 LLM，直接复用模板重跑 `executePlan`。
+  - `executePlan` 是 LLM 路径与技能重跑路径的**唯一执行出口**，因此白名单 / 隔离 / 危险分级三道闸在重跑时**全部重新生效**，技能无法绕过校验。
+  - 接口：`GET /api/assistant/skills`、`POST /api/assistant/skills`、`DELETE /api/assistant/skills/:id`、`POST /api/assistant/skills/:id/run`（复用 `runSkillPlan`）。
+- **相对时间标记（防技能时间冻结）**：模板里写死绝对日期（如 `expiresAt < "2026-09-30"`）会在重跑时失效；改用 `@rel:now±N[d|h|m]`（或 `{"__rel":"now+7d"}`）后，查询时才解析成相对当前时间的偏移日期，「7 天内到期」类技能永远跟着现在走。系统提示词已指导模型对相对时间一律用此标记；`resolveRelTime`（`src/shared/assistantPlan.ts`）在查询执行时解析，离线单测覆盖字符串 / 对象 / 数组 / 越界 / 透传。
+- 前端：`AssistantChat.tsx` 增加「执行全部」按钮（危险动作仍逐条强确认 + 审计）、技能库面板（运行 / 删除）、保存技能弹窗；四语 i18n 新增 13 个 key。
+- 提交：`aaffb22`（feat + 文档）。
+
+### 修复
+
+- **forEach 索引错位**：`executePlan` 原用 `push` 压缩查询结果数组，而 `forEach.fromQuery` 引用的是 `plan.queries` 的原始下标——一旦某条前置查询被禁查 / 跳过，后续 forEach 就指向错误的查询，甚至 `undefined` → **静默产出 0 条动作**。现改为用与 `plan.queries` 等长的数组承载结果（跳过位留 `null`），`expandActions` 对空位天然返回 0 条，一行改动消除错位。
+- **角色判定用过期 JWT 值**：三处 Planner 上下文原直接用 `req.role`（JWT 角色在「调整成员角色」后会过期），现已统一改为 `await freshRole(req)`（读数据库实时角色），与项目既有约定一致，保证权限调整即时生效。
+- **技能重跑漏掉敏感拦截 / 隔离标记**：`runSkillPlan` 现会重新校验 `intent === 'blocked'`（模板若被标记敏感，重跑同样拒绝）并把 `sensitiveBlocked` 透传回前端；与 `planAssistant` 行为对齐。
+- **前端两处静默失败**：技能列表加载失败现在弹错误提示（不再是空列表静默）；保存技能时「名称为空」由 `okButtonProps.disabled` 兜底，避免点确定后弹窗静默关闭。
+
+---
+
 ## 2026-09-24 · 在线检测站实战验证（外部视角指纹体检）
 
 ### 新增

@@ -771,7 +771,7 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 ### 关键语义
 
-「环境快过期」本身没有过期字段，映射为**所绑定代理的 `expiresAt` 落在 `now ~ now+7天`**（阈值可配，说「3天内」即用 3 天）。系统提示里注入 `CURRENT_TIME` / `NOW_PLUS_3D` / `NOW_PLUS_7D`，模型据此生成 `between` 过滤条件；结果还会经 `enrich` 反向补出「使用该代理的环境」，更贴近用户真实意图。
+「环境快过期」本身没有过期字段，映射为**所绑定代理的 `expiresAt` 落在 `now ~ now+7天`**（阈值可配，说「3天内」即用 3 天）。系统提示里注入 `CURRENT_TIME`，并要求模型对「相对现在」的时间一律用相对标记 `@rel:now±N[d|h|m]`（如 `@rel:now+7d`）；后端 `resolveRelTime()` 在查询时把标记解析成当前时间的偏移日期，因此**保存为技能后很久再重跑，日期仍自动跟随当前时间**，不会被写死的绝对日期冻结。结果还会经 `enrich` 反向补出「使用该代理的环境」，更贴近用户真实意图。
 
 ### 深链定位
 
@@ -780,6 +780,29 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 ### 前置条件
 
 需在「设置 → AI Agent」开启。默认本地 Ollama（`qwen2.5:7b`，零 token），也可在设置里切云端 BYOK。历史消息角色会归一化（`bot` → `assistant`），否则云端厂商会因非法 role 返回 400。
+
+### 14.1 多步编排与技能库（Planner 进阶）
+
+把「依赖前一步结果的流程」表达成一条结构化计划，并支持把计划**固化为技能**反复复用。
+
+#### 多步编排（forEach fan-out）
+
+动作可挂 `forEach: { fromQuery, map }`：表示「对第 `fromQuery` 条查询的**每一行**，用 `map` 把行字段填进动作参数，展开成一组动作」。这样「查出 N 个快到期代理 → 逐个删除 / 逐个给环境替换」之类流程，无需让模型去枚举 ID（本地小模型枚举极易出错），由后端确定性展开。
+
+- 纯函数 `expandActions(plan, queries)`（`src/shared/assistantPlan.ts`，离线可单测）负责展开；`forEach` 引用的查询**为空 / 越界**时天然产出 **0 条动作**——避免拿空参数去执行 `deleteProxy` 这类危险动作。
+- 展开后的每条动作带 `batch: { queryIndex, total, rowIndex }`，前端展示「对查询①的 N 行 · 第 k 行」，并对多动作提供「执行全部」一键顺序执行（危险动作仍逐条强确认）。
+
+#### 技能库（保存 / 复用计划模板）
+
+对话里点「保存为技能」即把本次 LLM 产出的结构化计划（`planTemplate`）存进 `assistant_skills` 表（`AssistantSkillEntity`，含 `teamId` / `ownerId` / `name` / `trigger` / `steps` JSON）。之后在技能面板里可一键**运行 / 删除**，运行时不调 LLM，直接复用模板重跑 `executePlan`——因此**白名单 / 隔离 / 危险分级三道闸全部重新生效**，不是绕过。
+
+- 接口：`GET /api/assistant/skills`（列表）、`POST /api/assistant/skills`（保存，校验 name + 模板）、`DELETE /api/assistant/skills/:id`、`POST /api/assistant/skills/:id/run`（复用 `runSkillPlan`）。
+- `executePlan` 是所有路径的唯一执行出口：LLM 路径与技能重跑路径共用，杜绝「技能绕过校验」。
+- **索引对齐**：`executePlan` 内部用与 `plan.queries` **等长**的数组承载查询结果（被禁查 / 跳过的查询位留 `null`），保证 `forEach.fromQuery` 的下标永远对齐原始计划，修复了「前置查询被跳过导致索引错位、forEach 静默 0 动作」的 bug。
+
+#### 相对时间标记（防技能时间冻结）
+
+技能模板可能在保存很久后重跑。若模板里写死绝对日期（如 `expiresAt < "2026-09-30"`），重跑时就已过期失效。改用 `@rel:now±N[d|h|m]`（或 `{"__rel":"now+7d"}`）后，查询时才解析成相对当前时间的偏移日期，技能「7 天内到期」永远跟着现在走。
 
 ## 运行时验证（真实窗口 E2E）
 
