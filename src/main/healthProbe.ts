@@ -132,6 +132,19 @@ const PROBE_SCRIPT = `(function(){
       if (!automationTraces && Object.prototype.hasOwnProperty.call(document, '$cdc_')) automationTraces = true
     } catch (e2) {}
 
+    // ---- 平台 API 一致性（Tier 2 #4）----
+    // 探测 5 个平台能力 API 在环境窗口内的实际存在情况（bluetooth / usb / serial / hid / nfc）。
+    // 注意：本仓库 Electron 宿主默认不暴露这些 Web API，正常环境里大概率为 false；
+    // 探针对「宿主原生暴露、但当前 OS 伪装不该有」的情况做体检判红（见 healthcheck）。
+    var apiBluetooth = false, apiUsb = false, apiSerial = false, apiHid = false, apiNfc = false
+    try {
+      apiBluetooth = (nav.bluetooth !== undefined)
+      apiUsb = (nav.usb !== undefined)
+      apiSerial = (nav.serial !== undefined)
+      apiHid = (nav.hid !== undefined)
+      apiNfc = (nav.nfc !== undefined)
+    } catch (e3) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
     return Promise.all([gpuP, emeP]).then(function () {
@@ -178,7 +191,12 @@ const PROBE_SCRIPT = `(function(){
         emeVideoCaps: emeVideoCaps,
         emeAudioCaps: emeAudioCaps,
         webdriver: webdriver,
-        automationTraces: automationTraces
+        automationTraces: automationTraces,
+        apiBluetooth: apiBluetooth,
+        apiUsb: apiUsb,
+        apiSerial: apiSerial,
+        apiHid: apiHid,
+        apiNfc: apiNfc
       };
       } catch (e) {
         return { error: String(e) };

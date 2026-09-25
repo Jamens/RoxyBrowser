@@ -77,6 +77,16 @@ export interface FingerprintProbe {
   webdriver: boolean
   /** 是否检测到 CDP / ChromeDriver 等自动化特征全局变量（cdc_ / $cdc_ 等） */
   automationTraces: boolean
+  /** navigator.bluetooth 是否暴露（平台 API 一致性） */
+  apiBluetooth: boolean
+  /** navigator.usb（WebUSB）是否暴露 */
+  apiUsb: boolean
+  /** navigator.serial（Web Serial）是否暴露 */
+  apiSerial: boolean
+  /** navigator.hid（WebHID）是否暴露 */
+  apiHid: boolean
+  /** navigator.nfc（Web NFC）是否暴露 */
+  apiNfc: boolean
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -370,6 +380,35 @@ export function buildHealthReport(
       actual: `webdriver=${actual.webdriver} automationTraces=${actual.automationTraces}`,
       ok,
       weight: 5
+    })
+  }
+
+  // ---- 平台 API 一致性（Tier 2 #4）----
+  // 按 OS 应有的平台能力 API：bluetooth/usb 全桌面+Android；serial/hid 仅桌面；nfc 仅 Android；iOS 一概没有。
+  // 不伪造（规则 #22/#30）：宿主没有的 API 不主动新增，故「应有的缺失」不判红；
+  // 只判「该 OS 不该有、却暴露了」的矛盾信号（如 iOS 伪装却暴露 bluetooth/usb/serial/hid/nfc）。
+  {
+    const allowed: { key: keyof FingerprintProbe; os: string[] }[] = [
+      { key: 'apiBluetooth', os: ['windows', 'mac', 'android'] },
+      { key: 'apiUsb', os: ['windows', 'mac', 'android'] },
+      { key: 'apiSerial', os: ['windows', 'mac'] },
+      { key: 'apiHid', os: ['windows', 'mac'] },
+      { key: 'apiNfc', os: ['android'] }
+    ]
+    const contradictions: string[] = []
+    for (const a of allowed) {
+      if (a.os.indexOf(s(e.os)) >= 0) continue
+      if (actual[a.key]) contradictions.push(a.key.replace('api', '').toLowerCase())
+    }
+    const ok = contradictions.length === 0
+    items.push({
+      key: 'platformApis',
+      expected: '不该出现的平台 API 已隐藏',
+      actual: contradictions.length
+        ? `不该有却出现: ${contradictions.join(', ')}`
+        : '无矛盾（应有的缺失不计入）',
+      ok,
+      weight: 4
     })
   }
 

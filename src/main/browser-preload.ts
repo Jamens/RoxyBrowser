@@ -158,6 +158,30 @@ import { audioProfileFor } from '../shared/webaudio'
     try { if (Object.prototype.hasOwnProperty.call(document, '$cdc_')) delete (document as any).$cdc_ } catch (e) { /* ignore */ }
   }
 
+  // ===== 平台 API 一致性（Tier 2 #4，避免「iOS 伪装却暴露桌面 Web API」矛盾信号）=====
+  // 真实支持矩阵（Chromium 各平台 vs iOS WebKit）：
+  //   bluetooth(Web Bluetooth)：Chrome 全平台(含 Android) 有；iOS Safari 无
+  //   usb(WebUSB)：Chrome 桌面 + Android 有；iOS Safari 无
+  //   serial(Web Serial)：仅 Chrome 桌面；Android / iOS 无
+  //   hid(WebHID)：仅 Chrome 桌面；Android / iOS 无
+  //   nfc(Web NFC)：仅 Android Chrome；桌面 / iOS 无
+  // 不伪造原则（规则 #22/#30）：宿主本来就没有的 API 绝不主动新增，因此「应有的缺失」不处理；
+  // 只把「该 OS 不该有、但宿主原生却暴露」的 API 用 hide 遮蔽（own getter 返回 undefined，遮蔽原型属性）。
+  {
+    const PLATFORM_APIS: { key: string; allowed: string[] }[] = [
+      { key: 'bluetooth', allowed: ['windows', 'mac', 'android'] },
+      { key: 'usb', allowed: ['windows', 'mac', 'android'] },
+      { key: 'serial', allowed: ['windows', 'mac'] },
+      { key: 'hid', allowed: ['windows', 'mac'] },
+      { key: 'nfc', allowed: ['android'] }
+    ]
+    for (const { key, allowed } of PLATFORM_APIS) {
+      if (allowed.indexOf(fp.os) >= 0) continue
+      // 仅当宿主原生就有该 API 时才隐藏（不凭空制造 own undefined 属性，否则 'key' in navigator 会误报存在）
+      if ((navigator as any)[key] !== undefined) hide(navigator, key)
+    }
+  }
+
   // ===== 移动端：触摸能力 + 像素比 =====
   // 桌面（非触摸）统一归 0，避免真实宿主机是触摸屏时把 maxTouchPoints 漏成 10 等；
   // 移动端固定 5。这是反检测最稳妥的默认值。
