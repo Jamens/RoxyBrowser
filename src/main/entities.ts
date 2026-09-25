@@ -469,3 +469,35 @@ export class AppSettingsEntity {
   @UpdateDateColumn({ type: 'datetime' })
   updatedAt: Date
 }
+
+/**
+ * 智能助手「技能」：把一次成功的结构化计划（查询 + 动作模板）固化下来复用。
+ * steps 存 JSON 字符串（Plan 模板：queries + actions + forEach），运行时不依赖 LLM，
+ * 直接用模板重跑查询并展开动作，结果对应当前最新数据。
+ */
+@Entity('assistant_skills')
+@Index(['teamId'])
+export class AssistantSkillEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int', nullable: true })
+  ownerId: number
+
+  @Column({ type: 'varchar', length: 128 })
+  name: string
+
+  // 触发指令的自然语言描述（仅展示，帮助用户回忆这条技能做什么）
+  @Column({ type: 'varchar', length: 255, default: '' })
+  trigger: string
+
+  // 结构化计划模板（JSON 字符串）：{ queries: PlanQuery[], actions: PlanAction[] }
+  @Column({ type: 'longtext' })
+  steps: string
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}

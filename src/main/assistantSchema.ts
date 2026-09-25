@@ -279,8 +279,6 @@ export const ASSISTANT_ACTIONS: Record<string, AssistantActionDef> = {
 export function buildAssistantSystemPrompt(now: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   const iso = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
-  const nowPlus7 = new Date(now.getTime() + 7 * 24 * 3600 * 1000)
-  const nowPlus3 = new Date(now.getTime() + 3 * 24 * 3600 * 1000)
   const catalog = Object.values(ASSISTANT_ENTITIES)
     .map((e) => `- ${e.entity}（${e.label}）：可查字段 ${e.fields.map((f) => f.name).join(', ')}`)
     .join('\n')
@@ -289,8 +287,6 @@ export function buildAssistantSystemPrompt(now: Date): string {
 
 # 当前时间
 CURRENT_TIME = ${iso(now)}
-NOW_PLUS_3D = ${iso(nowPlus3)}   （3 天内）
-NOW_PLUS_7D = ${iso(nowPlus7)}   （7 天内，默认的「快过期」阈值）
 
 # 可查询实体白名单
 ${catalog}
@@ -310,7 +306,7 @@ ${catalog}
       "entity": "proxies",               // 必须是上方白名单之一
       "fields": ["name","expiresAt"],    // 想展示的字段；留空 [] 则用默认展示字段
       "filters": [                       // 可空；op 仅限 = != > >= < <= like in between
-        { "field": "expiresAt", "op": "between", "value": ["${iso(now)}", "${iso(nowPlus7)}"] }
+        { "field": "expiresAt", "op": "between", "value": ["@rel:now", "@rel:now+7d"] }
       ],
       "limit": 20,                       // 默认 20，最大 50
       "orderBy": "expiresAt",
@@ -330,16 +326,21 @@ ${catalog}
 
 # 关键语义
 - 「环境快过期 / 哪些环境即将到期」：本系统环境本身没有过期时间，到期的是它所绑定代理的 expiresAt。
-  因此应查询 proxies 表，过滤 expiresAt BETWEEN CURRENT_TIME 与 NOW_PLUS_7D（用户说「3天内」则用 NOW_PLUS_3D），按 expiresAt ASC 排序。
+  因此应查询 proxies 表，过滤 expiresAt BETWEEN @rel:now 与 @rel:now+7d（用户说「3天内」则用 @rel:now+3d），按 expiresAt ASC 排序。
   reply 中说明「这些环境所绑定代理将在 X 天内到期」，并提示点击跳转查看对应代理与环境。
 - 「最近删了哪些环境」：查询 profiles 表，过滤 deletedAt != null（回收站）。
-- 「哪些代理快到期」：查询 proxies 表，过滤 expiresAt BETWEEN CURRENT_TIME 与 NOW_PLUS_7D。
+- 「哪些代理快到期」：查询 proxies 表，过滤 expiresAt BETWEEN @rel:now 与 @rel:now+7d。
 
 # 规则
 1. 只读查询：不要试图修改数据，修改走 actions。
 2. 字段必须是该实体白名单字段；不知道的字段不要写。
-3. filters 的 value 用字符串/数字/字符串数组；between 用长度为 2 的数组 [起,止]，时间用上方 CURRENT_TIME / NOW_PLUS_* 格式。
-4. 如果用户问的是禁查内容，intent 设为 "blocked"，queries/actions 留空，reply 用标准提示语。
-5. 如果无法理解或超出能力，intent 设为 "unknown"，reply 说明你能查什么。
-6. 只能输出 JSON，不要输出 \`\`\`json 包裹。`
+3. filters 的 value 用字符串/数字/字符串数组；between 用长度为 2 的数组 [起,止]。
+4. 【相对时间】凡是「相对于现在」的时间条件，一律用相对标记而非绝对日期：
+   - 格式为 "@rel:now±N[d|h|m]"，例如 "@rel:now"（此刻）、"@rel:now+7d"（7 天后）、"@rel:now-3d"（3 天前）、"@rel:now+12h"（12 小时后）。
+   - 也可写成对象 {"__rel":"now+7d"}。数组里每个元素单独解析，如 ["@rel:now", "@rel:now+7d"]。
+   - 这样生成计划被「保存为技能」后在很久以后重跑，日期仍会自动跟随当前时间，不会被写死的绝对日期冻结。
+   - 不要输出 CURRENT_TIME 做字符串拼接；直接用上述 @rel: 标记。
+5. 如果用户问的是禁查内容，intent 设为 "blocked"，queries/actions 留空，reply 用标准提示语。
+6. 如果无法理解或超出能力，intent 设为 "unknown"，reply 说明你能查什么。
+7. 只能输出 JSON，不要输出 \`\`\`json 包裹。`
 }

@@ -31,8 +31,10 @@ import {
   TeamMemberEntity,
   TeamEntity,
   OperationLogEntity,
-  RpaScriptEntity
+  RpaScriptEntity,
+  AssistantSkillEntity
 } from './entities'
+import { expandActions, resolveRelTime, type Plan, type PlanQuery } from '../shared/assistantPlan'
 
 /** 调用方注入的上下文（由 server 路由从已鉴权的 req 取出） */
 export interface PlannerCtx {
@@ -60,28 +62,7 @@ function audit(ctx: PlannerCtx, action: string, detail: string, sensitive = fals
 }
 
 // ===================== 计划解析 =====================
-
-interface PlanQuery {
-  entity?: string
-  fields?: string[]
-  filters?: Array<{ field?: string; op?: string; value?: unknown }>
-  limit?: number
-  orderBy?: string
-  orderDir?: 'ASC' | 'DESC'
-}
-interface PlanAction {
-  kind?: string
-  label?: string
-  target?: { entity?: string; id?: number }
-  params?: Record<string, unknown>
-}
-interface Plan {
-  understanding?: string
-  intent?: string
-  queries?: PlanQuery[]
-  actions?: PlanAction[]
-  reply?: string
-}
+// Plan / PlanQuery / PlanAction / expandActions 见 ../shared/assistantPlan（纯函数，可离线单测）
 
 /** 从模型输出里尽量抠出 JSON（容忍 ```json 包裹或前后夹杂文字） */
 function extractJson(text: string): Plan | null {
@@ -124,6 +105,8 @@ export interface AssistantActionProposal {
   danger: ActionDanger
   target: { entity: string; id: number }
   params: Record<string, unknown>
+  /** 来自 forEach 展开时记录出处，供前端展示「对查询①的 N 行 · 第 k 行」 */
+  batch?: { queryIndex: number; total: number; rowIndex: number }
 }
 export interface AssistantResult {
   ok: boolean
@@ -133,6 +116,8 @@ export interface AssistantResult {
   sensitiveBlocked?: boolean
   queries: AssistantQueryResult[]
   actions: AssistantActionProposal[]
+  /** 本次产出的结构化计划模板（queries + actions + forEach），前端可「保存为技能」复用 */
+  planTemplate?: Plan
 }
 
 function clampLimit(n?: number): number {
@@ -140,7 +125,7 @@ function clampLimit(n?: number): number {
   return Math.min(Math.max(v, 1), 50)
 }
 
-async function runOneQuery(ctx: PlannerCtx, q: PlanQuery): Promise<AssistantQueryResult | { blocked: true }> {
+async function runOneQuery(ctx: PlannerCtx, q: PlanQuery, now: Date): Promise<AssistantQueryResult | { blocked: true }> {
   const entity = q.entity as AssistantEntity
   const def = ASSISTANT_ENTITIES[entity]
   if (!def) throw new Object({ code: 400, message: `不支持查询的实体：${entity}` })
@@ -168,7 +153,7 @@ async function runOneQuery(ctx: PlannerCtx, q: PlanQuery): Promise<AssistantQuer
     if (!allowed.has(field) || blocklist.includes(field)) continue
     if (!ALLOWED_FILTER_OPS.includes(op)) continue
     const col = `e.${field}`
-    const val = f.value
+    const val = resolveRelTime(f.value, now)
     if (op === 'between' && Array.isArray(val) && val.length === 2) {
       qb.andWhere(`${col} BETWEEN :b0 AND :b1`, { b0: val[0], b1: val[1] })
     } else if (op === 'in' && Array.isArray(val)) {
@@ -294,47 +279,7 @@ export async function planAssistant(
     }
   }
 
-  const queries: AssistantQueryResult[] = []
-  let sensitiveBlocked = false
-  for (const q of plan.queries || []) {
-    if (!q || !q.entity) continue
-    try {
-      const r = await runOneQuery(ctx, q)
-      if ('blocked' in r) {
-        sensitiveBlocked = true
-        continue
-      }
-      queries.push(r)
-    } catch (e: unknown) {
-      const msg = e instanceof Object && 'message' in e ? (e as { message?: string }).message : String(e)
-      queries.push({
-        entity: (q.entity as AssistantEntity) || 'profiles',
-        entityLabel: ASSISTANT_ENTITIES[q.entity as AssistantEntity]?.label || q.entity || '未知',
-        columns: [],
-        rows: [],
-        total: 0,
-        truncated: false
-      })
-      // 单条查询失败不阻断整体，reply 里提示
-      if (!plan.reply) plan.reply = `部分查询失败：${msg}`
-    }
-  }
-
-  // 动作提案（闸 3：仅保留白名单内的 kind，危险分级交由前端确认）
-  const actions: AssistantActionProposal[] = []
-  for (const a of plan.actions || []) {
-    if (!a || !a.kind) continue
-    const def = ASSISTANT_ACTIONS[a.kind]
-    if (!def) continue
-    const targetId = Number(a.target?.id ?? a.params?.profileId ?? a.params?.proxyId ?? a.params?.memberId ?? a.params?.scriptId ?? 0)
-    actions.push({
-      kind: def.kind,
-      label: a.label || def.label,
-      danger: def.danger,
-      target: { entity: a.target?.entity || def.kind, id: targetId },
-      params: a.params || {}
-    })
-  }
+  const { queries, actions, sensitiveBlocked } = await executePlan(plan, ctx, now)
 
   const reply =
     plan.reply ||
@@ -349,7 +294,107 @@ export async function planAssistant(
     intent,
     sensitiveBlocked: sensitiveBlocked || undefined,
     queries,
-    actions
+    actions,
+    planTemplate: plan
+  }
+}
+
+/**
+ * 执行一个结构化计划：先跑查询（闸 2 白名单 + 团队/账户隔离），
+ * 再把动作按 forEach 多步展开并经动作白名单解析危险分级（闸 3）。
+ * 供 planAssistant（LLM 产出计划）与 runSkillPlan（复用已存模板）共用。
+ */
+async function executePlan(
+  plan: Plan,
+  ctx: PlannerCtx,
+  now: Date = new Date()
+): Promise<{ queries: AssistantQueryResult[]; actions: AssistantActionProposal[]; sensitiveBlocked: boolean }> {
+  // 与 plan.queries 等长的数组，被禁查 / 跳过的查询位保留 null，
+  // 以保证 forEach.fromQuery 引用的下标始终对齐原始计划（修复重跑时前置查询被跳过导致索引错位、静默 0 动作的 bug）。
+  const queries: (AssistantQueryResult | null)[] = new Array(plan.queries?.length || 0).fill(null)
+  let sensitiveBlocked = false
+  let qi = 0
+  for (const q of plan.queries || []) {
+    if (qi >= queries.length) break
+    if (!q || !q.entity) {
+      qi++
+      continue
+    }
+    try {
+      const r = await runOneQuery(ctx, q, now)
+      if ('blocked' in r) {
+        sensitiveBlocked = true
+        // 保留 null：索引不偏移，forEach 仍指向正确位置（该位为空 → 自然产出 0 条动作）
+      } else {
+        queries[qi] = r
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Object && 'message' in e ? (e as { message?: string }).message : String(e)
+      queries[qi] = {
+        entity: (q.entity as AssistantEntity) || 'profiles',
+        entityLabel: ASSISTANT_ENTITIES[q.entity as AssistantEntity]?.label || q.entity || '未知',
+        columns: [],
+        rows: [],
+        total: 0,
+        truncated: false
+      }
+      // 单条查询失败不阻断整体，reply 里提示
+      if (!plan.reply) plan.reply = `部分查询失败：${msg}`
+    }
+    qi++
+  }
+
+  // 多步编排：把动作按 forEach 展开成可执行序列；不带 forEach 的动作原样保留（向后兼容）。
+  // 被禁查 / 跳过的查询位以「空 rows」参与展开，天然产出 0 条动作，不会误执行。
+  const expanded = expandActions(plan, queries.map((q) => ({ rows: q ? (q.rows as Array<Record<string, unknown>>) : [] })))
+  const actions: AssistantActionProposal[] = []
+  for (const e of expanded) {
+    const def = ASSISTANT_ACTIONS[e.kind]
+    if (!def) continue
+    actions.push({
+      kind: def.kind,
+      label: e.label || def.label,
+      danger: def.danger,
+      target: { entity: e.target.entity || e.kind, id: e.target.id },
+      params: e.params,
+      batch: e.batch
+    })
+  }
+
+  // 返回给前端的结果过滤掉被禁查的 null 位（敏感拦截已在 sensitiveBlocked 体现）
+  return { queries: queries.filter((q): q is AssistantQueryResult => q != null), actions, sensitiveBlocked }
+}
+
+/**
+ * 运行一个已保存的「技能」模板（不调用 LLM，直接用模板重跑查询并展开动作）。
+ * 与 planAssistant 走同一套 executePlan，因此白名单 / 隔离 / 危险分级完全一致。
+ */
+export async function runSkillPlan(template: Plan, ctx: PlannerCtx): Promise<AssistantResult> {
+  const now = new Date()
+  // 复用 executePlan（同一套白名单 / 隔离 / 危险分级），但技能模板可能在保存很久后重跑，
+  // 需再次校验 intent：模板若被标记 blocked（敏感），重跑同样拒绝，避免被绕过（闸 1）。
+  if (template.intent === 'blocked') {
+    return {
+      ok: true,
+      understanding: template.understanding || '识别为敏感查询',
+      reply: template.reply || SENSITIVE_BLOCK_MESSAGE,
+      intent: 'blocked',
+      sensitiveBlocked: true,
+      queries: [],
+      actions: []
+    }
+  }
+  const { queries, actions, sensitiveBlocked } = await executePlan(template, ctx, now)
+  const reply = `已按技能模板执行：查询到 ${queries.reduce((s, q) => s + q.total, 0)} 条结果，可执行 ${actions.length} 个操作。`
+  return {
+    ok: true,
+    understanding: template.understanding || '技能执行',
+    reply,
+    intent: template.intent || 'mixed',
+    sensitiveBlocked: sensitiveBlocked || undefined,
+    queries,
+    actions,
+    planTemplate: template
   }
 }
 

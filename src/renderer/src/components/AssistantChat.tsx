@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, Fragment } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Drawer, Button, Input, Tag, Empty, Spin, Alert, App as AntdApp, Space } from 'antd'
+import { Drawer, Button, Input, Tag, Empty, Spin, Alert, App as AntdApp, Space, Modal } from 'antd'
 import { api } from '../api'
 import { useI18n } from '../i18n'
 import dayjs from 'dayjs'
@@ -26,6 +26,8 @@ interface ActionProposal {
   danger: string
   target: { entity: string; id: number }
   params: Record<string, unknown>
+  /** 来自 forEach 展开时的出处提示（对查询第 q 的 n 行逐条执行） */
+  batch?: { queryIndex: number; total: number; rowIndex: number }
 }
 interface AssistantReply {
   ok: boolean
@@ -35,12 +37,20 @@ interface AssistantReply {
   sensitiveBlocked?: boolean
   queries: QueryResult[]
   actions: ActionProposal[]
+  /** 结构化计划模板（queries + actions + forEach），用于「保存为技能」 */
+  planTemplate?: unknown
 }
 interface MsgItem {
   id: string
   role: 'user' | 'bot'
   text: string
   result?: AssistantReply
+}
+interface SkillItem {
+  id: number
+  name: string
+  trigger: string
+  createdAt?: string
 }
 
 const DANGER_COLOR: Record<string, string> = {
@@ -71,6 +81,104 @@ export default function AssistantChat() {
   const [loading, setLoading] = useState(false)
   const [msgs, setMsgs] = useState<MsgItem[]>([])
   const listRef = useRef<HTMLDivElement>(null)
+
+  // 技能库
+  const [skills, setSkills] = useState<SkillItem[]>([])
+  const [skillsOpen, setSkillsOpen] = useState(false)
+  const [skillsLoading, setSkillsLoading] = useState(false)
+  const [runningAll, setRunningAll] = useState(false)
+  // 保存为技能对话框
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [saveTrigger, setSaveTrigger] = useState('')
+  const [pendingTemplate, setPendingTemplate] = useState<unknown>(null)
+
+  async function loadSkills() {
+    setSkillsLoading(true)
+    try {
+      const list = await api.get<SkillItem[]>('/api/assistant/skills')
+      setSkills(Array.isArray(list) ? list : [])
+    } catch (e) {
+      setSkills([])
+      msgApi.error(t('assistant.actionFailed', { msg: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setSkillsLoading(false)
+    }
+  }
+
+  function toggleSkills() {
+    const next = !skillsOpen
+    setSkillsOpen(next)
+    if (next) void loadSkills()
+  }
+
+  async function runSkill(id: number, name: string) {
+    try {
+      const res = await api.post<AssistantReply>(`/api/assistant/skills/${id}/run`, {})
+      setMsgs((m) => [...m, { id: `s${Date.now()}`, role: 'bot', text: `⚡ ${name}`, result: res }])
+    } catch (e) {
+      msgApi.error(t('assistant.actionFailed', { msg: e instanceof Error ? e.message : String(e) }))
+    }
+  }
+
+  async function deleteSkill(id: number) {
+    try {
+      await api.del(`/api/assistant/skills/${id}`)
+      setSkills((s) => s.filter((x) => x.id !== id))
+      msgApi.success(t('assistant.skillDeleted'))
+    } catch (e) {
+      msgApi.error(t('assistant.actionFailed', { msg: e instanceof Error ? e.message : String(e) }))
+    }
+  }
+
+  function openSaveSkill(template: unknown) {
+    setPendingTemplate(template)
+    setSaveName('')
+    setSaveTrigger('')
+    setSaveOpen(true)
+  }
+
+  async function confirmSaveSkill() {
+    if (!saveName.trim() || !pendingTemplate) return
+    try {
+      await api.post('/api/assistant/skills', { name: saveName.trim(), trigger: saveTrigger.trim(), template: pendingTemplate })
+      msgApi.success(t('assistant.savedSkill', { name: saveName.trim() }))
+      setSaveOpen(false)
+    } catch (e) {
+      msgApi.error(t('assistant.actionFailed', { msg: e instanceof Error ? e.message : String(e) }))
+    }
+  }
+
+  // 批量执行：safe 直接跑，含 medium/destructive 时先汇总确认一次再顺序执行
+  async function runAll(actions: ActionProposal[]) {
+    if (!actions.length) return
+    const dangerCount = actions.filter((a) => a.danger !== 'safe').length
+    const doRun = async () => {
+      setRunningAll(true)
+      let okCount = 0
+      for (const a of actions) {
+        try {
+          const res = await api.post<{ ok: boolean; message: string }>('/api/assistant/action', { kind: a.kind, params: a.params })
+          if (res.ok) okCount++
+        } catch {
+          /* 单条失败继续，不阻断整体 */
+        }
+      }
+      setRunningAll(false)
+      msgApi.success(t('assistant.actionDone', { msg: `${okCount}/${actions.length}` }))
+    }
+    if (dangerCount > 0) {
+      modal.confirm({
+        title: t('assistant.confirmRunAll', { count: actions.length, danger: dangerCount }),
+        okText: t('assistant.runAll'),
+        okButtonProps: { danger: dangerCount > 0 },
+        cancelText: t('common.cancel'),
+        onOk: doRun
+      })
+    } else {
+      await doRun()
+    }
+  }
 
   // 登录 / 全屏浏览器页不显示助手
   const hidden = location.pathname === '/login' || location.pathname === '/browser'
@@ -206,10 +314,21 @@ export default function AssistantChat() {
     if (!actions.length) return null
     return (
       <div style={{ marginTop: 6 }}>
+        {actions.length > 1 && (
+          <Button size="small" type="primary" loading={runningAll} disabled={runningAll} onClick={() => runAll(actions)} style={{ marginBottom: 6 }}>
+            {t('assistant.runAll')}（{actions.length}）
+          </Button>
+        )}
         {actions.map((a, i) => (
           <div className="assistant-row" key={`${a.kind}-${i}`}>
-            <Space size={8}>
+            <Space size={8} wrap>
+              <span style={{ color: '#8c9bb0' }}>{i + 1}.</span>
               <Tag color={DANGER_COLOR[a.danger] || 'default'}>{a.label}</Tag>
+              {a.batch && (
+                <span style={{ fontSize: 12, color: '#8c9bb0' }}>
+                  {t('assistant.batchFromQuery', { q: a.batch.queryIndex + 1, n: a.batch.total })}
+                </span>
+              )}
               <Button size="small" type="primary" danger={a.danger === 'destructive'} onClick={() => onActionClick(a)}>
                 {a.danger === 'safe' ? t('assistant.confirmAction') : a.danger === 'medium' ? t('assistant.dangerMedium') : t('assistant.dangerDestructive')}
               </Button>
@@ -238,6 +357,11 @@ export default function AssistantChat() {
               <div style={{ whiteSpace: 'pre-wrap' }}>{item.text}</div>
               {res?.queries?.map(renderQuery)}
               {renderActions(res?.actions || [])}
+              {res?.planTemplate != null && (
+                <Button size="small" style={{ marginTop: 6 }} onClick={() => openSaveSkill(res.planTemplate)}>
+                  {t('assistant.saveSkill')}
+                </Button>
+              )}
             </Fragment>
           )}
         </div>
@@ -261,12 +385,44 @@ export default function AssistantChat() {
         open={open}
         onClose={() => setOpen(false)}
         extra={
-          <Button size="small" onClick={() => setMsgs([])}>
-            {t('assistant.clear')}
-          </Button>
+          <Space size={4}>
+            <Button size="small" onClick={toggleSkills}>
+              {t('assistant.openSkills')}
+            </Button>
+            <Button size="small" onClick={() => setMsgs([])}>
+              {t('assistant.clear')}
+            </Button>
+          </Space>
         }
         styles={{ body: { padding: 12, display: 'flex', flexDirection: 'column' } }}
       >
+        {skillsOpen && (
+          <div style={{ marginBottom: 10, border: '1px solid #2a3242', borderRadius: 8, padding: 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>{t('assistant.skills')}</div>
+            {skillsLoading ? (
+              <Spin size="small" />
+            ) : skills.length === 0 ? (
+              <div style={{ fontSize: 12, color: '#8c9bb0' }}>{t('assistant.noSkills')}</div>
+            ) : (
+              skills.map((s) => (
+                <div key={s.id} className="assistant-row" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ overflow: 'hidden' }}>
+                    <div style={{ fontWeight: 500 }}>{s.name}</div>
+                    {s.trigger ? <div style={{ fontSize: 12, color: '#8c9bb0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.trigger}</div> : null}
+                  </div>
+                  <Space size={4}>
+                    <Button size="small" type="primary" onClick={() => runSkill(s.id, s.name)}>
+                      {t('assistant.runSkill')}
+                    </Button>
+                    <Button size="small" danger onClick={() => deleteSkill(s.id)}>
+                      {t('assistant.deleteSkill')}
+                    </Button>
+                  </Space>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         <div ref={listRef} style={{ flex: 1, overflowY: 'auto', paddingRight: 4 }}>
           {msgs.length === 0 && !loading && (
             <div>
@@ -320,6 +476,27 @@ export default function AssistantChat() {
           </Button>
         </div>
       </Drawer>
+      <Modal
+        title={t('assistant.saveSkill')}
+        open={saveOpen}
+        onOk={confirmSaveSkill}
+        onCancel={() => setSaveOpen(false)}
+        okText={t('assistant.saveSkill')}
+        cancelText={t('common.cancel')}
+        okButtonProps={{ disabled: !saveName.trim() }}
+        destroyOnClose
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+          <div>
+            <div style={{ fontSize: 12, color: '#8c9bb0', marginBottom: 4 }}>{t('assistant.skillName')}</div>
+            <Input value={saveName} onChange={(e) => setSaveName(e.target.value)} placeholder={t('assistant.skillName')} />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: '#8c9bb0', marginBottom: 4 }}>{t('assistant.skillTrigger')}</div>
+            <Input value={saveTrigger} onChange={(e) => setSaveTrigger(e.target.value)} placeholder={t('assistant.skillTrigger')} />
+          </div>
+        </div>
+      </Modal>
     </Fragment>
   )
 }

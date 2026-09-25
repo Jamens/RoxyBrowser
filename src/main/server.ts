@@ -33,7 +33,8 @@ import {
   ApiTokenEntity,
   AppSettingsEntity,
   ExtensionEntity,
-  RpaScriptEntity
+  RpaScriptEntity,
+  AssistantSkillEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { substituteSteps } from '../shared/rpa'
@@ -58,7 +59,8 @@ import { getSystemStats } from './systemStats'
 import { checkOllamaStatus, ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat, checkCloudStatus } from './agent/cloud'
 import { buildSupportSystemPrompt } from './agent/knowledge'
-import { planAssistant, executeAssistantAction, type PlannerCtx } from './assistantPlanner'
+import { planAssistant, executeAssistantAction, runSkillPlan, type PlannerCtx } from './assistantPlanner'
+import type { Plan } from '../shared/assistantPlan'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 
 // ---------- 配置 ----------
@@ -2557,7 +2559,7 @@ function buildApiRouter(): express.Router {
     const history: OllamaMessage[] = Array.isArray((req.body || {}).history)
       ? (req.body as { history: OllamaMessage[] }).history.filter((m) => m && m.role && m.content).slice(-12)
       : []
-    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: req.role || '', username: req.username || 'assistant' }
+    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: await freshRole(req), username: req.username || 'assistant' }
     try {
       const result = await planAssistant(message, a, ctx, history)
       res.json(result)
@@ -2575,7 +2577,7 @@ function buildApiRouter(): express.Router {
       res.status(400).json({ message: '缺少动作 kind' })
       return
     }
-    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: req.role || '', username: req.username || 'assistant' }
+    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: await freshRole(req), username: req.username || 'assistant' }
     try {
       const r = await executeAssistantAction(kind, params, ctx)
       if (!r.ok) {
@@ -2585,6 +2587,96 @@ function buildApiRouter(): express.Router {
       res.json(r)
     } catch (e) {
       res.status(500).json({ message: `动作执行失败：${e instanceof Error ? e.message : String(e)}` })
+    }
+  })
+
+  // 智能助手「技能库」：把一条结构化计划模板固化复用（运行时不调 LLM，直接按模板重跑）
+  router.get('/assistant/skills', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    try {
+      const repo = AppDataSource.getRepository(AssistantSkillEntity)
+      const list = await repo.find({ where: { teamId: req.tid! }, order: { id: 'DESC' } })
+      res.json(list.map((s) => ({ id: s.id, name: s.name, trigger: s.trigger, createdAt: s.createdAt })))
+    } catch (e) {
+      res.status(500).json({ message: `读取技能库失败：${e instanceof Error ? e.message : String(e)}` })
+    }
+  })
+
+  router.post('/assistant/skills', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const name = String((req.body || {}).name || '').trim()
+    const trigger = String((req.body || {}).trigger || '').trim()
+    const template = (req.body || {}).template
+    if (!name) {
+      res.status(400).json({ message: '请填写技能名称' })
+      return
+    }
+    if (!template || typeof template !== 'object') {
+      res.status(400).json({ message: '缺少计划模板' })
+      return
+    }
+    try {
+      const repo = AppDataSource.getRepository(AssistantSkillEntity)
+      const entity = repo.create({
+        teamId: req.tid!,
+        ownerId: req.uid!,
+        name,
+        trigger,
+        steps: JSON.stringify(template)
+      })
+      const saved = await repo.save(entity)
+      res.json({ id: saved.id, name: saved.name, trigger: saved.trigger, createdAt: saved.createdAt })
+    } catch (e) {
+      res.status(500).json({ message: `保存技能失败：${e instanceof Error ? e.message : String(e)}` })
+    }
+  })
+
+  router.delete('/assistant/skills/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const id = Number(req.params.id)
+    if (!id) {
+      res.status(400).json({ message: '缺少技能 ID' })
+      return
+    }
+    try {
+      const repo = AppDataSource.getRepository(AssistantSkillEntity)
+      const s = await repo.findOne({ where: { id, teamId: req.tid! } })
+      if (!s) {
+        res.status(404).json({ message: '技能不存在' })
+        return
+      }
+      await repo.remove(s)
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ message: `删除技能失败：${e instanceof Error ? e.message : String(e)}` })
+    }
+  })
+
+  // 运行已保存的技能（复用 executePlan，不调 LLM）
+  router.post('/assistant/skills/:id/run', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const id = Number(req.params.id)
+    if (!id) {
+      res.status(400).json({ message: '缺少技能 ID' })
+      return
+    }
+    const repo = AppDataSource.getRepository(AssistantSkillEntity)
+    const s = await repo.findOne({ where: { id, teamId: req.tid! } })
+    if (!s) {
+      res.status(404).json({ message: '技能不存在' })
+      return
+    }
+    let template: Plan
+    try {
+      template = JSON.parse(s.steps) as Plan
+    } catch {
+      res.status(400).json({ message: '技能模板损坏，无法解析' })
+      return
+    }
+    const ctx: PlannerCtx = { ds: AppDataSource, uid: req.uid!, tid: req.tid!, role: await freshRole(req), username: req.username || 'assistant' }
+    try {
+      const result = await runSkillPlan(template, ctx)
+      await writeLog(req, 'assistant_skill_run', `运行技能「${s.name}」(#${s.id})`)
+      res.json(result)
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      res.status(500).json({ message: `技能运行失败：${detail}` })
     }
   })
 

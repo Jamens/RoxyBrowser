@@ -402,7 +402,20 @@ const zhCN = {
   'assistant.actionDone': '已执行：{msg}',
   'assistant.actionFailed': '执行失败：{msg}',
   'assistant.clear': '清空',
-  'assistant.examples': '试试：'
+  'assistant.examples': '试试：',
+  'assistant.runAll': '执行全部',
+  'assistant.saveSkill': '保存为技能',
+  'assistant.skillName': '技能名称',
+  'assistant.skillTrigger': '触发指令（自然语言，便于回忆用途）',
+  'assistant.skills': '我的技能',
+  'assistant.runSkill': '运行',
+  'assistant.deleteSkill': '删除',
+  'assistant.noSkills': '还没有保存的技能，跑出一条好用的流程后点「保存为技能」即可复用',
+  'assistant.batchFromQuery': '对查询 {q} 的 {n} 行逐条执行',
+  'assistant.confirmRunAll': '即将执行 {count} 个操作（含 {danger} 个需谨慎操作），确认继续？',
+  'assistant.savedSkill': '已保存为技能「{name}」',
+  'assistant.skillDeleted': '技能已删除',
+  'assistant.openSkills': '技能库'
 }
 
 export type MessageDict = typeof zhCN
@@ -802,7 +815,20 @@ const enUS: MessageDict = {
   'assistant.actionDone': 'Done: {msg}',
   'assistant.actionFailed': 'Failed: {msg}',
   'assistant.clear': 'Clear',
-  'assistant.examples': 'Try:'
+  'assistant.examples': 'Try:',
+  'assistant.runAll': 'Run all',
+  'assistant.saveSkill': 'Save as skill',
+  'assistant.skillName': 'Skill name',
+  'assistant.skillTrigger': 'Trigger instruction (natural language, for recall)',
+  'assistant.skills': 'My skills',
+  'assistant.runSkill': 'Run',
+  'assistant.deleteSkill': 'Delete',
+  'assistant.noSkills': 'No saved skills yet. After a useful flow, click "Save as skill" to reuse it.',
+  'assistant.batchFromQuery': 'Runs once per row of query {q} ({n} rows)',
+  'assistant.confirmRunAll': 'About to run {count} actions ({danger} need caution). Continue?',
+  'assistant.savedSkill': 'Saved as skill "{name}"',
+  'assistant.skillDeleted': 'Skill deleted',
+  'assistant.openSkills': 'Skill library'
 }
 
 const jaJP: MessageDict = {
@@ -1200,7 +1226,20 @@ const jaJP: MessageDict = {
   'assistant.actionDone': '完了：{msg}',
   'assistant.actionFailed': '失敗：{msg}',
   'assistant.clear': 'クリア',
-  'assistant.examples': '例：'
+  'assistant.examples': '例：',
+  'assistant.runAll': 'すべて実行',
+  'assistant.saveSkill': 'スキルとして保存',
+  'assistant.skillName': 'スキル名',
+  'assistant.skillTrigger': 'トリガー指示（自然言語、用途の記憶用）',
+  'assistant.skills': 'マイスキル',
+  'assistant.runSkill': '実行',
+  'assistant.deleteSkill': '削除',
+  'assistant.noSkills': '保存済みスキルはまだありません。使いやすいフローを実行後、「スキルとして保存」で再利用できます。',
+  'assistant.batchFromQuery': 'クエリ {q} の各行に対して実行（{n} 行）',
+  'assistant.confirmRunAll': '{count} 個の操作を実行します（うち {danger} 個は注意が必要）。続行しますか？',
+  'assistant.savedSkill': 'スキル「{name}」として保存しました',
+  'assistant.skillDeleted': 'スキルを削除しました',
+  'assistant.openSkills': 'スキルライブラリ'
 }
 
 const deDE: MessageDict = {
@@ -1600,7 +1639,20 @@ const deDE: MessageDict = {
   'assistant.actionDone': 'Erledigt: {msg}',
   'assistant.actionFailed': 'Fehlgeschlagen: {msg}',
   'assistant.clear': 'Leeren',
-  'assistant.examples': 'Probieren:'
+  'assistant.examples': 'Probieren:',
+  'assistant.runAll': 'Alle ausführen',
+  'assistant.saveSkill': 'Als Skill speichern',
+  'assistant.skillName': 'Skill-Name',
+  'assistant.skillTrigger': 'Trigger-Befehl (natürliche Sprache, zur Erinnerung)',
+  'assistant.skills': 'Meine Skills',
+  'assistant.runSkill': 'Ausführen',
+  'assistant.deleteSkill': 'Löschen',
+  'assistant.noSkills': 'Noch keine Skills gespeichert. Nach einem nützlichen Ablauf auf „Als Skill speichern“ klicken, um ihn wiederzuverwenden.',
+  'assistant.batchFromQuery': 'Für jede Zeile der Abfrage {q} ausführen ({n} Zeilen)',
+  'assistant.confirmRunAll': '{count} Aktionen werden ausgeführt ({danger} erfordern Vorsicht). Fortfahren?',
+  'assistant.savedSkill': 'Als Skill „{name}" gespeichert',
+  'assistant.skillDeleted': 'Skill gelöscht',
+  'assistant.openSkills': 'Skill-Bibliothek'
 }
 
 export const messages: Record<LocaleCode, MessageDict> = {
