@@ -9,6 +9,23 @@
 
 ---
 
+## 2026-09-26 · 媒体查询偏好（Tier 2 #5）
+
+### 新增
+
+- **媒体查询偏好（prefers-color-scheme / prefers-reduced-motion 由指纹稳定驱动）**（`src/main/browser-preload.ts`）：新增 `prefersColorScheme`（light/dark/no-preference）与 `prefersReducedMotion`（boolean）两个指纹字段；`window.matchMedia` 仅对这两个查询按 fp 值回灌 `matches`、其余媒体查询透传原生，确保页面 CSS `@media` 响应式逻辑不受影响；伪造的 `MediaQueryList` 补齐 addListener/removeEventListener 等方法，避免检测脚本调用即报错。
+- **环境体检新增 mediaPrefs 项**（权重 2）：校验探针回读值与 fp 设定一致（schemeOk && motionOk），actual 文案带出声明值与实际回读值（`src/shared/healthcheck.ts` + `src/main/healthProbe.ts` + `src/renderer/src/pages/Environments.tsx` 标签）。
+- **ProfileForm 表单**：新增「配色偏好」Select 与「减少动效」Switch（`src/renderer/src/components/ProfileForm.tsx`）。
+- 离线单测：10 条 healthcheck mediaPrefs 逻辑用例全部通过（scheme 三种 × motion 两态 / 错配判红 / 全默认对齐 / actual 文案 / weight=2）。
+
+### 设计要点
+
+- 只在宿主原生就有 `matchMedia` 时才覆写（不凭空制造），与「不伪造」同源；iOS 伪装同样适用（移动端 `prefers-color-scheme` 更普遍）。
+- 字段走 JSON 列，不新增数据库列与表单字段（与 WebGPU / Audio / EME / 反自动化 / 平台 API 同源，符合规则 #24）。
+- 提交：`34cfbca`（feat）。
+
+---
+
 ## 2026-09-26 · 平台 API 一致性（Tier 2 #4）
 
 ### 新增

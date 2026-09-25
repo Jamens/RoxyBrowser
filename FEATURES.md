@@ -132,6 +132,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 | 反自动化   | `navigator.webdriver` 强制 false（iOS 隐藏）；清除 CDP / ChromeDriver 特征全局变量（cdc_ / $cdc_ / __nightmare / callPhantom 等），避免被风控识别为自动化 |
 | 平台 API   | 按 OS 隐藏不该有的平台能力 API（bluetooth/usb 全桌面+Android；serial/hid 仅桌面；nfc 仅 Android；iOS 移除全部），避免「iOS 伪装却暴露桌面 Web API」矛盾 |
+| 媒体查询偏好 | `prefers-color-scheme`（light/dark/no-preference）与 `prefers-reduced-motion` 由指纹设定稳定驱动；`matchMedia` 仅对这两个查询回灌 fp 值、其余媒体查询透传原生，确保 CSS `@media` 正常 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
 
@@ -534,9 +535,18 @@ app.listen(4000)
 - **不伪造原则（规则 #22/#30）**：宿主本来就没有的 API 绝不主动新增，因此「应有的缺失」不处理——这正是「宁缺毋滥」：伪造一套 Web Bluetooth 实现成本极高且极易穿帮，不如如实留空。
 - **体检项**：新增 `platformApis` 项（权重 4），只判「该 OS 不该有、却暴露了」的矛盾信号（如 iOS 暴露 bluetooth/usb/serial/hid/nfc、桌面暴露 nfc、Android 暴露 serial/hid），「该有却因宿主未暴露而缺失」不计入（不伪造）。actual 文案列出具体矛盾项。
 
+#### 7.12.8 媒体查询偏好（Tier 2 #5，`34cfbca`）
+
+`window.matchMedia` 的 `prefers-color-scheme` / `prefers-reduced-motion` 是稳定的指纹维度：真实浏览器会随系统设置返回 `dark` / `reduce`，而一个「声明 Windows + 英文 + 深色模式伪装」的环境若 `matchMedia('(prefers-color-scheme: dark)').matches` 永远 false，会让「设定」与「回读」产生矛盾（PixelScan / BrowserLeaks 都会采集这两项）。此前 preload 完全没有处理，属于零覆盖。
+
+- **指纹驱动的稳定偏好**：新增 `prefersColorScheme`（light / dark / no-preference）与 `prefersReducedMotion`（boolean）两个字段，由 `randomFingerprint` / `presetFingerprint` / `normalizeFingerprint` / `deriveJitteredFingerprint` 统一填充与继承（随机时偏置 light 与不减少动效，贴近真实人群），`ProfileForm` 提供「配色偏好」Select 与「减少动效」Switch 供手填。字段走 JSON 列，无新增数据库迁移。
+- **matchMedia 精准覆写**：仅当宿主原生有 `matchMedia` 时，重写 `window.matchMedia`——对 `(prefers-color-scheme: dark|light|no-preference)` 与 `(prefers-reduced-motion: reduce|no-preference)` 这两个查询按 fp 值回灌 `matches`，其余查询（如 `min-width`、`hover`）**一律透传原生** `origMql.call(window, query)`，确保页面自身的 CSS `@media` 响应式逻辑不受影响；伪造的 `MediaQueryList` 补齐 `addListener/removeListener/addEventListener/removeEventListener/dispatchEvent/onchange` 等方法，避免检测脚本调用即报错。
+- **不伪造原则**：只在宿主原生就有 `matchMedia` 时才覆写，不凭空制造；iOS 伪装同样适用（iOS Safari 也支持 matchMedia，且 `prefers-color-scheme` 在移动端更普遍）。
+- **体检项**：新增 `mediaPrefs` 项（权重 2），校验探针回读值与 fp 设定一致（`schemeOk && motionOk`）；actual 文案带出声明值与实际回读值，便于排查 light/dark 与 reduce 是否对齐。
+
 #### 体检接入
 
-新增三个检查项，可在「环境体检」报告里直接看到注入是否生效：
+新增四个检查项，可在「环境体检」报告里直接看到注入是否生效：
 
 | 检查项 | 权重 | 实测来源 |
 | --- | --- | --- |
@@ -544,6 +554,7 @@ app.listen(4000)
 | `音频特征（采样率/延迟/声道）` | 6 | `new AudioContext()` 的 sampleRate / baseLatency / maxChannelCount |
 | `音频压缩器 reduction` | 3 | `createDynamicsCompressor().reduction` |
 | `反自动化痕迹` | 5 | `navigator.webdriver` 须为 false 且 `window` / `document` 无 cdc_ / $cdc_ 等自动化特征变量 |
+| `媒体查询偏好` | 2 | `matchMedia('(prefers-color-scheme: dark)').matches` 等回读值须与 fp 设定（light/dark/no-preference + reduce）一致 |
 
 - 采集走 `Promise`（`requestAdapter` 异步），带 **3 秒超时**保护，避免 GPU 进程卡住导致体检请求悬挂。
 - 环境限制不误报：`AudioContext` 建不起来、或 WebGPU 拿不到 adapter 时，对应项标记「不适用」（权重 0），与既有 WebGL 的处理一致。

@@ -128,6 +128,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **HTTP 安全警告（P2）**：环境窗口导航到明文 http:// 站点时，在页面顶部注入红色警告条提示连接未加密、存在被窃听/篡改风险（localhost 与 App 自身页面不触发），对标 RoxyChrome 154 的 HTTP Security Warnings。
 - **反自动化痕迹清除（Tier 1）**：强制 `navigator.webdriver = false`（iOS 伪装整体隐藏该属性），并清除 CDP / ChromeDriver 注入的特征全局变量（`cdc_` / `$cdc_` / `__nightmare` / `callPhantom` 等），避免被 Cloudflare / PerimeterX 等风控识别为自动化；环境体检新增「反自动化痕迹」项（权重 5）校验。
 - **平台 API 一致性（Tier 2）**：按真实支持矩阵隐藏「该 OS 不该有、但宿主原生却暴露」的平台能力 API——`bluetooth`/`usb` 全桌面+Android，`serial`/`hid` 仅桌面，`nfc` 仅 Android，iOS 一概移除；避免「iOS 伪装却暴露桌面 Web API」这类矛盾信号；环境体检新增「平台 API 一致性」项校验。
+- **媒体查询偏好（Tier 2）**：`prefers-color-scheme`（light/dark/no-preference）与 `prefers-reduced-motion` 由指纹设定稳定驱动，`matchMedia` 仅对这两个查询回灌 fp 值、其余媒体查询透传原生；环境体检新增「媒体查询偏好」项校验回灌值与设定一致。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
