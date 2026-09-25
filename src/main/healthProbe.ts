@@ -119,6 +119,19 @@ const PROBE_SCRIPT = `(function(){
       }
     } catch (e) {}
 
+    // ---- 反自动化痕迹（Tier 1 #1）----
+    // navigator.webdriver 在非自动化浏览器恒为 false（iOS Safari 甚至无该属性 → !!undefined=false）；
+    // cdc_ / $cdc_ 等是 CDP / ChromeDriver 注入的特征全局变量，正常环境不应存在。
+    var webdriver = false, automationTraces = false
+    try {
+      webdriver = !!nav.webdriver
+      var AUTO_GLOBALS = ['cdc_', '$cdc_', '$chrome_asyncScriptInfo', '__nightmare', 'callPhantom', '_phantom', '__phantomas', 'selenium', '__webdriver_evaluate', '__driver_evaluate', '__webdriver_script_function', '__webdriver_script_func', '__webdriver_script_fn', '__driver_unwrapped', '__webdriver_unwrapped', '__selenium_unwrapped', '__fxdriver_unwrapped', '__selenium_evaluate', '__fxdriver_evaluate']
+      for (var gi = 0; gi < AUTO_GLOBALS.length; gi++) {
+        if (Object.prototype.hasOwnProperty.call(window, AUTO_GLOBALS[gi])) { automationTraces = true; break }
+      }
+      if (!automationTraces && Object.prototype.hasOwnProperty.call(document, '$cdc_')) automationTraces = true
+    } catch (e2) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
     return Promise.all([gpuP, emeP]).then(function () {
@@ -163,7 +176,9 @@ const PROBE_SCRIPT = `(function(){
         emePlayReady: emePlayReady,
         emeInitDataTypes: emeInitDataTypes,
         emeVideoCaps: emeVideoCaps,
-        emeAudioCaps: emeAudioCaps
+        emeAudioCaps: emeAudioCaps,
+        webdriver: webdriver,
+        automationTraces: automationTraces
       };
       } catch (e) {
         return { error: String(e) };

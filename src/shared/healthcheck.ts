@@ -73,6 +73,10 @@ export interface FingerprintProbe {
   emeVideoCaps: number
   /** Widevine 音频能力数（应 > 0） */
   emeAudioCaps: number
+  /** navigator.webdriver（真实非自动化浏览器应为 false；true 表示被识别为自动化） */
+  webdriver: boolean
+  /** 是否检测到 CDP / ChromeDriver 等自动化特征全局变量（cdc_ / $cdc_ 等） */
+  automationTraces: boolean
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -353,6 +357,20 @@ export function buildHealthReport(
         weight: 4
       })
     }
+  }
+
+  // ---- 反自动化痕迹（Tier 1 #1）----
+  // 真实浏览器 webdriver 恒为 false（iOS Safari 甚至无该属性 → 读为 undefined → !!false），
+  // 且不应存在 cdc_ / $cdc_ 等自动化特征变量。两项任一命中即判红——这是检测站（Cloudflare / PerimeterX）首要关卡。
+  {
+    const ok = !actual.webdriver && !actual.automationTraces
+    items.push({
+      key: 'automation',
+      expected: 'webdriver=false 且无自动化痕迹',
+      actual: `webdriver=${actual.webdriver} automationTraces=${actual.automationTraces}`,
+      ok,
+      weight: 5
+    })
   }
 
   // ---- 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）----

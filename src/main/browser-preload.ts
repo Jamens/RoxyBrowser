@@ -129,6 +129,35 @@ import { audioProfileFor } from '../shared/webaudio'
   def(navigator, 'deviceMemory', fp.deviceMemory)
   def(navigator, 'doNotTrack', fp.doNotTrack)
 
+  // ===== 反自动化痕迹清除（Tier 1 #1，对标指纹浏览器标配反检测）=====
+  // 检测站（Cloudflare / PerimeterX / 各平台风控）首要查的就是自动化痕迹，
+  // 比再加一个 EME 向量影响大得多。真实非自动化 Chrome 的 navigator.webdriver 恒为 false；
+  // iOS Safari 根本没有该属性（undefined）。CDP / ChromeDriver 还会在 window 上留下
+  // cdc_ / $cdc_ 等特征变量——本仓库环境由我们自己启动的 Electron 窗口承载，正常情况下不会存在，
+  // 但加一层「存在即清除」的防御，避免任何 CDP 连接意外注入后暴露。
+  {
+    // 1) navigator.webdriver：非 iOS 强制 false，iOS 整体隐藏（与 EME / userAgentData 同源手法）
+    if (fp.os === 'ios') {
+      hide(navigator, 'webdriver')
+    } else {
+      def(navigator, 'webdriver', false)
+    }
+    // 2) 已知自动化特征全局变量：存在即删除（仅 own property，不影响原型）
+    const AUTO_GLOBALS = [
+      'cdc_', '$cdc_', '$chrome_asyncScriptInfo',
+      '__nightmare', 'callPhantom', '_phantom', '__phantomas',
+      'selenium', '__webdriver_evaluate', '__driver_evaluate',
+      '__webdriver_script_function', '__webdriver_script_func', '__webdriver_script_fn',
+      '__driver_unwrapped', '__webdriver_unwrapped', '__selenium_unwrapped',
+      '__fxdriver_unwrapped', '__selenium_evaluate', '__fxdriver_evaluate'
+    ]
+    for (const g of AUTO_GLOBALS) {
+      try { if (Object.prototype.hasOwnProperty.call(window, g)) delete (window as any)[g] } catch (e) { /* ignore */ }
+    }
+    // document 上也偶有 $cdc_ 残留
+    try { if (Object.prototype.hasOwnProperty.call(document, '$cdc_')) delete (document as any).$cdc_ } catch (e) { /* ignore */ }
+  }
+
   // ===== 移动端：触摸能力 + 像素比 =====
   // 桌面（非触摸）统一归 0，避免真实宿主机是触摸屏时把 maxTouchPoints 漏成 10 等；
   // 移动端固定 5。这是反检测最稳妥的默认值。
