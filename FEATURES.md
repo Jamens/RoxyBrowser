@@ -133,6 +133,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | 反自动化   | `navigator.webdriver` 强制 false（iOS 隐藏）；清除 CDP / ChromeDriver 特征全局变量（cdc_ / $cdc_ / __nightmare / callPhantom 等），避免被风控识别为自动化 |
 | 平台 API   | 按 OS 隐藏不该有的平台能力 API（bluetooth/usb 全桌面+Android；serial/hid 仅桌面；nfc 仅 Android；iOS 移除全部），避免「iOS 伪装却暴露桌面 Web API」矛盾 |
 | 媒体查询偏好 | `prefers-color-scheme`（light/dark/no-preference）与 `prefers-reduced-motion` 由指纹设定稳定驱动；`matchMedia` 仅对这两个查询回灌 fp 值、其余媒体查询透传原生，确保 CSS `@media` 正常 |
+| 字体与 OS 一致性 | 字体防泄漏补丁覆盖 `document.fonts.check` / `load` / Canvas `measureText` **以及 DOM 宽度枚举**（`style.fontFamily` 赋值与 `setProperty('font-family')` 均过滤列表外字体，回落 sans-serif）；环境体检再校验 `fp.fonts` 与 `fp.os` 自洽（含核心字体、无跨 OS 专属字体） |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
 
@@ -544,9 +545,17 @@ app.listen(4000)
 - **不伪造原则**：只在宿主原生就有 `matchMedia` 时才覆写，不凭空制造；iOS 伪装同样适用（iOS Safari 也支持 matchMedia，且 `prefers-color-scheme` 在移动端更普遍）。
 - **体检项**：新增 `mediaPrefs` 项（权重 2），校验探针回读值与 fp 设定一致（`schemeOk && motionOk`）；actual 文案带出声明值与实际回读值，便于排查 light/dark 与 reduce 是否对齐。
 
+#### 7.12.9 字体深度校验（Tier 3 #6，`5129067`）
+
+字体是强指纹：检测站（BrowserLeaks / CreepJS / fingerprintjs）通过「给元素设 `font-family` 再读 `offsetWidth` 宽度对照」「`document.fonts.check` 探测」「Canvas `measureText` 宽度差」三条路径枚举已安装字体，泄漏宿主机自身字体。此前的字体防泄漏只覆盖了后两条，且体检只查「注入是否生效」、不查「配置是否与 OS 自洽」——这是 Tier 3 的「深度」缺口。
+
+- **DOM 宽度枚举封堵**：在 `deff`/`hide` 体系之外，覆写 `CSSStyleDeclaration.prototype.fontFamily` 的 setter 与 `setProperty('font-family', ...)`，把写入的字体族路由到与 `measureText` 同源的 `mapFontFamily`——过滤掉列表外字体、回落 `sans-serif`。这样「设 `el.style.fontFamily='HOSTFONT'` 读 `offsetWidth`」这条经典路径也返回与基线一致的宽度，无法分辨「装了 / 没装」。`mapFontFamily` 同步改为「只保留可用族」语义（原「任一可用即原样保留」对 `TestFont, sans-serif` 这类探测写法会漏判），现统一过滤。
+- **不伪造原则**：仅在宿主原生有 `CSSStyleDeclaration` 时才覆写；`cssText` 整体赋值（如 `el.style.cssText='font-family: HOSTFONT'`）属罕见写法、Chrome 不走 JS setter，列为已知残留；其它两条路径（直接赋值、setProperty）已覆盖主流检测手法。
+- **体检项 fontOsConsistency（权重 3）**：校验 `fp.fonts` 与 `fp.os` 自洽——必须含跨平台核心字体（CORE_FONTS），且不能混入其它 OS 专属字体（如 Windows 环境列出 `Helvetica Neue` / `Menlo` 即判矛盾）。通用族（`sans-serif` / `serif` / `system-ui` 等）跨 OS 合法，不计入矛盾。与既有 `fonts` 项（校验注入是否生效）互补，构成「生效 + 配置正确」双保险。actual 文案带出具体矛盾项。
+
 #### 体检接入
 
-新增四个检查项，可在「环境体检」报告里直接看到注入是否生效：
+新增五个检查项，可在「环境体检」报告里直接看到注入是否生效：
 
 | 检查项 | 权重 | 实测来源 |
 | --- | --- | --- |
@@ -555,6 +564,7 @@ app.listen(4000)
 | `音频压缩器 reduction` | 3 | `createDynamicsCompressor().reduction` |
 | `反自动化痕迹` | 5 | `navigator.webdriver` 须为 false 且 `window` / `document` 无 cdc_ / $cdc_ 等自动化特征变量 |
 | `媒体查询偏好` | 2 | `matchMedia('(prefers-color-scheme: dark)').matches` 等回读值须与 fp 设定（light/dark/no-preference + reduce）一致 |
+| `字体与 OS 一致性` | 3 | `fp.fonts` 须含核心字体、且不含其它 OS 专属字体（与 `fp.os` 自洽） |
 
 - 采集走 `Promise`（`requestAdapter` 异步），带 **3 秒超时**保护，避免 GPU 进程卡住导致体检请求悬挂。
 - 环境限制不误报：`AudioContext` 建不起来、或 WebGPU 拿不到 adapter 时，对应项标记「不适用」（权重 0），与既有 WebGL 的处理一致。

@@ -9,6 +9,22 @@
 
 ---
 
+## 2026-09-26 · 字体深度校验（Tier 3 #6）
+
+### 新增
+
+- **DOM 宽度枚举封堵**（`src/main/browser-preload.ts`）：覆写 `CSSStyleDeclaration.prototype.fontFamily` setter 与 `setProperty('font-family', ...)`，把写入的字体族路由到与 `measureText` 同源的 `mapFontFamily`——过滤列表外字体、回落 `sans-serif`；`mapFontFamily` 同步改为「只保留可用族」语义。此前字体防泄漏只覆盖 `document.fonts.check` / Canvas `measureText`，漏掉了「设 `el.style.fontFamily` 读 `offsetWidth`」这条经典侧信道。
+- **环境体检新增 fontOsConsistency 项**（权重 3）：校验 `fp.fonts` 与 `fp.os` 自洽（须含核心字体、无跨 OS 专属字体；通用族如 `sans-serif` 不计入矛盾），与既有 `fonts` 项（校验注入生效）互补（`src/shared/healthcheck.ts` + `src/renderer/src/pages/Environments.tsx` 标签）。导出 `CORE_FONTS` / `FONT_POOL` 供体检复用（`src/shared/fingerprint.ts`）。
+- 离线单测：11 条 healthcheck fontOsConsistency 逻辑用例全部通过（win/mac/ios/android 合规 / 跨 OS 矛盾 / 缺核心字体 / 列表为空 / Tahoma 跨 windows+mac 不矛盾 / 通用族不误报 / weight=3）。
+
+### 设计要点
+
+- 仅在宿主原生有 `CSSStyleDeclaration` 时才覆写（不凭空制造）；`cssText` 整段赋值属罕见写法、Chrome 不走 JS setter，列为已知残留。
+- 不新增数据库列与表单字段（与 WebGPU / Audio / EME / 反自动化 / 平台 API / 媒体查询同源，符合规则 #24）。
+- 提交：`5129067`（feat）。
+
+---
+
 ## 2026-09-26 · 媒体查询偏好（Tier 2 #5）
 
 ### 新增
