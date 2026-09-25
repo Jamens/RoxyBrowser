@@ -643,6 +643,18 @@ app.listen(4000)
 - **不新增数据库列**：只改已有 `AccountEntity.profileId`（符合规则 #24）。
 - **典型工作流**：勾选一批同平台账号 → 批量关联环境到「主店铺环境」→ 列表「所属环境」列即时刷新；若某账号原属别的环境，则被重新归属（旧环境不再包含它）。
 
+### 7.17 列表搜索 / 筛选 / 收藏（应用层，环境列表）
+
+跨境电商用户的环境列表往往有几十上百条，要快速定位「某个店铺」「某分组」「常驻关注的那几个」必须靠列表检索能力。
+
+- **搜索（关键词）**：环境列表顶部搜索框（名称 / 备注 / 平台 LIKE），随输入实时回传 `GET /api/profiles?keyword=`，后端 `qb.andWhere('(p.name LIKE :kw OR p.remark LIKE :kw OR p.platform LIKE :kw)')` 命中；`allowClear` 一键清空。
+- **筛选（分组）**：分组下拉（`GET /api/profiles?groupId=` → `qb.andWhere('p.groupId = :gid')`），与搜索可叠加；「全部分组」即不过滤。
+- **收藏（新增）**：列表首列星标按钮，一键把环境加入「我的收藏」；工具栏「仅看收藏」按钮切换只看收藏（带当前收藏计数）。收藏集存于**浏览器 localStorage**（key `roxy_starred_envs`，数组 of 环境 ID），**不落库、不加数据库列**（符合规则 #24）——收藏是个人隐私偏好，无需进团队库；换机器不共享属可接受取舍。实现要点：
+  - 星标列 `fixed: 'left'`，点击 `stopPropagation` 避免误触行操作；填充 `StarFilled`(金色)/`StarOutlined`(灰) 表示状态；
+  - 列表数据源经 `viewList` 派生：关闭「仅看收藏」时返回全量 `list`，开启时按收藏集 `Set` 过滤（与后端 keyword/group 过滤叠加，三层筛选互不冲突）；
+  - 环境被删除/移入回收站后，收藏集里残留的失效 ID 随每次列表刷新自动裁剪（`useEffect` 比对 `list` 后回写 localStorage），不积累脏数据。
+- **不新增数据库列**：收藏用 localStorage，搜索/筛选走既有 `GET /api/profiles` 参数（规则 #24）。
+
 ### 8. 操作日志
 
 
