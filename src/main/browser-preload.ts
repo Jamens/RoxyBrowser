@@ -28,6 +28,8 @@ import { audioProfileFor } from '../shared/webaudio'
     geoLatitude: number
     geoLongitude: number
     geoAccuracy: number
+    // 是否注入 HTTP 明文连接安全警告条（仅环境窗口、http:// 且非 localhost 时生效）
+    httpWarning: boolean
   }
 
   // ipcRenderer 提前到最前：起始页的 window.roxy.navigate 闭包要用它
@@ -439,6 +441,53 @@ import { audioProfileFor } from '../shared/webaudio'
         def(navigator, 'requestMediaKeySystemAccess', wrapped)
       }
     }
+  }
+
+  // ===== HTTP 安全警告（对标 RoxyChrome 154 的 HTTP Security Warnings）=====
+  // 环境窗口导航到明文 http:// 站点时，在页面顶部注入红色警告条，提示连接未加密、存在被窃听 / 篡改风险。
+  // localhost / 127.0.0.1 / file:// 不触发（本地调试与 App 自身页面）。
+  // 仅当宿主原生有 document 时才注入（不凭空新增非默认信号，与第 22 条同源）。
+  if (fp.httpWarning && typeof document !== 'undefined') {
+    const isExcluded = (h: string) => h === 'localhost' || h === '127.0.0.1' || h === '[::1]'
+    const showBanner = () => {
+      try {
+        const existing = document.getElementById('__roxy_http_warn')
+        if (location.protocol !== 'http:' || isExcluded(location.hostname)) {
+          if (existing) existing.remove()
+          if (document.body) document.body.style.paddingTop = ''
+          return
+        }
+        if (existing) return
+        const bar = document.createElement('div')
+        bar.id = '__roxy_http_warn'
+        bar.textContent = '⚠ 此页面使用 HTTP 明文传输，存在被窃听 / 篡改风险，请勿在此输入账号、密码等敏感信息'
+        bar.setAttribute(
+          'style',
+          'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#b3261e;color:#fff;font:13px/1.6 system-ui,-apple-system,sans-serif;padding:6px 12px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,.35)'
+        )
+        if (document.body) {
+          document.body.style.paddingTop = '32px'
+          document.body.prepend(bar)
+        } else if (document.documentElement) {
+          document.documentElement.appendChild(bar)
+        }
+      } catch (e) {}
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', showBanner)
+    } else {
+      showBanner()
+    }
+    // SPA 路由变化（pushState/popstate/hashchange）后重新评估
+    window.addEventListener('popstate', showBanner)
+    window.addEventListener('hashchange', showBanner)
+    // 点击指向 http:// 的链接时，确保警告条就位（多数情况已随页面加载出现）
+    document.addEventListener('click', (e: any) => {
+      try {
+        const a = e.target && e.target.closest ? e.target.closest('a') : null
+        if (a && a.protocol === 'http:') setTimeout(showBanner, 0)
+      } catch (e2) {}
+    })
   }
 
   // ===== WebGPU =====

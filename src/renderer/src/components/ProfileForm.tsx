@@ -535,6 +535,14 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     >
                       <Switch checked={!!fp.blockTrackers} onChange={(v) => setFpField('blockTrackers', v)} />
                     </Form.Item>
+                    <Form.Item
+                      label="HTTP 安全警告"
+                      style={{ marginBottom: 0 }}
+                      valuePropName="checked"
+                      tooltip="导航到明文 http:// 站点时，在页面顶部显示红色警告条提示连接未加密、存在被窃听/篡改风险；localhost 与 App 自身页面不触发"
+                    >
+                      <Switch checked={!!fp.httpWarning} onChange={(v) => setFpField('httpWarning', v)} />
+                    </Form.Item>
                     <Form.Item label="WebRTC" style={{ marginBottom: 0 }}>
                       <Select
                         value={fp.webrtc}

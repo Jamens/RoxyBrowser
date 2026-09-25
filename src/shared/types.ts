@@ -43,6 +43,10 @@ export interface Fingerprint {
   // 实现在主进程（session.webRequest），不经过 preload——preload 跑在渲染进程，
   // 只能改 JS、拦不到网络请求。用于避免反复调研竞品时被对方埋点识别。
   blockTrackers: boolean
+  // ---- HTTP 安全警告 ----
+  // 环境窗口导航到明文 http:// 站点时，在页面顶部注入警告条提示连接未加密、存在被窃听 / 篡改风险
+  // （对标竞品 RoxyChrome 154 的「HTTP 安全警告」）。默认开启；localhost / 127.0.0.1 / file:// 不触发。
+  httpWarning: boolean
 }
 
 /** OS 展示名（列表/表单/窗口信息共用，避免各处写 if-else） */

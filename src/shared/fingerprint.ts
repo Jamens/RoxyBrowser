@@ -22,13 +22,14 @@ function randInt(min: number, max: number): number {
 }
 
 // Chrome 大版本池（Win / Mac）
+// 内核版本池：对标竞品「内核版本同步到 154」——以当前真实 Chrome 大版本（154）为最新，
+// 保留近期 150–154 一段范围供「内核版本切换」使用（老旧 127–132 已非当前人群，移除以避免环境看起来过时）。
 const CHROME_VERSIONS = [
-  { major: 130, full: '130.0.6723.92' },
-  { major: 131, full: '131.0.6778.86' },
-  { major: 132, full: '132.0.6834.110' },
-  { major: 129, full: '129.0.6668.100' },
-  { major: 128, full: '128.0.6613.120' },
-  { major: 127, full: '127.0.6533.119' }
+  { major: 154, full: '154.0.7521.60' },
+  { major: 153, full: '153.0.7458.40' },
+  { major: 152, full: '152.0.7393.50' },
+  { major: 151, full: '151.0.7325.30' },
+  { major: 150, full: '150.0.7262.40' }
 ]
 
 const WIN_VERSIONS = [
@@ -266,6 +267,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         devicePixelRatio: dev.dpr,
         ...geoFor(tzInfo.tz),
         blockTrackers: DEFAULT_BLOCK_TRACKERS,
+        httpWarning: true,
         fonts: randomFonts('android')
       }
     }
@@ -293,6 +295,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
         devicePixelRatio: dev.dpr,
         ...geoFor(tzInfo.tz),
         blockTrackers: DEFAULT_BLOCK_TRACKERS,
+        httpWarning: true,
         fonts: randomFonts('ios')
       }
   }
@@ -331,6 +334,7 @@ export function randomFingerprint(os?: OSKind, coreVersion?: number): Fingerprin
     doNotTrack: 'unspecified',
     ...geoFor(tzInfo.tz),
     blockTrackers: DEFAULT_BLOCK_TRACKERS,
+    httpWarning: true,
     fonts: randomFonts(chosenOs)
   }
 }
@@ -392,7 +396,9 @@ export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerpr
     fonts: Array.isArray(fp.fonts) ? fp.fonts : osFontList(os as OSKind),
     ...geo,
     // 老数据没有该字段时显式兜底：不能让 `{ ...fp }` 里可能存在的 undefined 把它抹成假值
-    blockTrackers: typeof fp.blockTrackers === 'boolean' ? fp.blockTrackers : base.blockTrackers
+    blockTrackers: typeof fp.blockTrackers === 'boolean' ? fp.blockTrackers : base.blockTrackers,
+    // httpWarning 同理：fp 缺失时回退到 base（随机基准默认开启），避免被 ...fp 的 undefined 抹掉
+    httpWarning: typeof fp.httpWarning === 'boolean' ? fp.httpWarning : base.httpWarning
   } as Fingerprint
 }
 
@@ -408,6 +414,7 @@ function presetFingerprint(
     canvasNoise: true,
     audioNoise: true,
     blockTrackers: DEFAULT_BLOCK_TRACKERS,
+    httpWarning: true,
     webrtc: 'disable',
     doNotTrack: 'unspecified',
     tzOffset: getTimezoneOffsetMinutes(core.timezone),
@@ -429,13 +436,13 @@ interface FingerprintPreset {
 export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   {
     id: 'win10-chrome-us',
-    name: 'Windows 10 · Chrome 130 · 美东',
+    name: 'Windows 10 · Chrome 154 · 美东',
     description: 'GTX 1650 / 8 核 16G / 1920×1080 / en-US（纽约）',
     build: () =>
       presetFingerprint({
         os: 'windows',
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Safari/537.36',
-        uaFullVersion: '130.0.6723.92',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Win32',
         languages: ['en-US', 'en'],
         timezone: 'America/New_York',
@@ -449,13 +456,13 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   },
   {
     id: 'win11-chrome-de',
-    name: 'Windows 11 · Chrome 129 · 德国',
+    name: 'Windows 11 · Chrome 154 · 德国',
     description: 'RTX 3060 / 12 核 16G / 1920×1080 / de-DE（柏林）',
     build: () =>
       presetFingerprint({
         os: 'windows',
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Safari/537.36',
-        uaFullVersion: '129.0.6668.100',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Win32',
         languages: ['de-DE', 'de', 'en-US', 'en'],
         timezone: 'Europe/Berlin',
@@ -469,13 +476,13 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   },
   {
     id: 'win10-chrome-uk',
-    name: 'Windows 10 · Chrome 131 · 英国',
+    name: 'Windows 10 · Chrome 154 · 英国',
     description: 'UHD 630 / 4 核 8G / 1920×1080 / en-GB（伦敦）',
     build: () =>
       presetFingerprint({
         os: 'windows',
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Safari/537.36',
-        uaFullVersion: '131.0.6778.86',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Win32',
         languages: ['en-GB', 'en'],
         timezone: 'Europe/London',
@@ -489,13 +496,13 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   },
   {
     id: 'mac-m1-chrome-us',
-    name: 'MacBook M1 · Chrome 130 · 美西',
+    name: 'MacBook M1 · Chrome 154 · 美西',
     description: 'Apple M1 / 8 核 16G / 2560×1440 / en-US（洛杉矶）',
     build: () =>
       presetFingerprint({
         os: 'mac',
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Safari/537.36',
-        uaFullVersion: '130.0.6723.92',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'MacIntel',
         languages: ['en-US', 'en'],
         timezone: 'America/Los_Angeles',
@@ -509,13 +516,13 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   },
   {
     id: 'mac-m2-chrome-sg',
-    name: 'MacBook M2 · Chrome 132 · 新加坡',
+    name: 'MacBook M2 · Chrome 154 · 新加坡',
     description: 'Apple M2 / 8 核 8G / 1920×1080 / en-SG（新加坡）',
     build: () =>
       presetFingerprint({
         os: 'mac',
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.6834.110 Safari/537.36',
-        uaFullVersion: '132.0.6834.110',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'MacIntel',
         languages: ['en-SG', 'en', 'zh-CN', 'zh'],
         timezone: 'Asia/Singapore',
@@ -529,13 +536,13 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
   },
   {
     id: 'mac-intel-chrome-jp',
-    name: 'MacBook Intel · Chrome 129 · 日本',
+    name: 'MacBook Intel · Chrome 154 · 日本',
     description: 'Iris Plus 655 / 4 核 8G / 1920×1080 / ja-JP（东京）',
     build: () =>
       presetFingerprint({
         os: 'mac',
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Safari/537.36',
-        uaFullVersion: '129.0.6668.100',
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'MacIntel',
         languages: ['ja-JP', 'ja', 'en-US', 'en'],
         timezone: 'Asia/Tokyo',
@@ -554,8 +561,8 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
     build: () =>
       presetFingerprint({
         os: 'android',
-        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.92 Mobile Safari/537.36',
-        uaFullVersion: '130.0.6723.92',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Mobile Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Linux armv8l',
         languages: ['en-US', 'en'],
         timezone: 'America/New_York',
@@ -576,8 +583,8 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
     build: () =>
       presetFingerprint({
         os: 'android',
-        userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.86 Mobile Safari/537.36',
-        uaFullVersion: '131.0.6778.86',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Mobile Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Linux armv8l',
         languages: ['de-DE', 'de', 'en-US', 'en'],
         timezone: 'Europe/Berlin',
@@ -598,8 +605,8 @@ export const FINGERPRINT_PRESETS: FingerprintPreset[] = [
     build: () =>
       presetFingerprint({
         os: 'android',
-        userAgent: 'Mozilla/5.0 (Linux; Android 14; 2210132C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.100 Mobile Safari/537.36',
-        uaFullVersion: '129.0.6668.100',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; 2210132C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.7521.60 Mobile Safari/537.36',
+        uaFullVersion: '154.0.7521.60',
         platform: 'Linux armv8l',
         languages: ['zh-CN', 'zh', 'en-US', 'en'],
         timezone: 'Asia/Shanghai',
@@ -712,6 +719,8 @@ export function deriveJitteredFingerprint(src: Fingerprint): Fingerprint {
     ),
     geoAccuracy: typeof src.geoAccuracy === 'number' ? src.geoAccuracy : 50,
     // 与 canvasNoise / audioNoise 同属「行为一致」类：母本关则副本也关，保持批量号行为统一
-    blockTrackers: typeof src.blockTrackers === 'boolean' ? src.blockTrackers : DEFAULT_BLOCK_TRACKERS
+    blockTrackers: typeof src.blockTrackers === 'boolean' ? src.blockTrackers : DEFAULT_BLOCK_TRACKERS,
+    // httpWarning 同样继承母本设置（行为一致类）
+    httpWarning: typeof src.httpWarning === 'boolean' ? src.httpWarning : true
   }
 }
