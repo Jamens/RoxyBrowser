@@ -542,7 +542,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                         onChange={(v) => setFpField('webrtc', v)}
                         options={[
                           { value: 'disable', label: '禁用（防泄漏）' },
-                          { value: 'real', label: '真实' }
+                          { value: 'real', label: '真实' },
+                          { value: 'proxy', label: '代理模式（隐藏本地 IP）' }
                         ]}
                       />
                     </Form.Item>

@@ -2,7 +2,7 @@
 import type { LocaleCode } from './locales'
 
 export type OSKind = 'windows' | 'mac' | 'android' | 'ios'
-export type WebRTCMode = 'disable' | 'real'
+export type WebRTCMode = 'disable' | 'real' | 'proxy'
 
 export interface Fingerprint {
   os: OSKind

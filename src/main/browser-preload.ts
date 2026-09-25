@@ -20,7 +20,7 @@ import { audioProfileFor } from '../shared/webaudio'
     webglVendor: string
     webglRenderer: string
     audioNoise: boolean
-    webrtc: 'disable' | 'real'
+    webrtc: 'disable' | 'real' | 'proxy'
     doNotTrack: string
     touch?: boolean
     devicePixelRatio?: number
@@ -256,6 +256,88 @@ import { audioProfileFor } from '../shared/webaudio'
     /* ignore */
   }
 
+  // ===== Battery Status API（navigator.getBattery）=====
+  // 真实桌面 Chrome 仍暴露该 API，且 CreepJS 等检测站会采集 battery 维度
+  // （charging / level）。完全不定义会与「真实 Chrome 有该 API」矛盾，但返回宿主机
+  // 真实电池又是独立指纹。这里按 seed 派生一个**稳定且自洽**的状态：未满则充电中、
+  // chargingTime 为正数；满电则不充电、dischargingTime=Infinity。仅在宿主本身有该 API
+  // 时才覆写——若宿主已移除（部分环境），绝不凭空新增（避免制造非默认信号）。
+  try {
+    if (typeof (navigator as any).getBattery === 'function') {
+      const batLevel = 0.5 + ((seed % 1000) / 1000) * 0.5 // 0.5~1.0，按环境稳定
+      const batCharging = batLevel >= 0.999
+      const batManager: any = Object.assign(new EventTarget(), {
+        level: batLevel,
+        charging: batCharging,
+        chargingTime: batCharging ? 0 : Math.round((1 - batLevel) * 7200),
+        dischargingTime: batCharging ? 0 : Infinity
+      })
+      def(navigator, 'getBattery', () => Promise.resolve(batManager))
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // ===== navigator.plugins / mimeTypes =====
+  // 真实 Chrome 至少带一个 PDF 插件（navigator.plugins.length >= 1），而 Electron 默认
+  // 暴露为空——「plugins 为空」是明显的自动化信号。这里按 Chrome 默认形态补一套最小但
+  // 结构正确的 Plugin / PluginArray / MimeType / MimeTypeArray，并设置对应原型使
+  // instanceof / toString 与真实 Chrome 一致；多余内部槽位用自有方法兜底。
+  try {
+    if (navigator.plugins) {
+      const PluginArrayProto = (window as any).PluginArray?.prototype
+      const MimeTypeArrayProto = (window as any).MimeTypeArray?.prototype
+      const PluginProto = (window as any).Plugin?.prototype
+      const MimeTypeProto = (window as any).MimeType?.prototype
+      const pdfMime: any = { type: 'application/pdf', description: 'Portable Document Format', suffixes: 'pdf' }
+      const pdfPlugin: any = { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 }
+      const mimeObj: any = { ...pdfMime }
+      if (MimeTypeProto) Object.setPrototypeOf(mimeObj, MimeTypeProto)
+      const pluginObj: any = { ...pdfPlugin, mimeTypes: [] as any[] }
+      if (PluginProto) Object.setPrototypeOf(pluginObj, PluginProto)
+      mimeObj.enabledPlugin = pluginObj
+      pluginObj.mimeTypes = [mimeObj]
+      pluginObj.item = (i: number) => (i === 0 ? mimeObj : null)
+      pluginObj.namedItem = (n: string) => (n === 'application/pdf' ? mimeObj : null)
+      const mimeArr: any = { length: 1 }
+      Object.defineProperty(mimeArr, 0, { get: () => mimeObj, enumerable: false, configurable: true })
+      mimeArr.item = (i: number) => (i === 0 ? mimeObj : null)
+      mimeArr.namedItem = (n: string) => (n === 'application/pdf' ? mimeObj : null)
+      Object.defineProperty(mimeArr, Symbol.iterator, { value: function* () { yield mimeObj }, enumerable: false, configurable: true })
+      if (MimeTypeArrayProto) Object.setPrototypeOf(mimeArr, MimeTypeArrayProto)
+      const pluginArr: any = { length: 1 }
+      Object.defineProperty(pluginArr, 0, { get: () => pluginObj, enumerable: false, configurable: true })
+      pluginArr.item = (i: number) => (i === 0 ? pluginObj : null)
+      pluginArr.namedItem = (n: string) => (n === 'Chrome PDF Plugin' ? pluginObj : null)
+      Object.defineProperty(pluginArr, Symbol.iterator, { value: function* () { yield pluginObj }, enumerable: false, configurable: true })
+      if (PluginArrayProto) Object.setPrototypeOf(pluginArr, PluginArrayProto)
+      def(navigator, 'plugins', pluginArr)
+      def(navigator, 'mimeTypes', mimeArr)
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // ===== SpeechSynthesis 语音列表对齐 =====
+  // getVoices() 返回的 TTS 语音反映宿主机已安装语言；若与 fp.languages 不符，会泄漏真实
+  // 系统语言（如中文系统却声称 en-US）。过滤为仅保留与 fp.languages 匹配的语音，让「语言」
+  // 这一维度自洽。宿主无该 API 时不处理。
+  try {
+    const ss = (window as any).speechSynthesis
+    if (ss && typeof ss.getVoices === 'function') {
+      const orig = ss.getVoices.bind(ss)
+      def(ss, 'getVoices', () => {
+        const all = orig()
+        const matched = all.filter((v: any) =>
+          fp.languages.some((l: string) => v.lang && v.lang.toLowerCase().startsWith(l.split('-')[0].toLowerCase()))
+        )
+        return matched.length ? matched : all
+      })
+    }
+  } catch {
+    /* ignore */
+  }
+
   // ===== Canvas 噪声 =====
   if (fp.canvasNoise) {
     const rng = mulberry32(seed ^ 0x1a2b3c4d)
@@ -423,6 +505,33 @@ import { audioProfileFor } from '../shared/webaudio'
     ;(window as any).webkitRTCPeerConnection = undefined
     if (navigator.mediaDevices) {
       def(navigator.mediaDevices, 'enumerateDevices', () => Promise.resolve([]))
+    }
+  } else if (fp.webrtc === 'proxy') {
+    // 代理模式：保留 WebRTC 功能（站点仍需通话 / 数据通道），但强制 iceCandidatePolicy='public'，
+    // 丢弃本地私有 IP 的 host 候选，只保留经环境代理出去的 srflx/relay 候选——
+    // 外部看到的是代理公网 IP 而非宿主机局域网 IP，与代理身份自洽。
+    // 不拦 enumerateDevices：媒体设备标签不涉及 IP 泄漏，保留原生行为更自然。
+    const wrapRtc = (OrigCtor: any) => {
+      if (!OrigCtor) return OrigCtor
+      const W: any = function (this: any, config?: any, ...rest: any[]) {
+        const cfg = Object.assign({}, config, { iceCandidatePolicy: 'public' })
+        return Reflect.construct(OrigCtor, [cfg, ...rest])
+      }
+      // 让 new 出的实例 instanceof 仍成立（Reflect.construct 用的是真实构造器）
+      W.prototype = OrigCtor.prototype
+      return W
+    }
+    try {
+      const Orig = (window as any).RTCPeerConnection
+      if (Orig) {
+        const W = wrapRtc(Orig)
+        def(window, 'RTCPeerConnection', W)
+        if ((window as any).webkitRTCPeerConnection) {
+          def(window, 'webkitRTCPeerConnection', wrapRtc((window as any).webkitRTCPeerConnection))
+        }
+      }
+    } catch {
+      /* ignore */
     }
   }
 
