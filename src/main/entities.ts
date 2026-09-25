@@ -72,6 +72,40 @@ export class TeamMemberEntity {
   createdAt: Date
 }
 
+// 邮箱邀请：管理员向指定邮箱发送邀请，收件人凭令牌加入团队。
+// 令牌一次有效（usedAt 标记），过期时间由 expiresAt 控制（默认 7 天）。
+@Entity('team_invites')
+export class TeamInviteEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int' })
+  inviterId: number
+
+  @Column({ type: 'varchar', length: 255 })
+  email: string
+
+  // owner | admin | member（仅 admin / member 实际可用，owner 不通过邀请下发）
+  @Column({ type: 'varchar', length: 16, default: 'member' })
+  role: string
+
+  @Column({ type: 'varchar', length: 64, unique: true })
+  token: string
+
+  @Column({ type: 'datetime' })
+  expiresAt: Date
+
+  // 接受时间；NULL 表示尚未使用
+  @Column({ type: 'datetime', nullable: true })
+  usedAt: Date | null
+
+  @CreateDateColumn({ type: 'datetime' })
+  createdAt: Date
+}
+
 @Entity('groups')
 @Index(['teamId'])
 export class GroupEntity {

@@ -49,6 +49,10 @@ export default function Settings() {
   const [testingId, setTestingId] = useState<number | null>(null)
   const { t, setLocale } = useI18n()
 
+  // SMTP 测试
+  const [testSmtpEmail, setTestSmtpEmail] = useState('')
+  const [testingSmtp, setTestingSmtp] = useState(false)
+
   // ===== 登录二次验证（2FA / TOTP）=====
   const [twoFaEnabled, setTwoFaEnabled] = useState(false)
   const [twoFaBusy, setTwoFaBusy] = useState(false)
@@ -244,6 +248,30 @@ export default function Settings() {
       message.error((e as Error).message)
     } finally {
       setTestingId(null)
+    }
+  }
+
+  // SMTP 配置测试：用当前表单里的配置单发一封测试邮件，反馈投递结果
+  const testSmtp = async () => {
+    const smtp = (form.getFieldValue('smtp') as Record<string, unknown>) || {}
+    if (!smtp.host || !smtp.port) {
+      message.warning(t('settings.smtpNotConfigured'))
+      return
+    }
+    const email = testSmtpEmail.trim()
+    if (!email) {
+      message.warning(t('settings.smtpTestEmailRequired'))
+      return
+    }
+    setTestingSmtp(true)
+    try {
+      const res = await api.post<{ ok: boolean; error?: string }>('/api/team/invites/test', { smtp, email })
+      if (res.ok) message.success(t('settings.smtpTestSent'))
+      else message.error(t('settings.smtpTestFailed', { error: res.error || '' }))
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTestingSmtp(false)
     }
   }
 
@@ -556,6 +584,49 @@ export default function Settings() {
               { value: 'name', label: t('settings.trayName') }
             ]}
           />
+        </Form.Item>
+
+        <Divider>{t('settings.smtpSection')}</Divider>
+        <Typography.Paragraph type="secondary">{t('settings.smtpDesc')}</Typography.Paragraph>
+        <Space size="large" style={{ display: 'flex' }}>
+          <Form.Item name={['smtp', 'host']} label={t('settings.smtpHost')} rules={[{ required: true, message: t('settings.smtpHostRequired') }]}>
+            <Input placeholder="smtp.example.com" style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item name={['smtp', 'port']} label={t('settings.smtpPort')} rules={[{ required: true }]}>
+            <InputNumber min={1} max={65535} style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item name={['smtp', 'secure']} label={t('settings.smtpSecure')} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Space>
+        <Space size="large" style={{ display: 'flex' }}>
+          <Form.Item name={['smtp', 'user']} label={t('settings.smtpUser')} rules={[{ required: true, message: t('settings.smtpUserRequired') }]}>
+            <Input style={{ width: 240 }} placeholder="invite@your-domain.com" />
+          </Form.Item>
+          <Form.Item name={['smtp', 'pass']} label={t('settings.smtpPass')} rules={[{ required: true, message: t('settings.smtpPassRequired') }]}>
+            <Input.Password style={{ width: 240 }} placeholder="授权码 / 密码" />
+          </Form.Item>
+        </Space>
+        <Space size="large" style={{ display: 'flex' }}>
+          <Form.Item name={['smtp', 'from']} label={t('settings.smtpFrom')} extra={t('settings.smtpFromExtra')}>
+            <Input style={{ width: 240 }} placeholder="invite@your-domain.com" />
+          </Form.Item>
+          <Form.Item name={['smtp', 'rejectUnauthorized']} label={t('settings.smtpRejectUnauthorized')} valuePropName="checked" extra={t('settings.smtpRejectExtra')}>
+            <Switch />
+          </Form.Item>
+        </Space>
+        <Form.Item>
+          <Space>
+            <Input
+              placeholder={t('settings.smtpTestEmail')}
+              value={testSmtpEmail}
+              onChange={(e) => setTestSmtpEmail(e.target.value)}
+              style={{ width: 260 }}
+            />
+            <Button loading={testingSmtp} onClick={testSmtp}>
+              {t('settings.smtpTest')}
+            </Button>
+          </Space>
         </Form.Item>
 
         <Divider>{t('aiAgent.section')}</Divider>

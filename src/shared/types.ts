@@ -458,6 +458,26 @@ export interface AppSettings {
   aiAutoTasks: AiAutoTask[]
   // Webhook 通知订阅列表（操作日志事件触发外发 POST）
   webhooks: WebhookConfig[]
+  // 邮件 SMTP 配置（用于邮箱邀请成员）。字段全空表示未配置，邀请功能不可用。
+  smtp: SmtpSettings
+}
+
+// 邮件 SMTP 配置
+export interface SmtpSettings {
+  // 服务器主机
+  host: string
+  // 端口：465 为隐式 TLS；587 通常为 STARTTLS
+  port: number
+  // true = 465 隐式 TLS；false = 明文连接后升级 STARTTLS（587 常用）
+  secure: boolean
+  // 登录账号
+  user: string
+  // 登录密码 / 授权码
+  pass: string
+  // 发件人邮箱（同时作为信封 MAIL FROM）
+  from: string
+  // 自签 / 内网证书常需关闭证书校验（true = 严格校验）
+  rejectUnauthorized: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -497,7 +517,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   snapshotBackupDir: '',
   snapshotBackupIntervalH: 24,
   aiAutoTasks: [],
-  webhooks: []
+  webhooks: [],
+  smtp: {
+    host: '',
+    port: 465,
+    secure: true,
+    user: '',
+    pass: '',
+    from: '',
+    rejectUnauthorized: true
+  }
 }
 
 // ===== 自动更新（electron-updater）状态推送 =====

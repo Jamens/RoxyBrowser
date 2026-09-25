@@ -62,10 +62,15 @@ export default function Team() {
   const [info, setInfo] = useState<TeamInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
-  // 邀请方式：create = 新建账号；pick = 勾选系统内已有成员
-  const [inviteMode, setInviteMode] = useState<'create' | 'pick'>('create')
+  // 邀请方式：create = 新建账号；pick = 勾选系统内已有成员；email = 邮箱邀请（发邮件 + 令牌）
+  const [inviteMode, setInviteMode] = useState<'create' | 'pick' | 'email'>('create')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [picked, setPicked] = useState<number[]>([])
+  // 邮箱邀请相关
+  const [emailText, setEmailText] = useState('')
+  const [emailRole, setEmailRole] = useState<'admin' | 'member'>('member')
+  const [sending, setSending] = useState(false)
+  const [invites, setInvites] = useState<{ id: number; email: string; role: string; expiresAt: string }[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -75,14 +80,27 @@ export default function Team() {
     }
   }, [])
 
+  // 加载待接受的邮箱邀请（仅管理员可见）
+  const loadInvites = useCallback(async () => {
+    try {
+      const list = await api.get<{ id: number; email: string; role: string; expiresAt: string }[]>('/api/team/invites')
+      setInvites(Array.isArray(list) ? list : [])
+    } catch {
+      setInvites([])
+    }
+  }, [])
+
   useEffect(() => {
     load()
-  }, [load])
+    loadInvites()
+  }, [load, loadInvites])
 
   // 打开邀请弹窗时拉取「可邀请的已有成员」
   const openInvite = async () => {
     setInviteMode('create')
     setPicked([])
+    setEmailText('')
+    setEmailRole('member')
     form.resetFields()
     try {
       setCandidates(await api.get<Candidate[]>('/api/team/candidates'))
@@ -90,6 +108,49 @@ export default function Team() {
       setCandidates([])
     }
     setOpen(true)
+  }
+
+  // 邮箱邀请：解析多邮箱、调后端发信
+  const sendEmailInvite = async () => {
+    const emails = emailText
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    if (emails.length === 0) {
+      message.warning('请填写至少一个邮箱')
+      return
+    }
+    setSending(true)
+    try {
+      const res = await api.post<{ ok: boolean; sent: string[]; failed: { email: string; error: string }[] }>('/api/team/invites', {
+        emails,
+        role: emailRole
+      })
+      const okCount = res.sent?.length || 0
+      const failCount = res.failed?.length || 0
+      if (failCount === 0) {
+        message.success(`已向 ${okCount} 个邮箱发送邀请`)
+      } else {
+        message.warning(`成功 ${okCount} 个，失败 ${failCount} 个：${res.failed.map((f) => `${f.email}(${f.error})`).join('；')}`)
+      }
+      setOpen(false)
+      loadInvites()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // 撤销邀请
+  const revokeInvite = async (id: number) => {
+    try {
+      await api.del(`/api/team/invites/${id}`)
+      message.success('已撤销邀请')
+      loadInvites()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
   }
 
   const addMember = async () => {
@@ -240,13 +301,52 @@ export default function Team() {
         基于角色的权限管理：所有者与管理员可管理成员和环境配置，普通成员可使用环境执行日常运营。所有操作均记录在操作日志中并标注操作人，便于责任追溯。
       </Typography.Paragraph>
       <Table rowKey="id" size="middle" columns={columns} dataSource={info?.members || []} pagination={false} />
+      {invites.length > 0 && (
+        <Card size="small" title="邮箱邀请记录（待接受）" style={{ marginTop: 16 }}>
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            dataSource={invites}
+            columns={[
+              { title: '邮箱', dataIndex: 'email' },
+              {
+                title: '角色',
+                dataIndex: 'role',
+                render: (v: string) => (v === 'admin' ? '管理员' : '成员')
+              },
+              { title: '过期时间', dataIndex: 'expiresAt', render: (v: string) => dayjs(v).format('YYYY-MM-DD HH:mm') },
+              {
+                title: '操作',
+                width: 90,
+                render: (_: unknown, r: { id: number }) => (
+                  <Popconfirm title="撤销该邀请？" onConfirm={() => revokeInvite(r.id)}>
+                    <Button size="small" danger>撤销</Button>
+                  </Popconfirm>
+                )
+              }
+            ]}
+          />
+        </Card>
+      )}
       <Modal
         title="邀请 / 添加成员"
         open={open}
-        onOk={addMember}
+        onOk={() => {
+          if (inviteMode === 'pick') addMember()
+          else if (inviteMode === 'email') sendEmailInvite()
+          else addMember()
+        }}
+        confirmLoading={sending}
         onCancel={() => setOpen(false)}
         destroyOnClose
-        okText={inviteMode === 'pick' ? `邀请（${picked.length}）` : '确定'}
+        okText={
+          inviteMode === 'pick'
+            ? `邀请（${picked.length}）`
+            : inviteMode === 'email'
+              ? '发送邀请邮件'
+              : '确定'
+        }
       >
         <Radio.Group
           value={inviteMode}
@@ -256,10 +356,35 @@ export default function Team() {
           style={{ marginBottom: 16 }}
           options={[
             { value: 'create', label: '新建账号' },
-            { value: 'pick', label: `勾选已有成员（${candidates.length}）` }
+            { value: 'pick', label: `勾选已有成员（${candidates.length}）` },
+            { value: 'email', label: '邮箱邀请' }
           ]}
         />
-        {inviteMode === 'pick' ? (
+        {inviteMode === 'email' ? (
+          <>
+            <Form.Item label="邀请邮箱（多个用换行 / 逗号 / 分号分隔，最多 50 个）" required>
+              <Input.TextArea
+                rows={4}
+                value={emailText}
+                onChange={(e) => setEmailText(e.target.value)}
+                placeholder="alice@example.com&#10;bob@example.com"
+              />
+            </Form.Item>
+            <Form.Item label="角色" required>
+              <Select
+                value={emailRole}
+                onChange={(v) => setEmailRole(v)}
+                options={[
+                  { value: 'admin', label: '管理员' },
+                  { value: 'member', label: '成员' }
+                ]}
+              />
+            </Form.Item>
+            <Typography.Text type="secondary">
+              收件人将通过邮件收到邀请链接，点击后设置账号并加入本团队。需先在「设置 → 邮件 SMTP」配置发信服务器。
+            </Typography.Text>
+          </>
+        ) : inviteMode === 'pick' ? (
           candidates.length === 0 ? (
             <Typography.Text type="secondary">暂无可邀请的已有成员（系统内账号均已在本团队中）</Typography.Text>
           ) : (
