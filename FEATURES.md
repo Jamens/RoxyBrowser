@@ -130,6 +130,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
 | EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（含 CENC/CBCS 能力检测；iOS 伪装整体隐藏该 API，Safari 无 EME） |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
+| 反自动化   | `navigator.webdriver` 强制 false（iOS 隐藏）；清除 CDP / ChromeDriver 特征全局变量（cdc_ / $cdc_ / __nightmare / callPhantom 等），避免被风控识别为自动化 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
 
@@ -507,6 +508,15 @@ app.listen(4000)
 - **不伪造原则**：仅在宿主原生就有该 API 时才覆写，不在无 EME 的环境下凭空新增非默认信号。
 - **体检项**：新增 `eme` 项（权重 4），非 iOS 期望「Widevine + ClearKey 可用且 `getConfiguration()` 能报出 CENC 能力（initDataTypes 含 `cenc`）」、iOS 期望「无 EME」，与 WebGPU 同理做一致性校验；actual 文案额外带出 initDataTypes / 视频·音频能力数，便于排查。
 
+#### 7.12.6 反自动化痕迹清除（Tier 1 #1，`3c4ad83`）
+
+检测站（Cloudflare / PerimeterX / 各平台风控）首要查的就是自动化痕迹，比再加一个 EME 向量影响大得多。真实非自动化 Chrome 的 `navigator.webdriver` 恒为 `false`；iOS Safari 根本没有该属性（`undefined`）。CDP / ChromeDriver 还会在 `window` 上留下 `cdc_` / `$cdc_` 等特征变量。
+
+- **`navigator.webdriver`**：非 iOS 伪装强制 `def(navigator, 'webdriver', false)`、iOS 伪装整体 `hide`（与 EME / `userAgentData` 同源手法，绝不用 `delete`）；仅在宿主原生有该 API 时才覆写。
+- **自动化特征全局变量清除**：预置已知名单（`cdc_` / `$cdc_` / `$chrome_asyncScriptInfo` / `__nightmare` / `callPhantom` / `_phantom` / `__phantomas` / `selenium` / `__webdriver_evaluate` / `__driver_evaluate` / `__webdriver_script_function` / `__webdriver_script_func` / `__webdriver_script_fn` / `__driver_unwrapped` / `__webdriver_unwrapped` / `__selenium_unwrapped` / `__fxdriver_unwrapped` / `__selenium_evaluate` / `__fxdriver_evaluate`），`window` / `document` 上**存在即删除**（仅 own property，不动原型；本仓库环境由自己启动的 Electron 承载，正常情况下不会存在，属防御性清除，避免任何 CDP 连接意外注入后暴露）。
+- **体检项**：新增 `automation` 项（权重 5），校验 `webdriver=false 且无自动化痕迹`，actual 文案带出 `webdriver` / `automationTraces` 两项状态。
+- **不伪造原则**：`webdriver=false` 与真实非自动化浏览器一致，属「还原真实」而非「伪造」；不存在的自动化变量一律不主动定义，避免反倒制造 `hasOwnProperty` 类破绽。
+
 #### 体检接入
 
 新增三个检查项，可在「环境体检」报告里直接看到注入是否生效：
@@ -516,6 +526,7 @@ app.listen(4000)
 | `WebGPU 显卡` | 8 | `requestAdapter().info.vendor / architecture`（无 GPU 时标记不适用） |
 | `音频特征（采样率/延迟/声道）` | 6 | `new AudioContext()` 的 sampleRate / baseLatency / maxChannelCount |
 | `音频压缩器 reduction` | 3 | `createDynamicsCompressor().reduction` |
+| `反自动化痕迹` | 5 | `navigator.webdriver` 须为 false 且 `window` / `document` 无 cdc_ / $cdc_ 等自动化特征变量 |
 
 - 采集走 `Promise`（`requestAdapter` 异步），带 **3 秒超时**保护，避免 GPU 进程卡住导致体检请求悬挂。
 - 环境限制不误报：`AudioContext` 建不起来、或 WebGPU 拿不到 adapter 时，对应项标记「不适用」（权重 0），与既有 WebGL 的处理一致。

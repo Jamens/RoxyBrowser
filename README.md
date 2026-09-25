@@ -126,6 +126,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **指纹深度补齐（WebGPU / WebAudio）**：补齐此前缺失的两个高熵指纹维度，消除「WebGL 与 WebGPU 说法不一致」「音频特征裸奔」这类**自相矛盾而主动暴露**的缺口，详见下节
 - **EME / Widevine 伪装（P1 + P3）**：环境窗口对检测站报出 Widevine + ClearKey（iOS 伪装隐藏该 API），`getConfiguration()` 还能报出真实的 CENC/CBCS 能力集（initDataTypes 含 cenc/cbcs、覆盖 avc/hevc/vp9/av1 视频与 aac/opus/flac 音频），避免「iOS UA 却暴露 Widevine」或「只能 resolve 却拿不到能力列表」的矛盾信号；环境体检 eme 项校验 Widevine + ClearKey + CENC 能力。
 - **HTTP 安全警告（P2）**：环境窗口导航到明文 http:// 站点时，在页面顶部注入红色警告条提示连接未加密、存在被窃听/篡改风险（localhost 与 App 自身页面不触发），对标 RoxyChrome 154 的 HTTP Security Warnings。
+- **反自动化痕迹清除（Tier 1）**：强制 `navigator.webdriver = false`（iOS 伪装整体隐藏该属性），并清除 CDP / ChromeDriver 注入的特征全局变量（`cdc_` / `$cdc_` / `__nightmare` / `callPhantom` 等），避免被 Cloudflare / PerimeterX 等风控识别为自动化；环境体检新增「反自动化痕迹」项（权重 5）校验。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。

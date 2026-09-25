@@ -9,6 +9,22 @@
 
 ---
 
+## 2026-09-26 · 反自动化痕迹清除（Tier 1 #1）
+
+### 新增
+
+- **反自动化痕迹清除**（`src/main/browser-preload.ts`）：强制 `navigator.webdriver = false`（iOS 伪装整体隐藏该属性，与 EME / `userAgentData` 同源手法）；清除 CDP / ChromeDriver 注入的特征全局变量（`cdc_` / `$cdc_` / `__nightmare` / `callPhantom` / `_phantom` / `selenium` 等）——仅在 `window` / `document` 上**存在即删除**（own property，不动原型），属防御性清除，避免任何 CDP 连接意外注入后暴露。
+- **环境体检新增 automation 项**（权重 5）：校验 `webdriver=false 且无自动化痕迹`，actual 文案带出 `webdriver` / `automationTraces` 两项状态（`src/shared/healthcheck.ts` + `src/main/healthProbe.ts` + `src/renderer/src/pages/Environments.tsx` 标签）。
+- 离线单测：6 条 healthcheck automation 逻辑用例全部通过（webdriver=false&无痕迹 / webdriver=true / 有自动化痕迹 / 两者都命中 / actual 文案 / weight=5）。
+
+### 设计要点
+
+- `webdriver=false` 与真实非自动化浏览器一致，属「还原真实」而非「伪造」；不存在的自动化变量一律不主动定义，避免反倒制造 `hasOwnProperty` 类破绽。
+- 不新增数据库列与表单字段（与 WebGPU / Audio / EME 同源，符合规则 #24）。
+- 提交：`3c4ad83`（feat）。
+
+---
+
 ## 2026-09-25 · EME 能力检测补全（CENC/CBCS，P3）
 
 ### 新增
