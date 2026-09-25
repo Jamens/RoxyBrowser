@@ -4,7 +4,8 @@
 // 设计：本文件是**纯函数**，不依赖 Electron / 数据库，便于单测与前后端复用。
 // 采集（在窗口里跑 JS 取真实值）在主进程 src/main/healthProbe.ts，
 // 比对与打分在这里，两者通过 FingerprintProbe 结构解耦。
-import type { Fingerprint } from './types'
+import type { Fingerprint, OSKind } from './types'
+import { CORE_FONTS, FONT_POOL } from './fingerprint'
 import { COUNTRIES } from './countries'
 import { webGpuInfoFor } from './webgpu'
 import { audioProfileFor } from './webaudio'
@@ -280,6 +281,37 @@ export function buildHealthReport(
     ok: actual.fontsGuarded,
     weight: 5
   })
+  // 字体列表与 OS 一致性（深度校验）：fp.fonts 必须是该 OS 该有的字体集，且含跨平台核心字体，
+  // 不能混入其它 OS 专属字体——否则检测站会看到「Windows 环境却装着 SF Pro / Helvetica Neue」这类
+  // 矛盾信号。这是对「配置是否正确」的校验（与上面的 fonts 项「注入是否生效」互补）。
+  {
+    // CSS 通用族（serif/sans-serif/monospace…）在任何 OS 都合法，与 preload 的 isFontAvailable 同源处理：
+    // 不计入「缺核心字体」也不计入「跨 OS 矛盾」，否则 windows 环境声明 sans-serif 会被误报。
+    const GENERIC = new Set(['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui', 'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded', 'math', 'emoji', 'fangsong'])
+    const osKey = ((e.os as OSKind) || 'windows') as OSKind
+    const osPool = FONT_POOL[osKey] || []
+    const declaredAll = Array.isArray(e.fonts) ? (e.fonts as unknown[]).map((f) => String(f).toLowerCase()) : []
+    const declared = declaredAll.filter((f) => !GENERIC.has(f))
+    const coreMissing = CORE_FONTS.filter((c) => !declared.includes(c.toLowerCase()))
+    const otherOs = new Set<string>()
+    for (const k of Object.keys(FONT_POOL) as OSKind[]) {
+      if (k === osKey) continue
+      for (const f of FONT_POOL[k]) otherOs.add(f.toLowerCase())
+    }
+    const contradictions = declared.filter((f) => otherOs.has(f) && !osPool.some((x) => x.toLowerCase() === f))
+    const ok = declared.length > 0 && coreMissing.length === 0 && contradictions.length === 0
+    let actualText = '合规'
+    if (declared.length === 0) actualText = '字体列表为空'
+    else if (coreMissing.length) actualText = `缺核心字体:${coreMissing.join('/')}`
+    else if (contradictions.length) actualText = `跨 OS 矛盾:${contradictions.join('/')}`
+    items.push({
+      key: 'fontOsConsistency',
+      expected: `OS(${osKey}) 合规字体集`,
+      actual: actualText,
+      ok,
+      weight: 3
+    })
+  }
 
   // ---- WebGPU：必须与 WebGL 同源 ----
   // 只伪造 WebGL 而放过 WebGPU，会产出「WebGL 说 RTX 4090、WebGPU 说宿主机集显」的矛盾信号——

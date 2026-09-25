@@ -772,12 +772,14 @@ import { audioProfileFor } from '../shared/webaudio'
     const m = String(fontSpec).match(SIZE_RE)
     return m ? m[2] : fontSpec
   }
-  // 把 font 简写里的 family 替换成第一个可用族；全部不可用时回落 sans-serif，
-  // 让 measureText 对列表外字体统一返回基线宽度，杜绝宽度枚举。
+  // 把 font 简写里的 family 过滤为「仅保留可用族」：去掉列表外的字体，全部不可用时回落 sans-serif。
+  // 过滤（而非「任一可用即原样保留」）才能让 measureText 对列表外字体统一返回基线宽度，杜绝宽度枚举。
   const mapFontFamily = (fontSpec: string): string => {
     const fam = familyOf(fontSpec)
-    if (fam.split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return fontSpec
-    return fontSpec.slice(0, fontSpec.length - fam.length) + 'sans-serif'
+    const kept = fam.split(',').map((s) => s.trim()).filter(Boolean).filter(isFontAvailable)
+    const newFam = kept.length ? kept.join(', ') : 'sans-serif'
+    if (newFam === fam) return fontSpec
+    return fontSpec.slice(0, fontSpec.length - fam.length) + newFam
   }
   try {
     const df = (document as any).fonts
@@ -811,6 +813,49 @@ import { audioProfileFor } from '../shared/webaudio'
       }
       return origMeasure.call(this, text)
     }
+  }
+
+  // DOM 宽度枚举防护：站点通过给元素设 style.fontFamily 再读 offsetWidth 来枚举已安装字体，
+  // 上面的 document.fonts.check / Canvas measureText 补丁覆盖不到这条路径。这里覆写
+  // CSSStyleDeclaration 的 font-family 写入（直接赋值与 setProperty 两条），把列表外字体过滤掉、
+  // 回落到 sans-serif，使 DOM 宽度对照法同样无法分辨「装了 / 没装」。
+  try {
+    const CSSProto = (window as any).CSSStyleDeclaration && (window as any).CSSStyleDeclaration.prototype
+    if (CSSProto) {
+      const famDesc = Object.getOwnPropertyDescriptor(CSSProto, 'fontFamily')
+      if (famDesc && typeof famDesc.set === 'function') {
+        const origFamSet = famDesc.set
+        Object.defineProperty(CSSProto, 'fontFamily', {
+          configurable: true,
+          enumerable: famDesc.enumerable,
+          get: famDesc.get,
+          set(v: string) {
+            try {
+              const mapped = mapFontFamily('10px ' + (v == null ? '' : String(v)))
+              origFamSet.call(this, familyOf(mapped))
+            } catch {
+              origFamSet.call(this, v)
+            }
+          }
+        })
+      }
+      const origSetProperty = CSSProto.setProperty
+      if (typeof origSetProperty === 'function') {
+        CSSProto.setProperty = function (this: any, prop: string, value: string, priority?: string) {
+          try {
+            if (typeof prop === 'string' && prop.toLowerCase() === 'font-family') {
+              const mapped = mapFontFamily('10px ' + (value == null ? '' : String(value)))
+              return origSetProperty.call(this, prop, familyOf(mapped), priority)
+            }
+          } catch {
+            /* fall through to original */
+          }
+          return origSetProperty.call(this, prop, value, priority)
+        }
+      }
+    }
+  } catch {
+    /* ignore */
   }
 
   // ===== 多窗口同步（键鼠轨迹级） =====

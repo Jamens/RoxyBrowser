@@ -149,9 +149,9 @@ const IOS_DEVICES = [
 // 约 15% 做环境间差异化；预设则直接用完整确定集（保证预设可复现、各字段一致）。
 
 // 跨平台必定存在的核心安全字体（任何桌面 / 移动浏览器都有）
-const CORE_FONTS = ['Arial', 'Arial Black', 'Courier New', 'Georgia', 'Impact', 'Times New Roman', 'Trebuchet MS', 'Verdana']
+export const CORE_FONTS = ['Arial', 'Arial Black', 'Courier New', 'Georgia', 'Impact', 'Times New Roman', 'Trebuchet MS', 'Verdana']
 
-const FONT_POOL: Record<OSKind, string[]> = {
+export const FONT_POOL: Record<OSKind, string[]> = {
   windows: [
     'Arial Narrow', 'Bahnschrift', 'Calibri', 'Cambria', 'Candara', 'Comic Sans MS', 'Consolas',
     'Constantia', 'Corbel', 'Ebrima', 'Franklin Gothic Medium', 'Gabriola', 'HoloLens MDL2 Assets',
