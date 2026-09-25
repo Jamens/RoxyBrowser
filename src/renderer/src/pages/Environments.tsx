@@ -64,7 +64,8 @@ const HEALTH_LABELS: Record<string, string> = {
   fonts: '字体防泄漏',
   webgpu: 'WebGPU 显卡',
   audioProfile: '音频特征（采样率/延迟/声道）',
-  audioReduction: '音频压缩器 reduction'
+  audioReduction: '音频压缩器 reduction',
+  eme: 'EME / Widevine（DRM 模块）'
 }
 
 // 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）

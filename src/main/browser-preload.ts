@@ -401,6 +401,46 @@ import { audioProfileFor } from '../shared/webaudio'
   if (typeof WebGLRenderingContext !== 'undefined') patchGetParam(WebGLRenderingContext.prototype)
   if (typeof WebGL2RenderingContext !== 'undefined') patchGetParam(WebGL2RenderingContext.prototype)
 
+  // ===== EME / Widevine（DRM 模块伪装）=====
+  // 检测站（BrowserLeaks / CreepJS）用 navigator.requestMediaKeySystemAccess 探测已装 DRM 模块。
+  // Chrome/Edge 原生支持 com.widevine.alpha 与 org.w3.clearkey；PlayReady 是 Edge/IE 专有、
+  // FairPlay 是 Safari 专有——Chrome 原生就不支持，交给 origRmkSA 自然 reject，绝不伪造出 Chrome 不该有的信号。
+  // iOS Safari 根本没有 EME（走 webkit 前缀的 FairPlay），伪装成 iOS 时必须整体隐藏该 API，
+  // 否则「iOS UA 却报出 Widevine」是矛盾的暴露信号。
+  // 仅在宿主原生有该 API 时才覆写（不凭空新增非默认信号，与第 22 条同源）。
+  {
+    const origRmkSA: any =
+      typeof (navigator as any).requestMediaKeySystemAccess === 'function'
+        ? (navigator as any).requestMediaKeySystemAccess.bind(navigator)
+        : null
+    if (origRmkSA) {
+      if (fp.os === 'ios') {
+        hide(navigator, 'requestMediaKeySystemAccess')
+      } else {
+        const WIDEVINE_CONFIG: any[] = [
+          { initDataTypes: ['cenc'] },
+          {
+            initDataTypes: ['cenc'],
+            videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+          }
+        ]
+        // 检测站只验「是否可用」（resolve vs reject），不会真正解密，故只回一个最小可用外壳。
+        const fakeAccess = (keySystem: string) => ({
+          keySystem,
+          getConfiguration: () => WIDEVINE_CONFIG[WIDEVINE_CONFIG.length - 1],
+          createMediaKeys: () => Promise.resolve({})
+        })
+        const wrapped = (keySystem: string, ...rest: any[]) => {
+          if (keySystem === 'com.widevine.alpha' || keySystem === 'org.w3.clearkey') {
+            return Promise.resolve(fakeAccess(keySystem))
+          }
+          return origRmkSA(keySystem, ...rest)
+        }
+        def(navigator, 'requestMediaKeySystemAccess', wrapped)
+      }
+    }
+  }
+
   // ===== WebGPU =====
   // 真实 Chrome 经 navigator.gpu.requestAdapter() 暴露 GPUAdapterInfo（vendor / architecture），
   // creepjs / pixelscan 等检测站已普遍采集。这里让它与上面伪造的 WebGL 保持一致，

@@ -58,6 +58,15 @@ export interface FingerprintProbe {
   audioReduction: number
   /** AudioContext 是否创建成功（失败时上面几项为哨兵值，体检项须标记不适用） */
   audioAvailable: boolean
+  // ---- EME / Widevine ----
+  /** navigator.requestMediaKeySystemAccess 是否存在（iOS 伪装时必须不存在） */
+  emeApiPresent: boolean
+  /** com.widevine.alpha 是否可用 */
+  emeWidevine: boolean
+  /** org.w3.clearkey 是否可用 */
+  emeClearKey: boolean
+  /** com.microsoft.playready 是否可用（Chrome 原生不支持，应为 false） */
+  emePlayReady: boolean
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -307,6 +316,33 @@ export function buildHealthReport(
       ok: on ? Math.abs(red - ap.compressorReduction) < 1e-3 : true,
       weight: on ? 3 : 0
     })
+  }
+
+  // ---- EME / Widevine：DRM 模块可用性（平台级指纹向量）----
+  // 与 WebGPU 同源：iOS 伪装必须整体移除该 API（否则「iOS UA 却报出 Widevine」矛盾）；
+  // 其余系统必须报出 Widevine + ClearKey，且绝不伪造 Chrome 不该有的 PlayReady（由宿主原生 reject 保证）。
+  {
+    const isIosEme = s(e.os) === 'ios'
+    if (isIosEme) {
+      items.push({
+        key: 'eme',
+        expected: 'iOS：无 EME',
+        actual: actual.emeApiPresent ? 'EME 存在' : '无 EME',
+        ok: !actual.emeApiPresent,
+        weight: 4
+      })
+    } else {
+      const ok = actual.emeApiPresent && actual.emeWidevine && actual.emeClearKey
+      items.push({
+        key: 'eme',
+        expected: 'Widevine + ClearKey',
+        actual: actual.emeApiPresent
+          ? `Widevine=${actual.emeWidevine} ClearKey=${actual.emeClearKey} PlayReady=${actual.emePlayReady}`
+          : 'EME 不可用',
+        ok,
+        weight: 4
+      })
+    }
   }
 
   // ---- 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）----

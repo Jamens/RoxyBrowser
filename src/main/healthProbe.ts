@@ -83,9 +83,34 @@ const PROBE_SCRIPT = `(function(){
       }
     } catch (e) {}
 
+    // ---- EME / Widevine：DRM 模块可用性（平台级指纹向量）----
+    // 与 WebGPU 同理：异步探测须带超时，且 .then() 内要补回 try/catch，
+    // 否则脱离外层保护后异常会被上层误判成「窗口未运行」。
+    var emeApiPresent = false, emeWidevine = false, emeClearKey = false, emePlayReady = false
+    var emeP = Promise.resolve()
+    try {
+      var rEme = (nav as any).requestMediaKeySystemAccess
+      if (typeof rEme === 'function') {
+        emeApiPresent = true
+        var emeCfg = [{ initDataTypes: ['cenc'] }]
+        var probeKs = function (ks) {
+          try { return rEme.call(nav, ks, emeCfg) } catch (e) { return Promise.reject(e) }
+        }
+        emeP = Promise.all([
+          probeKs('com.widevine.alpha').then(function () { return true }, function () { return false }),
+          probeKs('org.w3.clearkey').then(function () { return true }, function () { return false }),
+          probeKs('com.microsoft.playready').then(function () { return true }, function () { return false })
+        ]).then(function (res) {
+          emeWidevine = !!res[0]; emeClearKey = !!res[1]; emePlayReady = !!res[2]
+        }).catch(function () {})
+        // 超时保护：BrowserLeaks 式探测可能挂起，不能让体检请求悬挂
+        emeP = Promise.race([emeP, new Promise(function (r2) { setTimeout(r2, 3000) })])
+      }
+    } catch (e) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
-    return gpuP.then(function () {
+    return Promise.all([gpuP, emeP]).then(function () {
       try {
         return {
         userAgent: String(nav.userAgent || ''),
@@ -120,7 +145,11 @@ const PROBE_SCRIPT = `(function(){
         audioBaseLatency: aBase,
         audioMaxChannelCount: aMax,
         audioReduction: aRed,
-        audioAvailable: audioAvailable
+        audioAvailable: audioAvailable,
+        emeApiPresent: emeApiPresent,
+        emeWidevine: emeWidevine,
+        emeClearKey: emeClearKey,
+        emePlayReady: emePlayReady
       };
       } catch (e) {
         return { error: String(e) };
