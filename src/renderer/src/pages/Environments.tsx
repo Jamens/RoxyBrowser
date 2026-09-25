@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert
 } from 'antd'
@@ -8,7 +8,8 @@ import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
-  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined
+  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined,
+  StarOutlined, StarFilled
 } from '@ant-design/icons'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
@@ -138,6 +139,48 @@ export default function Environments() {
   const [keyword, setKeyword] = useState('')
   const [groupId, setGroupId] = useState<number | undefined>()
   const [loading, setLoading] = useState(false)
+
+  // 收藏（本地 localStorage，不落库、不加数据库列，符合规则 #24）：记录用户常驻关注的环境 ID
+  const STAR_KEY = 'roxy_starred_envs'
+  const [starred, setStarred] = useState<number[]>(() => {
+    try {
+      const raw = localStorage.getItem(STAR_KEY)
+      const arr = raw ? (JSON.parse(raw) as unknown) : []
+      return Array.isArray(arr) ? (arr.filter((x) => typeof x === 'number') as number[]) : []
+    } catch {
+      return []
+    }
+  })
+  const [onlyStarred, setOnlyStarred] = useState(false)
+  const toggleStar = (id: number) => {
+    setStarred((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      try {
+        localStorage.setItem(STAR_KEY, JSON.stringify(next))
+      } catch {
+        /* 忽略存储异常（如隐私模式） */
+      }
+      return next
+    })
+  }
+  // 回收站/删除后，收藏集里可能残留已不存在的环境 ID，按当前列表裁剪，保持整洁
+  useEffect(() => {
+    setStarred((prev) => {
+      const valid = prev.filter((id) => list.some((p) => p.id === id))
+      if (valid.length === prev.length) return prev
+      try {
+        localStorage.setItem(STAR_KEY, JSON.stringify(valid))
+      } catch {
+        /* ignore */
+      }
+      return valid
+    })
+  }, [list])
+  const viewList = useMemo(() => {
+    if (!onlyStarred) return list
+    const set = new Set(starred)
+    return list.filter((p) => set.has(p.id))
+  }, [list, onlyStarred, starred])
   const [selected, setSelected] = useState<React.Key[]>([])
   const [batchGroup, setBatchGroup] = useState<number | undefined>()
   const [batchProxy, setBatchProxy] = useState<number | undefined>()
@@ -704,6 +747,25 @@ export default function Environments() {
   }
 
   const columns: ColumnsType<ProfileDTO> = [
+    {
+      title: '',
+      key: 'star',
+      width: 44,
+      fixed: 'left',
+      render: (_, r) => (
+        <Button
+          type="text"
+          size="small"
+          aria-label={starred.includes(r.id) ? '取消收藏' : '收藏'}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleStar(r.id)
+          }}
+        >
+          {starred.includes(r.id) ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+        </Button>
+      )
+    },
     { title: '序号', dataIndex: 'seq', width: 70 },
     {
       title: '环境名称',
@@ -865,6 +927,13 @@ export default function Environments() {
             options={groups.map((g) => ({ value: g.id, label: g.name }))}
           />
           <Button
+            icon={onlyStarred ? <StarFilled /> : <StarOutlined />}
+            type={onlyStarred ? 'primary' : 'default'}
+            onClick={() => setOnlyStarred((v) => !v)}
+          >
+            仅看收藏{starred.length ? ` (${starred.length})` : ''}
+          </Button>
+          <Button
             type="primary"
             icon={<PlusOutlined />}
             onClick={() => {
@@ -974,7 +1043,7 @@ export default function Environments() {
           size="middle"
           loading={loading}
           columns={columns}
-          dataSource={list}
+          dataSource={viewList}
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
           onRow={(r: ProfileDTO) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
           pagination={{ pageSize: 10, showTotal: (tt) => `共 ${tt} 个环境` }}
