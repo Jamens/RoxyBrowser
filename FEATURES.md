@@ -212,10 +212,45 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 
 ### 6. 团队协作
 
-- 团队空间、成员邀请：支持**新建账号**（自动创建并加入）或**勾选系统内已有成员**一键批量加入，无需重复录入用户信息
+- 团队空间、成员邀请：支持**新建账号**（自动创建并加入）、**勾选系统内已有成员**一键批量加入，以及**邮箱邀请**（发信 + 令牌，收件人自助注册加入），三种方式无需重复录入用户信息
 - 角色权限：`owner` / `admin` / `member`
 - 项目分组（文件夹）
 - **团队图标自定义**：上传品牌或业务标识作为团队图标，多团队并行时一眼分辨。支持 JPG / PNG / WebP，单个文件 ≤ 2MB，边长超过 256px 会自动等比压缩后再存储；无图标时回退显示团队名首字母
+
+#### 6.1 邮箱邀请成员（SMTP + 令牌邀请流）
+
+管理员在「团队空间」切到「邮箱邀请」模式，填入一个或多个邮箱（换行 / 逗号 / 分号分隔）与角色，系统生成一次性令牌、入库并发送邀请邮件；收件人点击邮件里的链接进入接受页，设置登录账号后加入团队。邀请 7 天过期、用一次即失效；「团队空间」内可查看待接受列表并撤销。
+
+**前置**：需先在「设置 → 邮件 SMTP」配置发信服务器（零依赖 SMTP 发信器，支持 465 隐式 TLS 与 587 STARTTLS，支持 `AUTH LOGIN` / `AUTH PLAIN`）。SMTP 密码随设置以明文入库，仅建议用于受信任内网 / 自有邮件服务。
+
+接口：
+
+```bash
+# 邮箱邀请（管理员）：emails 为数组或逗号分隔串；role 仅 admin / member
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:39100/api/team/invites \
+  -d '{"emails":["alice@example.com","bob@example.com"],"role":"member"}'
+
+# 列出待接受邀请（管理员）
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:39100/api/team/invites
+
+# 撤销邀请（管理员）
+curl -H "Authorization: Bearer $TOKEN" -X DELETE http://127.0.0.1:39100/api/team/invites/12
+
+# 测试 SMTP 配置（管理员）：smtp 可省略，省略则用已保存配置；email 为测试收件人
+curl -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -X POST http://127.0.0.1:39100/api/team/invites/test \
+  -d '{"smtp":{"host":"smtp.example.com","port":465,"secure":true,"user":"u","pass":"p","from":"invite@example.com"},"email":"you@example.com"}'
+
+# 接受邀请（公开，无需登录）：浏览器打开邮件链接 GET /accept-invite?token=... 后，表单提交到此接口
+curl -H "Content-Type: application/json" -X POST http://127.0.0.1:39100/api/team/invites/accept \
+  -d '{"token":"<令牌>","username":"alice","password":"secret123","nickname":"Alice"}'
+
+# 接受前预览团队名 / 角色（公开）
+curl "http://127.0.0.1:39100/api/team/invites/accept/info?token=<令牌>"
+```
+
+> 注：本应用为桌面端，邀请链接默认指向 `http://127.0.0.1:<port>/accept-invite`。跨机器邀请时，需把链接里的 host 换成邀请方可达地址（或让收件人在同源的邀请方服务上打开）。
 
 ### 7. 账号中心
 

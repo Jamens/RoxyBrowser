@@ -9,6 +9,33 @@
 
 ---
 
+## 2026-09-24 · 邮箱邀请成员（SMTP 发信 + 令牌邀请流 + 接受页）
+
+### 新增
+
+- **邮箱邀请成员**：管理员在「团队空间」用邮箱邀请成员，系统生成一次性令牌、入库并发送邀请邮件；收件人点击邮件链接进入接受页，设置账号后加入团队。完整闭环：邀请 → 发信 → 接受 → 入队（`ad93a5d`）。
+- **零依赖 SMTP 发信器**（`src/main/smtp.ts`）：不引入 `nodemailer`，直接用 Node 内置 `net` / `tls` 手搓 SMTP 会话，支持 465 隐式 TLS 与 587 STARTTLS 两种接入，以及 `AUTH LOGIN` / `AUTH PLAIN`。已用本地假 SMTP 服务器做离线集成测试（PLAIN / LOGIN / 空配置拒绝），覆盖握手、认证、MAIL/RCPT/DATA 与点 Stuffing。
+- **邀请实体** `TeamInviteEntity`（`team_invites` 表）：`teamId / inviterId / email / role / token(唯一) / expiresAt / usedAt`，令牌 7 天过期、用一次即失效（`usedAt` 标记）。
+- **接受页**（`src/main/acceptInvitePage.ts` + `GET /accept-invite`）：Express 直接返回自包含 HTML，无需渲染进程参与；页面 `fetch` 同域接口完成校验与注册，跨机器只需把邀请链接的 host 换成邀请方可达地址。
+- **后端接口**（`src/main/server.ts`）：
+  - `POST /api/team/invites`（管理员）：解析多邮箱、生成令牌、入库、逐个发信，返回成功 / 失败清单。
+  - `GET /api/team/invites`（管理员）：列出待接受邀请（未用且未过期）。
+  - `DELETE /api/team/invites/:id`（管理员）：撤销未使用的邀请。
+  - `POST /api/team/invites/test`（管理员）：向测试邮箱发一封测试信，支持用表单里未保存的配置覆盖。
+  - `GET /api/team/invites/accept/info`（公开）：凭令牌返回团队名 / 角色（供接受页展示）。
+  - `POST /api/team/invites/accept`（公开）：凭令牌创建 / 加入账号并标记已用，单独写审计日志。
+- **前端**：
+  - `Team.tsx`：邀请弹窗新增「邮箱邀请」模式（多邮箱 + 角色），页内展示待接受邀请列表与撤销。
+  - `Settings.tsx`：新增「邮件 SMTP」配置段（服务器 / 端口 / 隐式 TLS / 账号 / 密码 / 发件人 / 证书校验 + 发送测试），四语 i18n 新增 20 个 key。
+- 提交：`ad93a5d`（feat + 文档）。
+
+### 修复 / 设计要点
+
+- **令牌不泄露**：邀请列表接口只回显 `email / role / expiresAt`，不含令牌原文（避免管理员代接受）。
+- **SMTP 密码明文存储告警**：密码随 `app_settings` JSON 入库，设置页已明确提示「仅用于受信任内网 / 自有邮件服务」。
+
+---
+
 ## 2026-09-24 · 智能助手 Planner 进阶（多步编排 + 技能库 + 防时间冻结）
 
 ### 新增
