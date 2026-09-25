@@ -128,6 +128,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
+| EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（iOS 伪装整体隐藏该 API，Safari 无 EME） |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
@@ -154,6 +155,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
   | Canvas 噪声 | 6 | `HTMLCanvasElement.prototype.toDataURL` 是否被改写 |
   | Audio 噪声 | 5 | `AudioBuffer.prototype.getChannelData` 是否被改写 |
   | WebRTC | 8 | `RTCPeerConnection` 是否不可用 |
+| EME / Widevine | 4 | `navigator.requestMediaKeySystemAccess` 探测 Widevine/ClearKey（iOS 期望无 EME） |
   | 字体防泄漏 | 5 | `document.fonts.check` 是否被改写 |
 
 - **噪声 / 防护类不看配置、看注入是否真挂上**：通过判断原型方法是否被改写来实测——原生方法的 `toString()` 含 `[native code]`，被 JS 覆盖后是普通函数源码。因此能发现「配置存了但注入没生效」这类问题。
@@ -494,6 +496,15 @@ app.listen(4000)
 - **WebRTC 代理模式**：表单新增第三选项。保留 WebRTC 功能但强制 `iceCandidatePolicy='public'`，丢弃本地私有 IP 的 host 候选、只走经代理出去的 srflx/relay 候选——外部看到的是代理公网 IP 而非局域网 IP。
 
 全部注入复用既有 `def` / `setPrototypeOf` 手法并包在 `try/catch` 内，单维度失败不影响其余；且均「只在宿主原生有该 API 时覆写」，不凭空新增非默认信号。
+
+#### 7.12.5 EME / Widevine 伪装（P1 #5，`59b2d59`）
+
+检测站（BrowserLeaks / CreepJS）通过 `navigator.requestMediaKeySystemAccess` 探测已安装的 DRM 模块，是平台级指纹向量：`com.widevine.alpha` 指向 Chrome/Edge、`com.apple.fps` 指向 Safari、`com.microsoft.playready` 指向 Windows/Edge。本克隆基于 Chromium，注入逻辑如下：
+
+- **非 iOS 伪装**：覆写 `navigator.requestMediaKeySystemAccess`，对 `com.widevine.alpha` 与 `org.w3.clearkey` 返回「可用」（`Promise.resolve` 一个最小 `MediaKeySystemAccess` 外壳，含 `keySystem` / `getConfiguration` / `createMediaKeys`）；PlayReady / FairPlay 仍走宿主原生——Chrome 本就不支持，自然 reject，绝不伪造出 Chrome 不该有的信号。
+- **iOS 伪装**：整体 `hide` 该 API（Safari 走 webkit 前缀的 FairPlay，根本没有 EME），否则「iOS UA 却报出 Widevine」是矛盾的暴露信号。
+- **不伪造原则**：仅在宿主原生就有该 API 时才覆写，不在无 EME 的环境下凭空新增非默认信号。
+- **体检项**：新增 `eme` 项（权重 4），非 iOS 期望「Widevine + ClearKey 可用」、iOS 期望「无 EME」，与 WebGPU 同理做一致性校验。
 
 #### 体检接入
 

@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-25 · EME / Widevine 伪装（P1 #5）
+
+### 新增
+
+- **EME / Widevine 伪装**（`src/main/browser-preload.ts`）：覆写 `navigator.requestMediaKeySystemAccess`，非 iOS 伪装报出 `com.widevine.alpha` 与 `org.w3.clearkey`，PlayReady / FairPlay 走原生自然 reject；iOS 伪装整体隐藏该 API（Safari 无 EME）。仅在宿主原生有该 API 时才覆写。
+- **环境体检新增 eme 项**（权重 4）：非 iOS 期望「Widevine + ClearKey 可用」、iOS 期望「无 EME」，与 WebGPU 同理做一致性校验（`src/main/healthProbe.ts` + `src/shared/healthcheck.ts` + `src/renderer/src/pages/Environments.tsx` 标签）。
+- 离线单测：5 条 healthcheck EME 逻辑用例（windows 生效 / ios 隐藏 / ios 漏隐藏判红 / windows 漏注入判红）全部通过。
+
+### 设计要点
+
+- 复用既有 `def` / `hide` 注入手法；不新增数据库列与表单字段，Widevine 可用性由 `fp.os` 派生（与 WebGPU / Audio 同源）。
+- 提交：`59b2d59`（feat）。
+
+---
+
 ## 2026-09-25 · 指纹深度补齐 2.0（Battery / plugins·mimeTypes / SpeechSynthesis / WebRTC 代理模式）
 
 ### 新增
