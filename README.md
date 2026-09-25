@@ -130,6 +130,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **平台 API 一致性（Tier 2）**：按真实支持矩阵隐藏「该 OS 不该有、但宿主原生却暴露」的平台能力 API——`bluetooth`/`usb` 全桌面+Android，`serial`/`hid` 仅桌面，`nfc` 仅 Android，iOS 一概移除；避免「iOS 伪装却暴露桌面 Web API」这类矛盾信号；环境体检新增「平台 API 一致性」项校验。
 - **媒体查询偏好（Tier 2）**：`prefers-color-scheme`（light/dark/no-preference）与 `prefers-reduced-motion` 由指纹设定稳定驱动，`matchMedia` 仅对这两个查询回灌 fp 值、其余媒体查询透传原生；环境体检新增「媒体查询偏好」项校验回灌值与设定一致。
 - **字体深度校验（Tier 3）**：字体防泄漏补丁从 `document.fonts.check` / Canvas `measureText` 延伸到 DOM 宽度枚举（`style.fontFamily` 赋值与 `setProperty('font-family')` 均过滤列表外字体），彻底封堵「设字体读 offsetWidth」这条经典侧信道；环境体检新增「字体与 OS 一致性」项，校验 `fp.fonts` 与 `fp.os` 自洽（含核心字体、无跨 OS 专属字体）。
+- **批量体检总览（应用层）**：环境列表多选后一键「批量体检」，后端逐个环境跑完整指纹体检并聚合——给出平均伪装度、通过数、以及**系统级问题分布**（按失败环境数排序，快速暴露「一批环境共性的配置错误」，如统一选错 OS 字体、webdriver 未清）；逐环境可展开查看逐项明细。仅对「已打开」环境采集，未运行环境标记为跳过（可先批量打开再体检）。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
