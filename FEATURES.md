@@ -128,7 +128,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
-| EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（iOS 伪装整体隐藏该 API，Safari 无 EME） |
+| EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（含 CENC/CBCS 能力检测；iOS 伪装整体隐藏该 API，Safari 无 EME） |
 | 字体       | 伪造「已安装字体」列表（按 OS 取基础集 + 随机子集）；`document.fonts.check/load` 与 `Canvas.measureText` 防护，杜绝宿主机字体泄漏 |
 
 > **指纹池覆盖范围**（`src/shared/fingerprint.ts`）：Windows 显卡 13 种——Intel Arc A/B 系列与 Iris Xe、NVIDIA RTX 30/40 系（含 4070/4080/4090）、AMD RX 6600 / 7800 XT，并保留 GTX 1650、UHD 630 等老型号以模拟长期未升级的机器；Mac 显卡 6 种（Apple M1–M4 / M4 Pro）；分辨率 9 种（1366×768 – 3440×1440）。池子越宽，随机与批量派生的重复率越低。
@@ -155,7 +155,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
   | Canvas 噪声 | 6 | `HTMLCanvasElement.prototype.toDataURL` 是否被改写 |
   | Audio 噪声 | 5 | `AudioBuffer.prototype.getChannelData` 是否被改写 |
   | WebRTC | 8 | `RTCPeerConnection` 是否不可用 |
-| EME / Widevine | 4 | `navigator.requestMediaKeySystemAccess` 探测 Widevine/ClearKey（iOS 期望无 EME） |
+| EME / Widevine | 4 | `navigator.requestMediaKeySystemAccess` 探测 Widevine/ClearKey + CENC 能力（iOS 期望无 EME） |
   | 字体防泄漏 | 5 | `document.fonts.check` 是否被改写 |
 
 - **噪声 / 防护类不看配置、看注入是否真挂上**：通过判断原型方法是否被改写来实测——原生方法的 `toString()` 含 `[native code]`，被 JS 覆盖后是普通函数源码。因此能发现「配置存了但注入没生效」这类问题。
@@ -501,10 +501,11 @@ app.listen(4000)
 
 检测站（BrowserLeaks / CreepJS）通过 `navigator.requestMediaKeySystemAccess` 探测已安装的 DRM 模块，是平台级指纹向量：`com.widevine.alpha` 指向 Chrome/Edge、`com.apple.fps` 指向 Safari、`com.microsoft.playready` 指向 Windows/Edge。本克隆基于 Chromium，注入逻辑如下：
 
-- **非 iOS 伪装**：覆写 `navigator.requestMediaKeySystemAccess`，对 `com.widevine.alpha` 与 `org.w3.clearkey` 返回「可用」（`Promise.resolve` 一个最小 `MediaKeySystemAccess` 外壳，含 `keySystem` / `getConfiguration` / `createMediaKeys`）；PlayReady / FairPlay 仍走宿主原生——Chrome 本就不支持，自然 reject，绝不伪造出 Chrome 不该有的信号。
+- **非 iOS 伪装**：覆写 `navigator.requestMediaKeySystemAccess`，对 `com.widevine.alpha` 与 `org.w3.clearkey` 返回「可用」（`Promise.resolve` 一个 `MediaKeySystemAccess` 外壳，含 `keySystem` / `getConfiguration` / `createMediaKeys`）；PlayReady / FairPlay 仍走宿主原生——Chrome 本就不支持，自然 reject，绝不伪造出 Chrome 不该有的信号。
+- **能力检测（P3，对标 RoxyChrome 152「加密媒体能力检测」）**：`getConfiguration()` 不再只回最小外壳，而是返回一份与真实 Chrome + Widevine 一致的能力集——`initDataTypes` 含 `cenc` 与 `cbcs`，`videoCapabilities` 覆盖 avc/hevc/vp9/av1（含多档 `robustness`），`audioCapabilities` 覆盖 aac/opus/flac。同时实现「协商」语义：检测站传入候选配置时，按 Widevine 已知支持集做最小合规筛选后回显该配置（可能补 `robustness`），都不命中则回退全量能力集——避免「只能 resolve 却拿不到真实能力列表」的破绽，让检测站能正确识别 CENC / CBCS 兼容性。
 - **iOS 伪装**：整体 `hide` 该 API（Safari 走 webkit 前缀的 FairPlay，根本没有 EME），否则「iOS UA 却报出 Widevine」是矛盾的暴露信号。
 - **不伪造原则**：仅在宿主原生就有该 API 时才覆写，不在无 EME 的环境下凭空新增非默认信号。
-- **体检项**：新增 `eme` 项（权重 4），非 iOS 期望「Widevine + ClearKey 可用」、iOS 期望「无 EME」，与 WebGPU 同理做一致性校验。
+- **体检项**：新增 `eme` 项（权重 4），非 iOS 期望「Widevine + ClearKey 可用且 `getConfiguration()` 能报出 CENC 能力（initDataTypes 含 `cenc`）」、iOS 期望「无 EME」，与 WebGPU 同理做一致性校验；actual 文案额外带出 initDataTypes / 视频·音频能力数，便于排查。
 
 #### 体检接入
 

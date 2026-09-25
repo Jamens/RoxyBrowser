@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-25 · EME 能力检测补全（CENC/CBCS，P3）
+
+### 新增
+
+- **EME 能力检测（对标 RoxyChrome 152「加密媒体能力检测」）**（`src/main/browser-preload.ts`）：Widevine / ClearKey 的 `requestMediaKeySystemAccess` 外壳不再只回最小配置，`getConfiguration()` 现返回与真实 Chrome + Widevine 一致的能力集——`initDataTypes` 含 `cenc` 与 `cbcs`，`videoCapabilities` 覆盖 avc/hevc/vp9/av1（含多档 `robustness`），`audioCapabilities` 覆盖 aac/opus/flac；并实现「协商」语义（检测站传入候选配置时按 Widevine 已知支持集筛选后回显），避免「只能 resolve 却拿不到真实能力列表」的破绽。
+- **环境体检 eme 项增强**（`src/shared/healthcheck.ts` + `src/main/healthProbe.ts`）：非 iOS 不仅校验 Widevine + ClearKey 存在，还要求 `getConfiguration()` 真能报出 CENC 能力（initDataTypes 含 `cenc`）；探针额外采集 `emeInitDataTypes` / `emeVideoCaps` / `emeAudioCaps`，actual 文案带出能力详情便于排查。iOS 仍期望无 EME。
+- 离线单测：10 条 healthcheck EME 能力逻辑用例全部通过（cenc+cbcs / cenc-only / 无 initDataTypes / 缺 widevine / 缺 clearkey / 有 playready / iOS 无 EME / iOS 有 EME / actual 文案）。
+
+### 设计要点
+
+- 复用既有 `def` 注入手法；不新增数据库列与表单字段，Widevine 能力集为静态真实配置（与 WebGPU / Audio 同源，符合规则 #24）。
+- 提交：`f28d7e6`（feat）。
+
+---
+
 ## 2026-09-25 · 内核版本同步到 154 + HTTP 安全警告（P2）
 
 ### 新增
