@@ -403,8 +403,8 @@ import { audioProfileFor } from '../shared/webaudio'
   if (typeof WebGLRenderingContext !== 'undefined') patchGetParam(WebGLRenderingContext.prototype)
   if (typeof WebGL2RenderingContext !== 'undefined') patchGetParam(WebGL2RenderingContext.prototype)
 
-  // ===== EME / Widevine（DRM 模块伪装）=====
-  // 检测站（BrowserLeaks / CreepJS）用 navigator.requestMediaKeySystemAccess 探测已装 DRM 模块。
+  // ===== EME / Widevine（DRM 模块伪装 + 能力检测，对标 RoxyChrome 152「加密媒体能力检测」）=====
+  // 检测站（BrowserLeaks / CreepJS）用 navigator.requestMediaKeySystemAccess 探测已装 DRM 模块与能力。
   // Chrome/Edge 原生支持 com.widevine.alpha 与 org.w3.clearkey；PlayReady 是 Edge/IE 专有、
   // FairPlay 是 Safari 专有——Chrome 原生就不支持，交给 origRmkSA 自然 reject，绝不伪造出 Chrome 不该有的信号。
   // iOS Safari 根本没有 EME（走 webkit 前缀的 FairPlay），伪装成 iOS 时必须整体隐藏该 API，
@@ -419,22 +419,58 @@ import { audioProfileFor } from '../shared/webaudio'
       if (fp.os === 'ios') {
         hide(navigator, 'requestMediaKeySystemAccess')
       } else {
-        const WIDEVINE_CONFIG: any[] = [
-          { initDataTypes: ['cenc'] },
-          {
-            initDataTypes: ['cenc'],
-            videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+        // 真实 Chrome + Widevine 报出的能力集：initDataTypes 支持 cenc 与 cbcs，
+        // 视频覆盖 avc/hevc/vp9/av1（含多档 robustness），音频覆盖 aac/opus/flac。
+        // 我们的环境没有真实 CDM，无法委托原生协商，故手工构造一份与真实 Widevine 一致的配置返回，
+        // 让检测站能看到「CENC / CBCS 格式兼容性」，避免「只能 resolve 却拿不到真实能力列表」的破绽。
+        const WIDEVINE_PROFILE: any = {
+          initDataTypes: ['cenc', 'cbcs'],
+          videoCapabilities: [
+            { contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: 'SW_SECURE_CRYPTO' },
+            { contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: 'SW_SECURE_DECODE' },
+            { contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: 'HW_SECURE_CRYPTO' },
+            { contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: 'HW_SECURE_DECODE' },
+            { contentType: 'video/mp4; codecs="avc1.42E01E"', robustness: 'HW_SECURE_ALL' },
+            { contentType: 'video/mp4; codecs="avc3.640028"' },
+            { contentType: 'video/webm; codecs="vp9"' },
+            { contentType: 'video/mp4; codecs="hev1.1.6.L93.B0"' },
+            { contentType: 'video/mp4; codecs="hvc1.1.6.L93.B0"' },
+            { contentType: 'video/mp4; codecs="av01.0.08M.08"' }
+          ],
+          audioCapabilities: [
+            { contentType: 'audio/mp4; codecs="mp4a.40.2"', robustness: 'SW_SECURE_CRYPTO' },
+            { contentType: 'audio/webm; codecs="opus"' },
+            { contentType: 'audio/flac' }
+          ],
+          distinctiveIdentifier: 'optional',
+          persistentState: 'optional'
+        }
+        // 真实协商：浏览器在传入候选里挑第一个可用的，getConfiguration() 回返该配置（可能补 robustness）。
+        // 我们没有真实 CDM 无法逐项校验，按「Widevine 已知支持集」做最小合规筛选后回显，命中即返回，否则回退全量能力集。
+        const negotiateEmeConfig = (requested: any[] | undefined): any => {
+          if (Array.isArray(requested)) {
+            for (const cfg of requested) {
+              if (!cfg || typeof cfg !== 'object') continue
+              const idt = (cfg as any).initDataTypes
+              const ok = !idt || (Array.isArray(idt) && (idt as any[]).every((t: any) => t === 'cenc' || t === 'cbcs'))
+              if (!ok) continue
+              const norm: any = { ...(cfg as any) }
+              if (!norm.initDataTypes) norm.initDataTypes = ['cenc', 'cbcs']
+              return norm
+            }
           }
-        ]
-        // 检测站只验「是否可用」（resolve vs reject），不会真正解密，故只回一个最小可用外壳。
-        const fakeAccess = (keySystem: string) => ({
+          return WIDEVINE_PROFILE
+        }
+        const fakeAccess = (keySystem: string, requested?: any[]) => ({
           keySystem,
-          getConfiguration: () => WIDEVINE_CONFIG[WIDEVINE_CONFIG.length - 1],
+          getConfiguration: () => negotiateEmeConfig(requested),
           createMediaKeys: () => Promise.resolve({})
         })
         const wrapped = (keySystem: string, ...rest: any[]) => {
           if (keySystem === 'com.widevine.alpha' || keySystem === 'org.w3.clearkey') {
-            return Promise.resolve(fakeAccess(keySystem))
+            // 第二个参数为候选配置数组（可空）
+            const req = rest[0]
+            return Promise.resolve(fakeAccess(keySystem, Array.isArray(req) ? req : undefined))
           }
           return origRmkSA(keySystem, ...rest)
         }

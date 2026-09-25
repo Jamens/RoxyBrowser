@@ -87,6 +87,7 @@ const PROBE_SCRIPT = `(function(){
     // 与 WebGPU 同理：异步探测须带超时，且 .then() 内要补回 try/catch，
     // 否则脱离外层保护后异常会被上层误判成「窗口未运行」。
     var emeApiPresent = false, emeWidevine = false, emeClearKey = false, emePlayReady = false
+    var emeInitDataTypes: string[] = [], emeVideoCaps = 0, emeAudioCaps = 0
     var emeP = Promise.resolve()
     try {
       var rEme = (nav as any).requestMediaKeySystemAccess
@@ -97,11 +98,21 @@ const PROBE_SCRIPT = `(function(){
           try { return rEme.call(nav, ks, emeCfg) } catch (e) { return Promise.reject(e) }
         }
         emeP = Promise.all([
-          probeKs('com.widevine.alpha').then(function () { return true }, function () { return false }),
-          probeKs('org.w3.clearkey').then(function () { return true }, function () { return false }),
+          // widevine 解析成功时回传 access 对象，用于读取 getConfiguration() 能力集
+          probeKs('com.widevine.alpha').then(function (a) { return a || true }, function () { return null }),
+          probeKs('org.w3.clearkey').then(function (a) { return a || true }, function () { return null }),
           probeKs('com.microsoft.playready').then(function () { return true }, function () { return false })
         ]).then(function (res) {
           emeWidevine = !!res[0]; emeClearKey = !!res[1]; emePlayReady = !!res[2]
+          var access = res[0]
+          if (access && typeof access.getConfiguration === 'function') {
+            try {
+              var cfg = access.getConfiguration()
+              emeInitDataTypes = Array.isArray(cfg.initDataTypes) ? cfg.initDataTypes : []
+              emeVideoCaps = Array.isArray(cfg.videoCapabilities) ? cfg.videoCapabilities.length : 0
+              emeAudioCaps = Array.isArray(cfg.audioCapabilities) ? cfg.audioCapabilities.length : 0
+            } catch (e2) {}
+          }
         }).catch(function () {})
         // 超时保护：BrowserLeaks 式探测可能挂起，不能让体检请求悬挂
         emeP = Promise.race([emeP, new Promise(function (r2) { setTimeout(r2, 3000) })])
@@ -149,7 +160,10 @@ const PROBE_SCRIPT = `(function(){
         emeApiPresent: emeApiPresent,
         emeWidevine: emeWidevine,
         emeClearKey: emeClearKey,
-        emePlayReady: emePlayReady
+        emePlayReady: emePlayReady,
+        emeInitDataTypes: emeInitDataTypes,
+        emeVideoCaps: emeVideoCaps,
+        emeAudioCaps: emeAudioCaps
       };
       } catch (e) {
         return { error: String(e) };

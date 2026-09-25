@@ -67,6 +67,12 @@ export interface FingerprintProbe {
   emeClearKey: boolean
   /** com.microsoft.playready 是否可用（Chrome 原生不支持，应为 false） */
   emePlayReady: boolean
+  /** Widevine getConfiguration() 报告的 initDataTypes（真实 Chrome 含 cenc / cbcs） */
+  emeInitDataTypes: string[]
+  /** Widevine 视频能力数（应 > 0） */
+  emeVideoCaps: number
+  /** Widevine 音频能力数（应 > 0） */
+  emeAudioCaps: number
   /** 采集脚本自身出错时回传 */
   error?: string
 }
@@ -332,12 +338,16 @@ export function buildHealthReport(
         weight: 4
       })
     } else {
-      const ok = actual.emeApiPresent && actual.emeWidevine && actual.emeClearKey
+      // 不仅要求「Widevine + ClearKey 存在」，还要求 getConfiguration() 真能报出能力集（initDataTypes 含 cenc），
+      // 否则「只能 resolve 却拿不到真实能力列表」会被检测站识别为伪装破绽（对标 RoxyChrome 152 加密媒体能力检测）。
+      const idtOk =
+        Array.isArray(actual.emeInitDataTypes) && actual.emeInitDataTypes.indexOf('cenc') >= 0
+      const ok = actual.emeApiPresent && actual.emeWidevine && actual.emeClearKey && idtOk
       items.push({
         key: 'eme',
-        expected: 'Widevine + ClearKey',
+        expected: 'Widevine + ClearKey + CENC 能力',
         actual: actual.emeApiPresent
-          ? `Widevine=${actual.emeWidevine} ClearKey=${actual.emeClearKey} PlayReady=${actual.emePlayReady}`
+          ? `Widevine=${actual.emeWidevine} ClearKey=${actual.emeClearKey} PlayReady=${actual.emePlayReady} initDataTypes=[${actual.emeInitDataTypes.join(',')}] video=${actual.emeVideoCaps} audio=${actual.emeAudioCaps}`
           : 'EME 不可用',
         ok,
         weight: 4
