@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, Typography, Upload, Tooltip, Alert } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
-import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined, DownloadOutlined, LinkOutlined } from '@ant-design/icons'
+import { PlusOutlined, ReloadOutlined, DeleteOutlined, EditOutlined, ImportOutlined, ExportOutlined, CopyOutlined, DownloadOutlined, LinkOutlined, StarOutlined, StarFilled, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api } from '../api'
 import { downloadText, readTextFile, nowStamp } from '../utils/download'
@@ -47,6 +47,48 @@ export default function Accounts() {
   const [role, setRole] = useState('owner')
   const isMember = role === 'member'
 
+  // 列表检索：关键词（平台/账号/备注）+ 所属环境 + 平台筛选
+  const [keyword, setKeyword] = useState('')
+  const [profileFilter, setProfileFilter] = useState<number | undefined>()
+  const [platformFilter, setPlatformFilter] = useState<string | undefined>()
+
+  // 收藏（本地 localStorage，不落库、不加数据库列，符合规则 #24）：记录用户常驻关注的账号 ID
+  const STAR_KEY = 'roxy_starred_accounts'
+  const [starred, setStarred] = useState<number[]>(() => {
+    try {
+      const raw = localStorage.getItem(STAR_KEY)
+      const arr = raw ? (JSON.parse(raw) as unknown) : []
+      return Array.isArray(arr) ? (arr.filter((x) => typeof x === 'number') as number[]) : []
+    } catch {
+      return []
+    }
+  })
+  const [onlyStarred, setOnlyStarred] = useState(false)
+  const toggleStar = (id: number) => {
+    setStarred((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      try {
+        localStorage.setItem(STAR_KEY, JSON.stringify(next))
+      } catch {
+        /* 忽略存储异常（如隐私模式） */
+      }
+      return next
+    })
+  }
+  // 回收站/删除后，收藏集里可能残留已不存在的账号 ID，按当前列表裁剪，保持整洁
+  useEffect(() => {
+    setStarred((prev) => {
+      const valid = prev.filter((id) => list.some((a) => a.id === id))
+      if (valid.length === prev.length) return prev
+      try {
+        localStorage.setItem(STAR_KEY, JSON.stringify(valid))
+      } catch {
+        /* ignore */
+      }
+      return valid
+    })
+  }, [list])
+
   // 批量关联环境：选中多个账号 → 统一绑定到某个目标环境
   const [selectedAcc, setSelectedAcc] = useState<number[]>([])
   const [assocOpen, setAssocOpen] = useState(false)
@@ -55,8 +97,12 @@ export default function Accounts() {
 
   const load = useCallback(async () => {
     try {
+      const params = new URLSearchParams()
+      if (keyword) params.set('keyword', keyword)
+      if (profileFilter) params.set('profileId', String(profileFilter))
+      if (platformFilter) params.set('platform', platformFilter)
       const [a, p, me] = await Promise.all([
-        api.get<Row[]>('/api/accounts'),
+        api.get<Row[]>(`/api/accounts?${params.toString()}`),
         api.get<ProfileDTO[]>('/api/profiles'),
         api.get<{ role: string }>('/api/auth/me')
       ])
@@ -66,7 +112,14 @@ export default function Accounts() {
     } catch (e) {
       message.error((e as Error).message)
     }
-  }, [])
+  }, [keyword, profileFilter, platformFilter])
+
+  // 收藏为客户端二次过滤：开启「仅看收藏」时按收藏集筛选，与后端 keyword/环境/平台筛选叠加
+  const viewList = useMemo(() => {
+    if (!onlyStarred) return list
+    const set = new Set(starred)
+    return list.filter((a) => set.has(a.id))
+  }, [list, onlyStarred, starred])
 
   useEffect(() => {
     load()
@@ -174,6 +227,25 @@ export default function Accounts() {
   }
 
   const columns: ColumnsType<Row> = [
+    {
+      title: '',
+      key: 'star',
+      width: 44,
+      fixed: 'left',
+      render: (_, r) => (
+        <Button
+          type="text"
+          size="small"
+          aria-label={starred.includes(r.id) ? '取消收藏' : '收藏'}
+          onClick={(e) => {
+            e.stopPropagation()
+            toggleStar(r.id)
+          }}
+        >
+          {starred.includes(r.id) ? <StarFilled style={{ color: '#faad14' }} /> : <StarOutlined style={{ color: 'rgba(0,0,0,0.45)' }} />}
+        </Button>
+      )
+    },
     { title: '所属环境', dataIndex: 'profileName', render: (v) => v || '-' },
     { title: '平台', dataIndex: 'platform', width: 110, render: (v) => (v ? <Tag color="processing">{v}</Tag> : '-') },
     {
@@ -253,6 +325,41 @@ export default function Accounts() {
       <Typography.Paragraph type="secondary">
         将各平台的账号密码保存到对应的浏览器环境中，免去多账号逐一记录的负担；环境成员无需互传密码即可协作。
       </Typography.Paragraph>
+      <Space style={{ marginBottom: 12 }} wrap>
+        <Input
+          placeholder="搜索平台 / 账号 / 备注"
+          prefix={<SearchOutlined />}
+          style={{ width: 220 }}
+          allowClear
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+        />
+        <Select
+          placeholder="全部环境"
+          allowClear
+          style={{ width: 180 }}
+          value={profileFilter}
+          onChange={setProfileFilter}
+          showSearch
+          optionFilterProp="label"
+          options={profiles.map((p) => ({ value: p.id, label: `#${p.seq} ${p.name}` }))}
+        />
+        <Select
+          placeholder="全部平台"
+          allowClear
+          style={{ width: 150 }}
+          value={platformFilter}
+          onChange={setPlatformFilter}
+          options={PLATFORMS.map((p) => ({ value: p, label: p }))}
+        />
+        <Button
+          icon={onlyStarred ? <StarFilled /> : <StarOutlined />}
+          type={onlyStarred ? 'primary' : 'default'}
+          onClick={() => setOnlyStarred((v) => !v)}
+        >
+          仅看收藏{starred.length ? ` (${starred.length})` : ''}
+        </Button>
+      </Space>
       {selectedAcc.length > 0 && (
         <Space style={{ marginBottom: 12 }}>
           <Typography.Text>已选 {selectedAcc.length} 个账号</Typography.Text>
@@ -266,8 +373,9 @@ export default function Accounts() {
         rowKey="id"
         size="middle"
         columns={columns}
-        dataSource={list}
+        dataSource={viewList}
         pagination={{ pageSize: 10 }}
+        scroll={{ x: 960 }}
         rowSelection={{ selectedRowKeys: selectedAcc, onChange: (keys) => setSelectedAcc(keys as number[]) }}
       />
       <Modal title={editing ? '编辑账号' : '添加账号'} open={open} onOk={save} onCancel={() => setOpen(false)} destroyOnClose>

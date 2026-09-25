@@ -1895,8 +1895,18 @@ function buildApiRouter(): express.Router {
     const profileRepo = AppDataSource.getRepository(ProfileEntity)
     const profiles = await profileRepo.find({ where: { ...ownerScope(req), isTemplate: false } })
     const profileIds = new Set(profiles.map((p) => p.id))
+    const profileIdFilter = req.query.profileId ? Number(req.query.profileId) : null
+    const platformFilter = typeof req.query.platform === 'string' ? req.query.platform : ''
+    const keyword = typeof req.query.keyword === 'string' ? req.query.keyword.trim() : ''
     const all = await repo.find({ order: { id: 'DESC' } })
-    const list = all.filter((a) => profileIds.has(a.profileId))
+    let list = all.filter((a) => profileIds.has(a.profileId))
+    // 列表检索：环境(所属环境) + 平台 + 关键词（平台/账号/备注），与前端工具栏筛选叠加
+    if (profileIdFilter) list = list.filter((a) => a.profileId === profileIdFilter)
+    if (platformFilter) list = list.filter((a) => a.platform === platformFilter)
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      list = list.filter((a) => `${a.platform} ${a.username} ${a.remark}`.toLowerCase().includes(kw))
+    }
     const nameMap = new Map(profiles.map((p) => [p.id, p.name]))
     // 成员角色不返回明文密码（对标官方 3.8.9 账号权限管理），仅打标记由前端展示「无权限查看」
     const canView = isAdminRole(await freshRole(req))
