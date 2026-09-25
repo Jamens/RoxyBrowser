@@ -103,7 +103,7 @@ mysql -uroot -p1234560 < db/schema.sql
 ## 核心功能
 
 - **环境管理**：无限创建隔离环境（每个独立 `persist:env-{id}` session），批量开关、分组筛选、回收站、整环境导出 / 导入迁移、手动切换线路
-- **浏览器指纹**：UA / UA-CH / 平台 / 语言 / 时区 / 分辨率 / CPU·内存 / Canvas·Audio 噪声 / **WebGL + WebGPU** / **WebAudio 完整特征** / WebRTC / 字体防泄漏 / 地理位置，桌面 + 移动端四形态，另附指纹预设库；支持内核版本（Chrome 127–132 大版本）切换，UA 与 UA-CH 客户端提示同步一致
+- **浏览器指纹**：UA / UA-CH / 平台 / 语言 / 时区 / 分辨率 / CPU·内存 / Canvas·Audio 噪声 / **WebGL + WebGPU** / **WebAudio 完整特征** / WebRTC / 字体防泄漏 / 地理位置，桌面 + 移动端四形态，另附指纹预设库；支持内核版本（Chrome 150–154 大版本）切换，UA 与 UA-CH 客户端提示同步一致
 - **代理 IP**：HTTP(S) / SOCKS5，一键检测（出口 IP / 地区 / 延迟 / 匿名度）、IP 池视角、一键分配、定时巡检、扫码导出
 - **环境体检**：伪装度评分 + 一致性红绿灯——把「设定指纹」与「环境窗口内实测回读值」逐项对撞（详见下节）
 - **在线检测（外部视角）**：把环境窗口真正导航到第三方指纹检测站（PixelScan / BrowserLeaks / CreepJS / AmIUnique）跑一遍，抓取页面文本 + 截图回写报告——由外部站点从真实人群分布角度评判，能发现「设定值互相矛盾」或「某项落在真实人群分布之外」这类体检抓不到的问题（详见下节）
@@ -124,6 +124,8 @@ mysql -uroot -p1234560 < db/schema.sql
 - **地理位置伪装（GEO）**：覆盖 `navigator.geolocation`，按环境时区回灌「代表城市」坐标；坐标与时区联动自洽，避免「东京时区 + 纽约坐标」这类自相矛盾的关联信号，详见下节
 - **追踪器屏蔽**：环境级开关，拦截已知分析 / 广告 / 埋点域名的请求（GA、GTM、Facebook Pixel、Hotjar、Mixpanel 等），避免反复调研竞品时被对方埋点、Cookie 或第三方脚本识别甚至反监控；只拦明确的统计 / 广告子域，不影响登录与正常 CDN 资源，详见下节
 - **指纹深度补齐（WebGPU / WebAudio）**：补齐此前缺失的两个高熵指纹维度，消除「WebGL 与 WebGPU 说法不一致」「音频特征裸奔」这类**自相矛盾而主动暴露**的缺口，详见下节
+- **EME / Widevine 伪装（P1）**：环境窗口对检测站报出 Widevine + ClearKey（iOS 伪装隐藏该 API），避免「iOS UA 却暴露 Widevine」矛盾信号；环境体检新增 eme 项校验。
+- **HTTP 安全警告（P2）**：环境窗口导航到明文 http:// 站点时，在页面顶部注入红色警告条提示连接未加密、存在被窃听/篡改风险（localhost 与 App 自身页面不触发），对标 RoxyChrome 154 的 HTTP Security Warnings。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。

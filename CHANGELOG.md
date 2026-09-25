@@ -9,6 +9,21 @@
 
 ---
 
+## 2026-09-25 · 内核版本同步到 154 + HTTP 安全警告（P2）
+
+### 新增
+
+- **内核版本切换范围升级 127–132 → 150–154**（`src/shared/fingerprint.ts`）：`CHROME_VERSIONS` 改为 150/151/152/153/154，并把内置 9 套 Chrome 系预设的 UA（`Chrome/xxx`、`uaFullVersion`）与 6 套预设名（如 `Windows 11 · Chrome 154 · 德国`）批量同步到 `154.0.7521.60`，对标竞品 RoxyChrome 154 内核。预设其余字段（平台 / GPU / 屏幕 / 时区语言）保持自洽不变。
+- **HTTP 安全警告伪装**（`src/main/browser-preload.ts` + `src/shared/types.ts` + `src/renderer/src/components/ProfileForm.tsx`）：新增 `httpWarning` 字段（默认开启），环境窗口导航到明文 `http://` 站点时在页面顶部注入固定红色警告条，提示连接未加密、存在被窃听 / 篡改风险；`localhost` / `127.0.0.1` / `[::1]` 与 `file://` 不触发；监听 `DOMContentLoaded` / `popstate` / `hashchange` / `click` 重新评估当前 URL。表单「追踪器屏蔽」下方新增「HTTP 安全警告」开关。
+- `httpWarning` 贯穿 `Fingerprint` 类型与全部 builder funnel（`randomFingerprint` 三分支、`presetFingerprint`、`normalizeFingerprint`、`deriveJitteredFingerprint`），legacy 老指纹无该字段时兜底为 `true`。
+
+### 设计要点
+
+- HTTP 警告复用既有「preload 注入」手法，仅在宿主原生有 `document` 时才注入，且严格排除本地回环与应用自身页面，避免干扰调试与控制台。
+- 提交：`7bba1d1`（feat）。
+
+---
+
 ## 2026-09-25 · EME / Widevine 伪装（P1 #5）
 
 ### 新增
