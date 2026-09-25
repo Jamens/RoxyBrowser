@@ -630,6 +630,19 @@ app.listen(4000)
 - **不新增数据库列**：只改 `ProfileEntity.proxyId`（已有字段），无新迁移（符合规则 #24）。
 - **日志**：仅在有实际落库（`updates.length > 0`）时写 `batch_allocate_proxy` 操作日志，文案含「分配 X / 保留 Y / 跳过 Z」。
 
+### 7.16 账号-环境批量关联（应用层）
+
+跨境电商运营常为「一批同平台账号」统一归属到「某个店铺环境」——逐条在账号编辑弹窗里选环境既慢又容易漏。批量关联把这件事从「逐条改」降为「勾选 → 选环境 → 一键绑定」。
+
+- **数据模型**：账号（AccountEntity）通过 `profileId` 单向归属某个环境（一个账号只能属于一个环境，一对多）。故「关联」= 批量改写选中账号的 `profileId` 到目标环境。
+- **入口**：账号中心列表新增行多选（`rowSelection`）→ 顶部出现「已选 N 个账号」+「批量关联环境」按钮 → 弹窗选目标环境（复用非模板环境列表）→ 确认。
+- **后端 `POST /api/accounts/batch-associate { accountIds, profileId }`**：
+  - 校验 `profileId` 是有效的**非模板**环境（`isTemplate:false`）且在当前用户可见范围（`ownerScope`，member 只能选自己的环境）；
+  - 仅对 `ownerScope` 可见的账号生效（`In(accountIds) + ownerScope`）——member 只能操作自己的账号，越权 ID 静默忽略；
+  - 逐条改写 `profileId` 后 `save`，写 `batch_associate_account` 操作日志（含环境名与数量）。
+- **不新增数据库列**：只改已有 `AccountEntity.profileId`（符合规则 #24）。
+- **典型工作流**：勾选一批同平台账号 → 批量关联环境到「主店铺环境」→ 列表「所属环境」列即时刷新；若某账号原属别的环境，则被重新归属（旧环境不再包含它）。
+
 ### 8. 操作日志
 
 

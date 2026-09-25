@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-26 · 账号-环境批量关联（应用层）
+
+### 新增
+
+- **账号-环境批量关联**（`src/main/server.ts` `POST /api/accounts/batch-associate` + `src/renderer/src/pages/Accounts.tsx`）：账号中心列表新增行多选 → 顶部「批量关联环境」→ 弹窗选目标环境 → 一键把选中账号的 `profileId` 统一改写到目标环境。仅对 `ownerScope` 可见的账号生效（member 只动自己账号，越权 ID 静默忽略）；目标环境须为有效非模板环境（`isTemplate:false` + `ownerScope` 校验）。
+- 不新增数据库列（只改已有 `AccountEntity.profileId`，符合规则 #24）。写 `batch_associate_account` 操作日志（含环境名与数量）。
+- 提交：`2d8b8bd`（feat）。
+
+---
+
 ## 2026-09-26 · 智能代理分配（负载均衡 + 避免同代理复用，应用层）
 
 ### 新增
