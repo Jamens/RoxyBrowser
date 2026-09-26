@@ -9,7 +9,7 @@ import {
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
   SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined,
-  StarOutlined, StarFilled
+  StarOutlined, StarFilled, UserOutlined
 } from '@ant-design/icons'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
@@ -18,7 +18,7 @@ import dayjs from 'dayjs'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
 import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
-import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO } from '@shared/types'
+import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO, AccountDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 
 // 体检项中文标签（后端只回 key 与「设定值/实测值」，展示名放前端）
@@ -181,6 +181,21 @@ export default function Environments() {
     const set = new Set(starred)
     return list.filter((p) => set.has(p.id))
   }, [list, onlyStarred, starred])
+
+  // 打开「环境关联账号」抽屉：拉取该环境下的全部账号（闭环批量关联功能，让关联可见可管理）
+  const openAccountsDrawer = async (r: ProfileDTO) => {
+    setAccountsDrawerEnv(r)
+    setAccountsDrawerOpen(true)
+    setAccountsLoading(true)
+    try {
+      const rows = await api.get<AccountDTO[]>(`/api/accounts?profileId=${r.id}`)
+      setAccountRows(rows)
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setAccountsLoading(false)
+    }
+  }
   const [selected, setSelected] = useState<React.Key[]>([])
   const [batchGroup, setBatchGroup] = useState<number | undefined>()
   const [batchProxy, setBatchProxy] = useState<number | undefined>()
@@ -196,6 +211,11 @@ export default function Environments() {
   const [quickCreating, setQuickCreating] = useState(false)
   // 环境体检报告
   const [healthOpen, setHealthOpen] = useState(false)
+  // 环境关联账号抽屉：查看某环境下的全部账号（后端 GET /api/accounts?profileId= 已支持）
+  const [accountsDrawerOpen, setAccountsDrawerOpen] = useState(false)
+  const [accountsDrawerEnv, setAccountsDrawerEnv] = useState<ProfileDTO | null>(null)
+  const [accountRows, setAccountRows] = useState<AccountDTO[]>([])
+  const [accountsLoading, setAccountsLoading] = useState(false)
   const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [healthName, setHealthName] = useState('')
@@ -866,6 +886,9 @@ export default function Environments() {
           </Tooltip>
           <Tooltip title={t('env.screenshot')}>
             <Button size="small" icon={<CameraOutlined />} onClick={() => takeScreenshot(r)} />
+          </Tooltip>
+          <Tooltip title="查看该环境关联的账号">
+            <Button size="small" icon={<UserOutlined />} onClick={() => openAccountsDrawer(r)} />
           </Tooltip>
           <Popconfirm title="删除后进入回收站，可随时恢复。确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -1549,6 +1572,37 @@ export default function Environments() {
           </div>
         )}
       </Modal>
+
+      {/* 环境关联账号：闭环批量关联，让「账号→环境」的归属可见可查 */}
+      <Drawer
+        title={`环境账号 — ${accountsDrawerEnv?.name || ''}`}
+        width={560}
+        open={accountsDrawerOpen}
+        onClose={() => setAccountsDrawerOpen(false)}
+      >
+        {accountsLoading ? (
+          <Empty description="加载中…" />
+        ) : accountRows.length === 0 ? (
+          <Empty description="该环境尚未关联任何账号（可在账号中心批量关联）" />
+        ) : (
+          <>
+            <Typography.Paragraph type="secondary">
+              共 {accountRows.length} 个账号关联到此环境。在「账号中心」可对账号做编辑 / 导入 / 批量关联。
+            </Typography.Paragraph>
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={false}
+              dataSource={accountRows}
+              columns={[
+                { title: '平台', dataIndex: 'platform', width: 110, render: (v: string) => (v ? <Tag color="processing">{v}</Tag> : '-') },
+                { title: '账号', dataIndex: 'username', ellipsis: true, render: (v: string) => v || '-' },
+                { title: '备注', dataIndex: 'remark', ellipsis: true, render: (v: string) => v || '-' }
+              ]}
+            />
+          </>
+        )}
+      </Drawer>
 
       {/* 环境克隆工厂：以母本批量派生副本，指纹微抖动 */}
       <Modal
