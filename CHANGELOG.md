@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-29 · 维护：测试可运行性修复与构建告警消除
+
+### 修复
+- **normalize_fingerprint 测试改为 CJS 编译式运行**（提交 `ad4f905`）：原 `tests/normalize_fingerprint.test.ts` 以 `node --experimental-strip-types` 直跑，会因被测 `fingerprint.ts` 的 extensionless import（`./trackers`）被 Node ESM 拒绝（`ERR_MODULE_NOT_FOUND`）而无法执行。改为与项目其余 `.cjs` 测试一致的「tsc→CJS 编译再 require」模式（新文件 `tests/normalize_fingerprint.test.cjs`，11 例断言全绿）。`normalizeFingerprint` 逻辑本身正确（编译后冒烟 + envExpiry 测试已覆盖），属测试运行器缺口，非应用 bug。
+- **消除 browserManager 构建告警**（提交 `a731005`）：`server.ts` 原以 12 处 `await import('./browserManager')` 动态导入，与 `index.ts` / `assistantPlanner.ts` 的静态导入混用，触发 Rollup「动态/静态混用无法独立分包」告警。经核查 `browserManager ↔ server` 的循环依赖（`browserManager` 静态引用 server 的 `AppDataSource`）为良性——`AppDataSource` 是 `export let` 运行时赋值、`browserManager` 仅在函数体内使用，无模块求值顺序隐患；且 `index.ts` 本就静态导入使模块启动期已就绪。已将 `server.ts` 改为顶部静态 import，告警消除、加载时序不变。
+
+### 验证
+- `pnpm typecheck`、`pnpm build` 零告警；7 个测试（rpa / webglOsMatch / trackers / envExpiry / candidate4 / healthcheck_sim / normalize_fingerprint）全绿。
+- `.gitignore` 补 `.tmp_*/`，防止测试编译产物误入库。
+
+---
+
 ## 2026-09-29 · 候选④ 指纹真实性持续对齐真实 Chrome（WebGPU 回退守卫 / Canvas 噪声稳健性 / WebAudio IAMF）
 
 ### 新增
