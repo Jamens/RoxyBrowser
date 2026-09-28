@@ -15,6 +15,7 @@ import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
+import { expiryWarn, expiryLabel } from '../utils/expiry'
 import { api } from '../api'
 import ProfileForm from '../components/ProfileForm'
 import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
@@ -831,6 +832,25 @@ export default function Environments() {
         ) : (
           <Tag>直连</Tag>
         )
+    },
+    {
+      title: '到期',
+      dataIndex: 'expiresAt',
+      width: 130,
+      render: (v: string | null | undefined, r: ProfileDTO) => {
+        const info = expiryWarn(r.expiresAt, 3)
+        const label = expiryLabel(info)
+        return (
+          <Space direction="vertical" size={2}>
+            <span>{v ? dayjs(v).format('YY-MM-DD') : '长期'}</span>
+            {label && (
+              <Tag color={info.level === 'expired' ? 'error' : 'warning'} style={{ marginInlineEnd: 0 }}>
+                {label}
+              </Tag>
+            )}
+          </Space>
+        )
+      }
     },
     {
       title: '状态',

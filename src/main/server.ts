@@ -38,6 +38,7 @@ import {
   AssistantSkillEntity
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
+import { getEnvExpiresAt } from '../shared/envExpiry'
 import { substituteSteps } from '../shared/rpa'
 import { MARKET_SCRIPTS } from './rpaMarket'
 import { normalizeCountry } from '../shared/countries'
@@ -341,6 +342,7 @@ function mapProfile(p: ProfileEntity, groupName?: string | null, proxy?: ProxyEn
     status: p.status,
     lastOpenedAt: p.lastOpenedAt,
     extensions: p.extensions,
+    expiresAt: getEnvExpiresAt(p.fingerprint as Record<string, unknown>),
     createdBy: p.createdBy,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt
@@ -1432,6 +1434,12 @@ function buildApiRouter(): express.Router {
     if (!p) return res.status(404).json({ message: '环境不存在' })
     if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
     if (p.status === 'running') return res.status(400).json({ message: '窗口已在运行中' })
+    // 生命周期管理（候选③）：到期环境拒绝打开，提示用户在编辑中延长或清空到期时间
+    const exp = getEnvExpiresAt(p.fingerprint as Record<string, unknown>)
+    if (exp && new Date(exp).getTime() < Date.now()) {
+      const when = exp.slice(0, 16).replace('T', ' ')
+      return res.status(400).json({ message: `环境已过期（到期时间 ${when}），请在编辑中延长或清空到期时间后重试` })
+    }
     if (!browserBridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
     try {
       await browserBridge.openWindow(p.id)
@@ -3777,6 +3785,9 @@ function buildApiRouter(): express.Router {
       let opened = 0
       for (const p of profiles) {
         if (p.status === 'running' || p.deletedAt) continue
+        // 生命周期管理（候选③）：到期环境在批量打开时同样跳过
+        const exp = getEnvExpiresAt(p.fingerprint as Record<string, unknown>)
+        if (exp && new Date(exp).getTime() < Date.now()) continue
         try {
           await browserBridge.openWindow(p.id)
           p.status = 'running'

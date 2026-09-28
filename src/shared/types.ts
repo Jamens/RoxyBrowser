@@ -84,6 +84,8 @@ export interface ProfileDTO {
   lastOpenedAt: string | null
   // 启用的扩展 ID 列表（关联 extensions 表）
   extensions?: number[] | null
+  // 环境到期时间（生命周期管理，候选③）：存于 fingerprint JSON 内，留空 = 长期有效
+  expiresAt?: string | null
   createdBy: string
   createdAt: string
   updatedAt: string

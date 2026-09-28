@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin, Collapse } from 'antd'
+import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin, Collapse, DatePicker } from 'antd'
+import dayjs from 'dayjs'
 import { useAppCtx } from '../hooks/useApp'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { api } from '../api'
 import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, ExtensionDTO, OSKind, FingerprintPresetDTO } from '@shared/types'
 import { osLabel } from '@shared/types'
 import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint, applyCoreVersion, CHROME_MAJORS, geoFor } from '@shared/fingerprint'
+import { getEnvExpiresAt, withEnvExpiresAt } from '@shared/envExpiry'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -102,7 +104,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
           platform: initial.platform || undefined,
           startUrl: initial.startUrl,
           remark: initial.remark,
-          proxyId: initial.proxyId ?? undefined
+          proxyId: initial.proxyId ?? undefined,
+          expiresAt: getEnvExpiresAt(initial.fingerprint) ? dayjs(getEnvExpiresAt(initial.fingerprint)!) : null
         })
         form.setFieldValue('extensions', initial.extensions ?? [])
         // 规整指纹：旧导出 / 历史数据可能缺 languages、fonts 等新字段，
@@ -210,6 +213,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
     }
     setSaving(true)
     try {
+      const expIso =
+        values.expiresAt && dayjs.isDayjs(values.expiresAt) ? (values.expiresAt as dayjs.Dayjs).toISOString() : null
       const payload = {
         name: values.name,
         groupId: values.groupId ?? null,
@@ -219,7 +224,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         proxyId: values.proxyId ?? null,
         extensions: Array.isArray(values.extensions) ? values.extensions : [],
         isTemplate: !!isTemplate && !initial,
-        fingerprint: { ...fp, tzOffset: getTimezoneOffsetMinutes(fp.timezone) }
+        fingerprint: withEnvExpiresAt({ ...fp, tzOffset: getTimezoneOffsetMinutes(fp.timezone) }, expIso)
       }
       if (initial) {
         await api.put(`/api/profiles/${initial.id}`, payload)
@@ -322,6 +327,13 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                 )}
                 <Form.Item name="remark" label="备注">
                   <Input.TextArea rows={2} placeholder="备注信息（如店铺名、运营人员）" />
+                </Form.Item>
+                <Form.Item
+                  name="expiresAt"
+                  label="环境到期时间（可选）"
+                  extra="留空表示长期有效；到期后该环境将无法打开，可在编辑中延长或清空"
+                >
+                  <DatePicker showTime style={{ width: '100%' }} placeholder="长期有效" />
                 </Form.Item>
                 <Form.Item name="extensions" label="启用扩展" extra="勾选的扩展会在打开此环境窗口时自动加载">
                   <Select
