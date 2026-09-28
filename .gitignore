@@ -6,6 +6,8 @@ release
 release-nsis/
 *.nsis.7z
 _tmp_*
+# 测试编译产物（tsc 编 shared 模块到临时目录，勿入库）
+.tmp_*/
 electron.vite.config.*.mjs
 *.log
 .DS_Store
