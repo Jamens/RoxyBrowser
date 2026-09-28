@@ -9,6 +9,29 @@
 
 ---
 
+## 2026-09-29 · 候选④ 指纹真实性持续对齐真实 Chrome（WebGPU 回退守卫 / Canvas 噪声稳健性 / WebAudio IAMF）
+
+### 新增
+
+- **WebGPU 子群/回退一致性**（`src/shared/webgpu.ts` + `src/main/browser-preload.ts` + `src/main/healthProbe.ts` + `src/shared/healthcheck.ts`，提交 `f373069`）：对标真实 Chrome 的 WebGPU 暴露面。
+  - 新增纯函数 `webGpuSpoofAllowed(isFallbackAdapter)`：**软件渲染回退适配器**（`adapter.isFallbackAdapter === true`，即 SwiftShader / llvmpipe）上**不再伪装** `vendor` / `architecture`。先前统一覆盖成「离散独显」会制造「WebGL 说独显、WebGPU 说软件渲染」的内部矛盾，正是检测站（CreepJS / PixelScan）判定篡改的高危信号（规则 #22 不伪造原则：识别不出的场景应放弃伪造，而非兜底成矛盾值）。
+  - 探针新增采集 `isFallbackAdapter` 与 `subgroupMinSize` / `subgroupMaxSize`（真实 Chrome 134+ 的 `GPUAdapterInfo` 原生字段，我们只在真实实例上覆盖 vendor/architecture，这两个字段继续由原生提供 → 体检核验未被破坏）。
+  - 体检 `webgpu` 项在回退适配器上标记「不适用」（weight 0，环境限制而非注入失败）；新增 `webgpuSubgroup` 项（weight 0）核验原生子群尺寸自洽（min≤max 且 >0）。
+
+- **Canvas 噪声稳健性**（`src/shared/canvasNoise.ts` 新增 + `src/main/browser-preload.ts`，提交 `f373069`）：修复检测站判定「注入」的首要检查点。
+  - 抽离纯函数 `canvasNoiseSeed` / `hashString` / `isTinyCanvas` / `effectiveCanvasSeed`。噪声种子改为由 **(环境种子, 画布宽, 画布高)** 确定性派生——相同尺寸、相同环境的画布拿到**完全相同**的噪声序列，于是「两次读取同一画布」或「两次新建的相同画布」得到一致哈希（真实硬件必然一致）。此前共享一个随调用推进的 rng，会让两个相同画布哈希不同 → 暴露注入。
+  - 极小画布（1×N 纯色参考条，默认 <8px）跳过噪声，避免被「反篡改」纯色探针识别；`profileId` 派生 seed 为 0/NaN 时退回 `webglVendor` 哈希，避免「无种子」环境共用同一套噪声被聚类。
+  - 体检 `canvasNoise` 项新增**一致性要求**：`canvasStable`（探针用相同内容画两遍 `toDataURL` 比较）必须为 true，否则判红——这是真实注入缺陷而非环境限制。
+
+- **WebAudio IAMF（编解码能力，按不伪造原则不注入）**（`src/main/healthProbe.ts` + `src/shared/healthcheck.ts` + 前端 `HEALTH_LABELS`，提交 `f373069`）：调研结论——IAMF（AOMedia 空间音频容器，Chrome 152+ 经 MSE 播放）是**编解码能力查询**（`canPlayType` / `MediaCapabilities`），由 Chromium 版本 / OS 决定，**不是**由用户声卡硬件决定的硬件指纹。按规则 #22 不伪造原则，**不应伪造**该类能力；且本项目 Electron 内置 Chromium 版本低于 152，原生即不支持 IAMF，与运行时一致、无需伪造。探针采集 `canPlayType('audio/iamf' | opus | aac)`，体检新增 `audioCodecs` **信息项**（weight 0）如实展示环境编解码面并记录「不注入」决策。
+
+### 验证
+
+- 离线单测 `tests/candidate4.test.cjs`（19 例全绿）：`webGpuSpoofAllowed`、噪声种子确定性 / 区分性 / uint32 边界、极小画布判定、seed 回退、以及「相同 (seed,w,h) 派生噪声序列逐位相等」这一 `canvasStable` 的根因。
+- `pnpm typecheck` 与 `pnpm build` 均通过。
+
+---
+
 ## 2026-09-29 · 环境生命周期/到期管理（可选到期时间 + 列表预警 + 到期拦截）
 
 ### 新增
