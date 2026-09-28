@@ -9,6 +9,19 @@
 
 ---
 
+## 2026-09-29 · 追踪器屏蔽 2.0（主机清单 + 子资源路径签名 + 私有网段/协议保护）
+
+### 新增
+
+- **追踪器屏蔽 2.0**（`src/shared/trackers.ts` 纯函数 `isTrackerRequest` + `src/main/browserManager.ts` 注入点，提交 `841c2aa`）：对标 RoxyChrome 153/154「WebSocket 与后台抓取安全控制」精神，从纯主机名单升级为双路判定。
+  - 新增 `isTrackerRequest({ url, resourceType }, extraHosts)`：协议白名单（只拦 http/https/ws/wss，blob/data/about/javascript 一律放过）；私有网段保护（localhost / 127.0.0.1 / .local / 10.x / 192.168.x / 172.16–31.x 不误拦，避免误杀开发/调试流量）；主机清单命中即拦（任何资源类型，**已覆盖 WebSocket / fetch / beacon**——它们在 Chromium 里都带可解析 hostname，由 `webRequest.onBeforeRequest` 统一拦截）。
+  - **子资源路径签名**：仅对 script / xhr / ping / websocket 等非顶层文档，命中已知追踪 SDK 文件名（`/gtag/js`、`/matomo.php`、`/analytics.js`、`/ga.js`、`/__utm.gif` 等）时拦截，捕捉「第一方 / CDN 托管的追踪 SDK」——这类用主机清单会误伤主域，故只按文件名精准拦，不拦整个主机；顶层文档与 iframe 导航不靠路径签名拦，避免误杀正常页面。
+  - 注入点改用 `isTrackerRequest` 并包 `try/catch`：畸形 `details` / 解析失败一律「宁可放过」，拦截器自身异常不会卡死页面导航（扩展注入健壮性加固）。
+  - 主机清单补充 `adroll` / `bluekai` / `crwdcntrl` / `rlcdn` / `mathtag` / `contextweb` / `adsystem` 等明确广告/追踪子域。
+  - 离线单测：`tests/trackers.test.cjs` 26 例全绿（主机/子域/主域不误拦 / ws / fetch / beacon / 私有网段 / 非网络协议 / 畸形输入 / 自定义 extraHosts 全覆盖）。
+
+---
+
 ## 2026-09-29 · 体检新增 WebGL↔OS 一致性守卫（拦截移动端泄漏桌面 GPU）
 
 ### 新增
