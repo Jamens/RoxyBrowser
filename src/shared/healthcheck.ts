@@ -9,6 +9,7 @@ import { CORE_FONTS, FONT_POOL } from './fingerprint'
 import { COUNTRIES } from './countries'
 import { webGpuInfoFor } from './webgpu'
 import { audioProfileFor } from './webaudio'
+import { webglMatchesOs } from './webglOsMatch'
 
 /** 环境窗口内实际回读到的特征值（由 executeJavaScript 采集） */
 export interface FingerprintProbe {
@@ -213,6 +214,23 @@ export function buildHealthReport(
       weight: actual.webglAvailable ? 10 : 0
     })
   }
+  // ---- WebGL 显卡品牌 ↔ 操作系统 一致性（对标 chromium 151「移动模拟 + 检测站同时开检测异常」）----
+  // webgl 项只比对「设定值 == 回读值」（注入是否生效），不校验 GPU 品牌是否配得上声明系统。
+  // 这里补一道「一致性守门」：移动端不该出现桌面 GPU、桌面端不该出现移动 GPU、iOS/mac 须 Apple，
+  // 否则会出现「系统说手机、显卡说台式机」的矛盾，正是检测站（PixelScan / BrowserLeaks）会标记的高危破绽。
+  // 与 fontOsConsistency 同理：对「配置是否正确」做校验，fp 字段为空（老数据）时标记不适用。
+  {
+    const m = webglMatchesOs(s(e.os), s(e.webglVendor), s(e.webglRenderer))
+    const applicable = s(e.webglVendor) !== '' || s(e.webglRenderer) !== ''
+    items.push({
+      key: 'webglOsMatch',
+      expected: `OS(${s(e.os)}) 合规 GPU 品牌`,
+      actual: applicable ? (m.ok ? '合规' : m.reason) : '—',
+      ok: applicable ? m.ok : true,
+      weight: applicable ? 6 : 0
+    })
+  }
+
   cmp('hardwareConcurrency', e.hardwareConcurrency, actual.hardwareConcurrency, 4)
   cmp('deviceMemory', e.deviceMemory, actual.deviceMemory, 4)
   cmp('doNotTrack', e.doNotTrack, actual.doNotTrack, 2)

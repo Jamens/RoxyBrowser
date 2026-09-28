@@ -54,6 +54,7 @@ const HEALTH_LABELS: Record<string, string> = {
   timezone: '时区 Timezone',
   tzOffset: '时区偏移 UTC',
   webgl: 'WebGL 显卡',
+  webglOsMatch: 'WebGL ↔ OS 一致性（显卡与系统匹配）',
   uaData: 'UA-CH（userAgentData）',
   hardwareConcurrency: 'CPU 核心数',
   deviceMemory: '内存 deviceMemory',
