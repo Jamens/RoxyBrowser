@@ -99,3 +99,36 @@ pnpm app          # = electron-vite build && electron out/main/index.js
 - `platformApis` / `mediaPrefs` / `fontOsConsistency` / `automation` 等：平台 API 一致性、媒体查询偏好、字体 OS 一致性、反自动化痕迹。
 
 全部「不适用」项（`weight 0`）不参与伪装度总分，仅作环境信息展示。
+
+---
+
+## 8. 无显卡本机纯逻辑自检（纯函数 + 体检计算，无需 GPU / 窗口）
+
+本机若无显卡 / 无显示（`DISPLAY` 为空、且无 `xvfb`），无法启动真实 Electron 窗口，也就读不到 WebGPU / Canvas / WebAudio 的**真实硬件回读值**，步骤 0–6 的「开窗 → API 体检」走不通。但候选④有两层**不依赖显卡**的逻辑可以在本机直接验证：
+
+1. **注入侧纯函数**：`tests/candidate4.test.cjs`（19 例）—— WebGPU 回退守卫、Canvas 噪声确定性派生、seed 回退等。
+2. **体检计算逻辑**：`tests/healthcheck_sim.cjs` —— 把 `buildHealthReport` 编成 CJS，用合成探针覆盖 `webgpu` / `webgpuSubgroup` / `canvasNoise(canvasStable)` / `audioCodecs` 四项的各分支，验证其 `ok / weight / expected / actual` 计算正确（独显通过、软件回退不适用、Canvas 不一致判红、iOS 无 WebGPU）。
+
+### 运行命令
+
+```bash
+# 1) 注入侧纯函数（19 例）
+node node_modules/typescript/bin/tsc src/shared/webgpu.ts src/shared/canvasNoise.ts \
+  --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_c4
+node tests/candidate4.test.cjs
+rm -rf .tmp_c4
+
+# 2) 体检计算逻辑仿真（编译 healthcheck.ts 及其纯依赖到 CJS）
+node node_modules/typescript/bin/tsc src/shared/healthcheck.ts \
+  --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --lib es2020,dom --outDir .tmp_hc
+node tests/healthcheck_sim.cjs
+rm -rf .tmp_hc
+```
+
+### 预期
+
+- `candidate4.test.cjs`：打印「通过 19 项」，关键项是「相同 (seed, 宽, 高) 派生出的噪声序列逐位相等」（这是 `canvasStable` 的根因）。
+- `healthcheck_sim.cjs`：四个场景（A 独显桌面 / B 软件回退 / C Canvas 不一致 / D iOS）的全部断言通过；其中 **C 的 `canvasNoise` 应判红**（`actual = "on / 一致性不一致!"`），证明不稳定的噪声会被识别为注入缺陷。
+
+> 这两层验证覆盖候选④的「计算正确性」；「真实硬件回读值」仍需在带显卡的真机上按步骤 0–6 跑。
+
