@@ -9,6 +9,18 @@
 
 ---
 
+## 2026-09-29 · 环境生命周期/到期管理（可选到期时间 + 列表预警 + 到期拦截）
+
+### 新增
+
+- **环境到期管理（候选③，对标竞品订阅到期，去计费本地化版）**（`src/shared/envExpiry.ts` + `src/main/server.ts` + `src/renderer/src/components/ProfileForm.tsx` + `src/renderer/src/pages/Environments.tsx`，提交 `dab1a1c`）：环境可设置可选到期时间，到期后无法打开、列表给出预警，实现轻量「生命周期管理」。
+  - 遵守项目规则 #24 **不新增数据库列**：到期时间承载于 `ProfileEntity.fingerprint` 这一 JSON 列内（键 `expiresAt`，ISO 字符串），经 `getEnvExpiresAt` / `withEnvExpiresAt` 两个纯函数读写，前后端共用。
+  - 服务端 `mapProfile` 透出 `expiresAt`；`/profiles/:id/open` 与批量打开两处拦截已过期环境，返回友好提示「请在编辑中延长或清空到期时间」。
+  - 前端环境编辑抽屉新增「到期时间」DatePicker（可选，留空 = 长期有效）；环境列表新增「到期」列，复用 `expiryWarn` / `expiryLabel` 显示「已过期 N 天 / 剩 N 天」预警 Tag（与代理到期样式一致）。
+  - 离线单测：`tests/envExpiry.test.cjs` 13 例全绿，含关键不变量「`normalizeFingerprint` 经 `{ ...base, ...fp }` 展开会保留自定义 `expiresAt` 键，不会静默丢失」。
+
+---
+
 ## 2026-09-29 · 追踪器屏蔽 2.0（主机清单 + 子资源路径签名 + 私有网段/协议保护）
 
 ### 新增
