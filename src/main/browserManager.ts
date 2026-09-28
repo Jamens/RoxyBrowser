@@ -5,7 +5,7 @@ import { AppDataSource } from './server'
 import { ProfileEntity, ProxyEntity, CookieEntity, ExtensionEntity } from './entities'
 import type { Fingerprint, RpaStep } from '../shared/types'
 import type { FingerprintProbe } from '../shared/healthcheck'
-import { isTrackerUrl } from '../shared/trackers'
+import { isTrackerRequest } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
 import { getScanSite, runSiteScan, type ScanResult } from './fingerprintScan'
 
@@ -226,7 +226,16 @@ export async function openWindow(profileId: number): Promise<void> {
   // 的原则默认不拦截，用户在环境表单里开启后生效。
   if (fp.blockTrackers) {
     ses.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, cb) => {
-      cb({ cancel: isTrackerUrl(details.url) })
+      // 2.0：统一走 isTrackerRequest——主机清单 + 子资源路径签名双路判定，
+      // 并对非网络协议 / 私有网段做保护；回调内再包一层 try/catch，
+      // 任何异常（畸形 details / 解析失败）都「宁可放过」，绝不因拦截器自身报错而卡死页面导航。
+      let cancel = false
+      try {
+        cancel = isTrackerRequest({ url: details.url, resourceType: (details as any).resourceType })
+      } catch {
+        cancel = false
+      }
+      cb({ cancel })
     })
   }
 
