@@ -67,6 +67,19 @@ import type { Plan } from '../shared/assistantPlan'
 import { sendSmtpMail } from './smtp'
 import { renderAcceptInvitePage } from './acceptInvitePage'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
+// browserManager 与 server 存在循环依赖（browserManager 静态引用 server 的 AppDataSource）。
+// 经核查：AppDataSource 为 `export let` 运行时赋值，且 browserManager 仅在函数体内使用，
+// 循环依赖为良性，可安全静态导入（index.ts 本就静态导入，模块在启动期已就绪）。
+import {
+  getRunningWindowIds,
+  replayRpaScript,
+  closeWindow,
+  applyCookies,
+  startRpaRecording,
+  stopRpaRecording,
+  isRpaRecording,
+  rpaRecordCount
+} from './browserManager'
 
 // ---------- 配置 ----------
 const DB_CONFIG = {
@@ -539,7 +552,7 @@ async function runRpaScheduler(): Promise<void> {
   const repo = AppDataSource.getRepository(RpaScriptEntity)
   const scripts = await repo.find({ where: { scheduleEnabled: true } })
   if (scripts.length === 0) return
-  const runningIds = (await import('./browserManager')).getRunningWindowIds()
+  const runningIds = getRunningWindowIds()
   const now = Date.now()
   for (const s of scripts) {
     if (rpaRunningScheduled.has(s.id)) continue
@@ -563,7 +576,7 @@ async function runRpaScheduler(): Promise<void> {
       let executed = 0
       let err = ''
       try {
-        executed = await (await import('./browserManager')).replayRpaScript(
+        executed = await replayRpaScript(
           s.scheduleProfileId!,
           substituteSteps(s.steps as unknown as RpaStep[], s.variables || {})
         )
@@ -979,18 +992,18 @@ function buildApiRouter(): express.Router {
     if (!member) return res.status(403).json({ message: '你不是该团队成员，无法切换' })
     const teamRepo = AppDataSource.getRepository(TeamEntity)
     const team = await teamRepo.findOne({ where: { id: teamId } })
-    // 关闭旧团队运行中的环境窗口（动态 import 避免与 browserManager 循环依赖，与其它路由一致）
+    // 关闭旧团队运行中的环境窗口。browserManager 已在启动期经 index.ts 静态导入就绪；
+    // 其与 server 的循环依赖（引用 AppDataSource）为良性，无需动态 import。
     try {
-      const bm = await import('./browserManager')
-      for (const id of bm.getRunningWindowIds()) {
+      for (const id of getRunningWindowIds()) {
         try {
-          await bm.closeWindow(id)
+          await closeWindow(id)
         } catch {
           /* 忽略单个窗口关闭失败 */
         }
       }
     } catch {
-      /* browserManager 未就绪时跳过 */
+      /* 窗口关闭异常时跳过 */
     }
     const token = jwt.sign(
       { uid: req.uid, tid: teamId, username: req.username, role: member.role },
@@ -2328,7 +2341,6 @@ function buildApiRouter(): express.Router {
     const profile = await profileRepo.findOne({ where: { id: profileId, ...ownerScope(req) } })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     try {
-      const { applyCookies } = await import('./browserManager')
       const n = await applyCookies(profileId)
       await writeLog(req, 'apply_cookies', `环境「${profile.name}」立即注入 ${n} 条 Cookie`)
       res.json({ ok: true, applied: n })
@@ -3435,7 +3447,6 @@ function buildApiRouter(): express.Router {
     const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
     if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
     try {
-      const { applyCookies } = await import('./browserManager')
       const n = await applyCookies(profileId)
       res.json({ code: 0, data: { applied: n } })
     } catch (e) {
@@ -3494,7 +3505,7 @@ function buildApiRouter(): express.Router {
       ? normalizeVariables(reqVars) || {}
       : s.variables || {}
     const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
-    const runningIds = (await import('./browserManager')).getRunningWindowIds()
+    const runningIds = getRunningWindowIds()
     if (!runningIds.includes(profileId)) {
       return res.status(400).json({ code: 400, message: 'profile not running' })
     }
@@ -3502,7 +3513,7 @@ function buildApiRouter(): express.Router {
       let executed = 0
       let err = ''
       try {
-        executed = await (await import('./browserManager')).replayRpaScript(profileId, steps)
+        executed = await replayRpaScript(profileId, steps)
       } catch (e) {
         err = (e as Error).message
       }
@@ -4099,7 +4110,7 @@ function buildApiRouter(): express.Router {
     })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
     try {
-      ;(await import('./browserManager')).startRpaRecording(profileId)
+      ;startRpaRecording(profileId)
     } catch (e) {
       return res.status(400).json({ message: (e as Error).message })
     }
@@ -4111,7 +4122,7 @@ function buildApiRouter(): express.Router {
   router.post('/rpa/record/stop', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const profileId = Number((req.body || {}).profileId)
     if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const steps = (await import('./browserManager')).stopRpaRecording(profileId)
+    const steps = stopRpaRecording(profileId)
     res.json({ steps })
   })
 
@@ -4119,9 +4130,8 @@ function buildApiRouter(): express.Router {
   router.get('/rpa/record/status', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const profileId = Number((req.query || {}).profileId)
     if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const bm = await import('./browserManager')
-    const recording = bm.isRpaRecording(profileId)
-    const count = bm.rpaRecordCount(profileId)
+    const recording = isRpaRecording(profileId)
+    const count = rpaRecordCount(profileId)
     res.json({ recording, count })
   })
 
@@ -4142,7 +4152,7 @@ function buildApiRouter(): express.Router {
       : s.variables || {}
     const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
     // 前置校验环境必须处于运行态（否则后台任务会静默失败，用户无从得知）
-    const runningIds = (await import('./browserManager')).getRunningWindowIds()
+    const runningIds = getRunningWindowIds()
     if (!runningIds.includes(profileId)) {
       return res.status(400).json({ message: '环境未运行，请先打开环境再回放' })
     }
@@ -4151,7 +4161,7 @@ function buildApiRouter(): express.Router {
       let executed = 0
       let err = ''
       try {
-        executed = await (await import('./browserManager')).replayRpaScript(profileId, steps)
+        executed = await replayRpaScript(profileId, steps)
       } catch (e) {
         err = (e as Error).message
       }
