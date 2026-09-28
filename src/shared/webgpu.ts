@@ -33,6 +33,20 @@ export function webGpuSupported(os: string): boolean {
   return os !== 'ios'
 }
 
+/**
+ * 是否允许对 WebGPU adapter.info 做厂商 / 架构伪装。
+ *
+ * 软件渲染回退（SwiftShader / llvmpipe，adapter.isFallbackAdapter === true）下**禁止**伪装：
+ * 真实 Chrome 在回退适配器上 adapter.info 通常为空或 "Google Inc. / SwiftShader"，且 compute 能力受限。
+ * 若此时强行把 vendor / architecture 覆盖成「离散独显」，会制造
+ * 「WebGL 说独显、WebGPU 说软件渲染」的内部矛盾——检测站（CreepJS / PixelScan）正是靠这种
+ * 跨 API 矛盾判定篡改（见规则 #22 不伪造原则：识别不出的场景应放弃伪造，而非兜底成矛盾值）。
+ * 故回退适配器一律原样返回、不伪装。
+ */
+export function webGpuSpoofAllowed(isFallbackAdapter: boolean): boolean {
+  return !isFallbackAdapter
+}
+
 /** WebGL vendor / renderer 字符串 → WebGPU 厂商标识 */
 function vendorOf(webglVendor: string, webglRenderer: string): string {
   const v = `${webglVendor || ''}`.toLowerCase()

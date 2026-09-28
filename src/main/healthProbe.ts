@@ -37,7 +37,7 @@ const PROBE_SCRIPT = `(function(){
     try { langs = Array.prototype.slice.call(nav.languages || []); } catch (e) {}
 
     // ---- WebGPU：requestAdapter() 异步，先起 Promise，最后再合并进结果 ----
-    var gpuPresent = false, gpuVendor = '', gpuArch = '', gpuAdapter = false;
+    var gpuPresent = false, gpuVendor = '', gpuArch = '', gpuAdapter = false, gpuFallback = false, gpuSubMin = 0, gpuSubMax = 0;
     var gpuP = Promise.resolve();
     try {
       gpuPresent = !!nav.gpu;
@@ -46,12 +46,22 @@ const PROBE_SCRIPT = `(function(){
           nav.gpu.requestAdapter().then(function (ad) {
             if (!ad) return;
             gpuAdapter = true;
+            // 软件渲染回退标记：isFallbackAdapter === true 时 adapter.info 通常为空 / SwiftShader，
+            // 此时不应被伪装成离散独显（见 shared/webgpu 的 webGpuSpoofAllowed）。
+            gpuFallback = !!ad.isFallbackAdapter;
             var info = ad.info;
             var p2 = info
               ? Promise.resolve(info)
               : (typeof ad.requestAdapterInfo === 'function' ? ad.requestAdapterInfo() : Promise.resolve(null));
             return p2.then(function (i2) {
-              if (i2) { gpuVendor = String(i2.vendor || ''); gpuArch = String(i2.architecture || ''); }
+              if (i2) {
+                gpuVendor = String(i2.vendor || '');
+                gpuArch = String(i2.architecture || '');
+                // 真实 Chrome（134+）的 GPUAdapterInfo 含 subgroupMinSize / subgroupMaxSize，
+                // 我们仅在真实实例上覆盖 vendor/architecture，这两个字段继续由原生提供，故在此如实采集以便体检核验未被破坏。
+                if (typeof i2.subgroupMinSize === 'number') gpuSubMin = i2.subgroupMinSize;
+                if (typeof i2.subgroupMaxSize === 'number') gpuSubMax = i2.subgroupMaxSize;
+              }
             });
           }),
           // 超时保护：GPU 进程初始化卡住时，不能让这次 executeJavaScript（进而整个体检请求）悬挂
@@ -159,6 +169,43 @@ const PROBE_SCRIPT = `(function(){
       }
     } catch (e4) {}
 
+    // ---- Canvas 噪声一致性探针（检测站首要检查点）----
+    // 用完全一致的内容画两遍、各 toDataURL 一次，理论上必须相等（真实硬件必然相等）。
+    // 若噪声是 per-call 随机（未按画布确定性派生），两次会不同 → 暴露注入。
+    // 仅在宿主原生有 document 时执行（与注入端同源）。
+    var canvasStable = true;
+    try {
+      if (typeof document !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
+        var c1 = document.createElement('canvas');
+        c1.width = 240; c1.height = 60;
+        var x1 = c1.getContext('2d');
+        if (x1) {
+          x1.textBaseline = 'top'; x1.font = '14px Arial'; x1.fillText('abcdefghijklmnop', 2, 2);
+          var h1 = c1.toDataURL();
+          var c2 = document.createElement('canvas');
+          c2.width = 240; c2.height = 60;
+          var x2 = c2.getContext('2d');
+          x2.textBaseline = 'top'; x2.font = '14px Arial'; x2.fillText('abcdefghijklmnop', 2, 2);
+          var h2 = c2.toDataURL();
+          canvasStable = (h1 === h2);
+        }
+      }
+    } catch (e) {}
+
+    // ---- WebAudio 编解码能力（IAMF / Opus / AAC）----
+    // IAMF 是 AOMedia 的空间音频容器（Chrome 152+ 经 MSE 播放），由 Chromium 版本 / OS 决定，
+    // **不是**由用户声卡硬件决定，因此不属于硬件指纹、按不伪造原则不注入。
+    // 这里仅如实采集，供体检面板展示「环境编解码面」，并佐证我们未伪造该类能力。
+    var audioCanIamf = '', audioCanOpus = '', audioCanAac = '';
+    try {
+      if (typeof Audio !== 'undefined') {
+        var a0 = new Audio();
+        audioCanIamf = a0.canPlayType('audio/iamf') || '';
+        audioCanOpus = a0.canPlayType('audio/ogg; codecs="opus"') || '';
+        audioCanAac = a0.canPlayType('audio/mp4; codecs="mp4a.40.2"') || '';
+      }
+    } catch (e) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
     return Promise.all([gpuP, emeP]).then(function () {
@@ -192,6 +239,13 @@ const PROBE_SCRIPT = `(function(){
         webGpuAdapterAvailable: gpuAdapter,
         webGpuVendor: gpuVendor,
         webGpuArchitecture: gpuArch,
+        webGpuIsFallback: gpuFallback,
+        webGpuSubgroupMinSize: gpuSubMin,
+        webGpuSubgroupMaxSize: gpuSubMax,
+        canvasStable: canvasStable,
+        audioCanIamf: audioCanIamf,
+        audioCanOpus: audioCanOpus,
+        audioCanAac: audioCanAac,
         audioSampleRate: aRate,
         audioBaseLatency: aBase,
         audioMaxChannelCount: aMax,

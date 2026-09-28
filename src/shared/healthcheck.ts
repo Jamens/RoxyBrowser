@@ -49,6 +49,12 @@ export interface FingerprintProbe {
   webGpuVendor: string
   /** adapter.info.architecture */
   webGpuArchitecture: string
+  /** adapter.isFallbackAdapter（软件渲染回退标记；true 时不应被伪装成离散独显） */
+  webGpuIsFallback?: boolean
+  /** adapter.info.subgroupMinSize（真实 Chrome 134+；原生透传值） */
+  webGpuSubgroupMinSize?: number
+  /** adapter.info.subgroupMaxSize（真实 Chrome 134+；原生透传值） */
+  webGpuSubgroupMaxSize?: number
   // ---- WebAudio 完整特征 ----
   /** AudioContext.sampleRate */
   audioSampleRate: number
@@ -60,6 +66,14 @@ export interface FingerprintProbe {
   audioReduction: number
   /** AudioContext 是否创建成功（失败时上面几项为哨兵值，体检项须标记不适用） */
   audioAvailable: boolean
+  /** Canvas 噪声一致性：相同内容画两遍 toDataURL 是否相等（false = 注入可被识别，详见 canvasNoise 项） */
+  canvasStable?: boolean
+  /** 编解码能力：canPlayType('audio/iamf')（Chrome 152+；当前 Electron Chromium 通常不支持） */
+  audioCanIamf?: string
+  /** 编解码能力：canPlayType('audio/ogg; codecs="opus"') */
+  audioCanOpus?: string
+  /** 编解码能力：canPlayType('audio/mp4; codecs="mp4a.40.2"') */
+  audioCanAac?: string
   // ---- EME / Widevine ----
   /** navigator.requestMediaKeySystemAccess 是否存在（iOS 伪装时必须不存在） */
   emeApiPresent: boolean
@@ -271,13 +285,21 @@ export function buildHealthReport(
 
   // ---- 噪声 / 防护类开关：对比「注入是否真的挂上了」 ----
   // canvasNoise / audioNoise 是开关，实测侧用「原型函数是否被改写」来验证注入生效
-  cmp(
-    'canvasNoise',
-    e.canvasNoise ? 'on' : 'off',
-    actual.canvasPatched ? 'on' : 'off',
-    6,
-    (a, b) => (e.canvasNoise ? b === 'on' : b === 'off')
-  )
+  // canvasNoise 额外要求「噪声一致性」：相同画布两次读取必相等（检测站判定注入的首要检查点）。
+  // 若 canvasStable=false，说明噪声随调用变化、可被识别为篡改——这是真实的注入缺陷，必须判红。
+  {
+    const wantOn = !!e.canvasNoise
+    const gotOn = !!actual.canvasPatched
+    const stable = actual.canvasStable !== false
+    const ok = wantOn ? gotOn && stable : !gotOn
+    items.push({
+      key: 'canvasNoise',
+      expected: wantOn ? 'on + 稳定' : 'off',
+      actual: !gotOn ? 'off' : `on / 一致性${stable ? 'OK' : '不一致!'}`,
+      ok,
+      weight: 6
+    })
+  }
   cmp(
     'audioNoise',
     e.audioNoise ? 'on' : 'off',
@@ -347,17 +369,33 @@ export function buildHealthReport(
     } else {
       const want = webGpuInfoFor(s(e.os), s(e.webglVendor), s(e.webglRenderer))
       const wantText = `${want.vendor} / ${want.architecture}`
+      // 软件渲染回退（SwiftShader / llvmpipe）下：真实 Chrome 的 adapter.info 通常为空或 SwiftShader，
+      // 此时我们**不伪装**（webGpuSpoofAllowed=false），故期望值也应为空、且不参与计分——
+      // 强行拿 WebGL 的「独显」去比对 WebGPU 的「软件渲染」只会制造内部矛盾（规则 #22 不伪造原则）。
+      const fallback = !!actual.webGpuIsFallback
       // 真实环境拿不到 adapter（无 GPU / 被禁用）时不参与计分，
       // 与 WebGL 不可用同理——环境限制不等于注入失败。
-      const applicable = !!want.vendor && actual.webGpuAdapterAvailable
+      const applicable = !!want.vendor && actual.webGpuAdapterAvailable && !fallback
       items.push({
         key: 'webgpu',
-        expected: want.vendor ? wantText : '—',
+        expected: fallback ? '软件渲染回退：不伪装' : want.vendor ? wantText : '—',
         actual: actual.webGpuAdapterAvailable
           ? `${s(actual.webGpuVendor)} / ${s(actual.webGpuArchitecture)}`
           : 'WebGPU 不可用',
         ok: applicable ? wantText === `${s(actual.webGpuVendor)} / ${s(actual.webGpuArchitecture)}` : true,
         weight: applicable ? 8 : 0
+      })
+      // subgroupMinSize / subgroupMaxSize 由原生透传（我们只在真实实例上覆盖 vendor/architecture），
+      // 体检仅核验「原生字段未被破坏且自洽」——不参与计分，纯环境信息。
+      const subMin = Number(actual.webGpuSubgroupMinSize) || 0
+      const subMax = Number(actual.webGpuSubgroupMaxSize) || 0
+      const subOk = !actual.webGpuAdapterAvailable || (subMin > 0 && subMax > 0 && subMin <= subMax)
+      items.push({
+        key: 'webgpuSubgroup',
+        expected: '原生透传（min≤max 且 >0）',
+        actual: actual.webGpuAdapterAvailable ? `min=${subMin} / max=${subMax}` : 'WebGPU 不可用',
+        ok: subOk,
+        weight: 0
       })
     }
   }
@@ -389,6 +427,22 @@ export function buildHealthReport(
       actual: actual.audioAvailable ? String(red) : 'AudioContext 不可用',
       ok: on ? Math.abs(red - ap.compressorReduction) < 1e-3 : true,
       weight: on ? 3 : 0
+    })
+  }
+
+  // ---- WebAudio 编解码能力（IAMF / Opus / AAC）----
+  // IAMF 是 AOMedia 的空间音频容器（Chrome 152+ 经 MSE 播放），由 Chromium 版本 / OS 决定，
+  // **不是**由用户声卡硬件决定，因此不属于硬件指纹。按不伪造原则我们**不注入**编解码能力，
+  // 当前 Electron 内置 Chromium 版本低于 152，原生即不支持 IAMF——这与我们的运行时一致，无需伪造。
+  // 此处仅如实展示环境编解码面，作为信息项（不参与计分）。
+  {
+    const fmt = (v: string) => (v === 'probably' || v === 'maybe' ? v : v ? 'yes' : 'no')
+    items.push({
+      key: 'audioCodecs',
+      expected: '编解码能力由 Chromium 版本/OS 决定，非硬件指纹，按不伪造原则不注入',
+      actual: `iamf=${fmt(s(actual.audioCanIamf))} / opus=${fmt(s(actual.audioCanOpus))} / aac=${fmt(s(actual.audioCanAac))}`,
+      ok: true,
+      weight: 0
     })
   }
 

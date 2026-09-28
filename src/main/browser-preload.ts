@@ -1,8 +1,9 @@
 // 指纹注入脚本（运行于浏览器环境窗口的每一页面）
 // 通过 webPreferences.additionalArguments 传入 --roxy-fp=<base64>
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { webGpuInfoFor, webGpuSupported } from '../shared/webgpu'
+import { webGpuInfoFor, webGpuSupported, webGpuSpoofAllowed } from '../shared/webgpu'
 import { audioProfileFor } from '../shared/webaudio'
+import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/canvasNoise'
 ;(() => {
   interface Fingerprint {
     os: string
@@ -433,26 +434,38 @@ import { audioProfileFor } from '../shared/webaudio'
   }
 
   // ===== Canvas 噪声 =====
+  // 噪声种子回退：profileId 派生 seed 为 0/NaN（极端情况下未注入 id）时，改用 webglVendor 派生稳定种子，
+  // 避免所有「无种子」环境共用同一套噪声（等于互相撞车、可被聚类识别）。
   if (fp.canvasNoise) {
-    const rng = mulberry32(seed ^ 0x1a2b3c4d)
+    const effSeed = effectiveCanvasSeed(seed, fp.webglVendor || fp.os || 'roxy')
     const origToDataURL = HTMLCanvasElement.prototype.toDataURL
     HTMLCanvasElement.prototype.toDataURL = function (...args: any[]) {
       try {
-        const copy = document.createElement('canvas')
-        copy.width = this.width
-        copy.height = this.height
-        const cx = copy.getContext('2d')
-        if (cx && this.width > 0 && this.height > 0) {
-          cx.drawImage(this, 0, 0)
-          const noisePixels = Math.max(1, Math.floor((this.width * this.height) / 5000))
-          for (let i = 0; i < noisePixels; i++) {
-            const r = Math.floor(rng() * 256)
-            const g = Math.floor(rng() * 256)
-            const b = Math.floor(rng() * 256)
-            cx.fillStyle = `rgba(${r},${g},${b},0.012)`
-            cx.fillRect(Math.floor(rng() * this.width), Math.floor(rng() * this.height), 1, 1)
+        const w = this.width
+        const h = this.height
+        // 极小画布（参考探针常用 1×N 纯色条）不注入噪声：对纯色 1px 条扰动会立即被「反篡改」探针识别，
+        // 且极小画布本就不是指纹采集对象，扰动收益低、暴露风险高（见 isTinyCanvas）。
+        if (w > 0 && h > 0 && !isTinyCanvas(w, h)) {
+          const copy = document.createElement('canvas')
+          copy.width = w
+          copy.height = h
+          const cx = copy.getContext('2d')
+          if (cx) {
+            cx.drawImage(this, 0, 0)
+            // 关键：噪声种子由 (环境种子, 画布宽, 画布高) 确定性派生——相同尺寸、相同环境的画布拿到
+            // **完全相同**的噪声序列，于是「两次读取同一画布」或「两次新建的相同画布」得到一致结果。
+            // 这正是检测站判定「注入」的首要检查点（per-call 随机噪声会让两次读取不一致）。
+            const rng = mulberry32(canvasNoiseSeed(effSeed, w, h))
+            const noisePixels = Math.max(1, Math.floor((w * h) / 5000))
+            for (let i = 0; i < noisePixels; i++) {
+              const r = Math.floor(rng() * 256)
+              const g = Math.floor(rng() * 256)
+              const b = Math.floor(rng() * 256)
+              cx.fillStyle = `rgba(${r},${g},${b},0.012)`
+              cx.fillRect(Math.floor(rng() * w), Math.floor(rng() * h), 1, 1)
+            }
+            return origToDataURL.apply(copy, args as [string?, number?])
           }
-          return origToDataURL.apply(copy, args as [string?, number?])
         }
       } catch {
         /* ignore */
@@ -464,9 +477,17 @@ import { audioProfileFor } from '../shared/webaudio'
     CanvasRenderingContext2D.prototype.getImageData = function (...args: any[]) {
       const data = origGetImageData.apply(this, args as [number, number, number, number])
       try {
-        for (let i = 0; i < data.data.length; i += 4) {
-          if (rng() < 0.02) {
-            data.data[i] = (data.data[i] + (rng() < 0.5 ? 1 : -1)) & 0xff
+        const cv = (this as any).canvas
+        const w = (cv && cv.width) || 0
+        const h = (cv && cv.height) || 0
+        if (w > 0 && h > 0 && !isTinyCanvas(w, h)) {
+          // 与 toDataURL 同源派生：同一画布（无论取哪块子区域）的像素级噪声保持一致，
+          // 保证同一块区域两次读取结果相等。
+          const rng = mulberry32(canvasNoiseSeed(effSeed, w, h))
+          for (let i = 0; i < data.data.length; i += 4) {
+            if (rng() < 0.02) {
+              data.data[i] = (data.data[i] + (rng() < 0.5 ? 1 : -1)) & 0xff
+            }
           }
         }
       } catch {
@@ -637,8 +658,12 @@ import { audioProfileFor } from '../shared/webaudio'
       const patchedReq = async function (this: any, ...args: any[]) {
         const adapter = await origReq.apply(this, args)
         // 真实不可用（无 GPU / 被禁用）时保持返回 null：那是真实用户也存在的分布，不应强行伪造；
-        // 且 isFallbackAdapter 为 true 时说明跑在 SwiftShader 上，硬伪造显卡名只会自相矛盾。
+        // 且 isFallbackAdapter 为 true 时说明跑在 SwiftShader / llvmpipe 软件渲染上，
+        // 此时硬伪造「离散独显」只会制造「WebGL 说独显、WebGPU 说软件渲染」的内部矛盾（见 webGpuSpoofAllowed）。
         if (!adapter) return adapter
+        // 软件渲染回退（SwiftShader / llvmpipe）：isFallbackAdapter === true 时按 webGpuSpoofAllowed 不伪装，
+        // 避免「WebGL 独显 / WebGPU 软件渲染」的内部矛盾暴露注入（规则 #22 不伪造原则）。
+        if (!webGpuSpoofAllowed(!!adapter.isFallbackAdapter)) return adapter
         try {
           const real = adapter.info
           if (real) {
