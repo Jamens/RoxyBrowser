@@ -176,6 +176,8 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 
 > 实测值取自环境窗口内真实读取，因此体检**必须在环境窗口运行时执行**（与 RPA 录制要求一致）；窗口未运行会返回 400。
 
+- **真机逐步验证步骤**（含候选④新增的 `webgpu` / `webgpuSubgroup` / `canvasStable` / `audioCodecs` 检查项核对清单）见 [VERIFY.md](./VERIFY.md)。
+
 ### 3. 代理 IP
 
 - 支持 HTTP / HTTPS / SOCKS5，带用户名密码
