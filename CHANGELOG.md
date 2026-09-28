@@ -9,6 +9,16 @@
 
 ---
 
+## 2026-09-29 · 体检新增 WebGL↔OS 一致性守卫（拦截移动端泄漏桌面 GPU）
+
+### 新增
+
+- **WebGL 显卡品牌 ↔ 操作系统 一致性守卫**（`src/shared/webglOsMatch.ts` 纯函数 + `src/shared/healthcheck.ts` 的 `webglOsMatch` 体检项 + `src/renderer/src/pages/Environments.tsx` 标签，提交 `0dc6564`）：体检原有的 `webgl` 项只比对「设定值 == 回读值」（验证注入生效），**不校验 GPU 品牌是否配得上声明系统**——于是 iOS 伪装环境暴露 NVIDIA、Android 暴露桌面 AMD/Intel 这类「系统说手机、显卡说台式机」的矛盾仍会被判通过。新增纯函数 `webglMatchesOs(os, vendor, renderer)` 做一致性守门：移动端（iOS/Android）不得出现桌面 GPU 品牌（NVIDIA/AMD/Intel）、桌面端不得出现移动 GPU 品牌（Adreno/Mali/PowerVR）、iOS 与 macOS 必须为 Apple。集成进 `buildHealthReport` 为 weight=6 的 `webglOsMatch` 项，fp 字段为空（老数据）时标记不适用（weight 0，不误报）。
+- 对标 RoxyChrome 151「移动设备模拟与指纹检测同时开启时的检测异常」修复精神：检测站（PixelScan / BrowserLeaks / CreepJS）会在该场景下标记「OS 与 GPU 矛盾」这类高危信号，本守卫让用户在体检里一眼看到并修正。
+- 离线单测：`tests/webglOsMatch.test.cjs` 23 例全绿（iOS/Android/Windows/macOS/Linux 的合规与矛盾双向覆盖、空字段不误报、错误信息非空）。
+
+---
+
 ## 2026-09-26 · 环境侧查看关联账号（闭环批量关联）
 
 ### 新增
