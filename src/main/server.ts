@@ -9,6 +9,7 @@ import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
+import { getJwtSecret } from './jwtSecret'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import { logsToCsv, logsToJson, exportStamp } from './logExport'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
@@ -89,7 +90,9 @@ const DB_CONFIG = {
   password: process.env.DB_PASS || '1234560',
   database: process.env.DB_NAME || 'roxy_browser'
 }
-const JWT_SECRET = process.env.JWT_SECRET || 'roxy-clone-secret-9f8e7d6c'
+// 密钥来源：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 首次随机生成。
+// 绝不使用硬编码默认值——否则未配置时任何人可用已知 secret 伪造 JWT 绕过鉴权。
+const JWT_SECRET = getJwtSecret()
 const START_PORT = Number(process.env.API_PORT || 39100)
 
 export let AppDataSource: DataSource
