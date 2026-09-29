@@ -12,6 +12,7 @@
     "app": "electron-vite build && electron out/main/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node scripts/run-tests.mjs",
+    "clean:out": "node scripts/clean-out.mjs",
     "icon": "node scripts/gen-tray-icon.mjs && node scripts/gen-app-icon.mjs",
     "dist:dir": "electron-vite build && electron-builder --win --dir",
     "dist": "electron-vite build && electron-builder --win --x64",
