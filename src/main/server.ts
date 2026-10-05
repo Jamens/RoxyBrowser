@@ -4213,6 +4213,7 @@ export async function bootstrap(): Promise<string> {
       UserEntity,
       TeamEntity,
       TeamMemberEntity,
+      TeamInviteEntity,
       GroupEntity,
       ProxyEntity,
       ProfileEntity,
@@ -4222,7 +4223,8 @@ export async function bootstrap(): Promise<string> {
       ApiTokenEntity,
       AppSettingsEntity,
       ExtensionEntity,
-      RpaScriptEntity
+      RpaScriptEntity,
+      AssistantSkillEntity
     ]
   })
   await AppDataSource.initialize()
