@@ -11,7 +11,6 @@ import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import { getJwtSecret } from './jwtSecret'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
-import { logsToCsv, logsToJson, exportStamp } from './logExport'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
@@ -68,6 +67,7 @@ import type { Plan } from '../shared/assistantPlan'
 import { sendSmtpMail } from './smtp'
 import { renderAcceptInvitePage } from './acceptInvitePage'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
+import { registerLogRoutes } from './routes/logs'
 // browserManager 与 server 存在循环依赖（browserManager 静态引用 server 的 AppDataSource）。
 // 经核查：AppDataSource 为 `export let` 运行时赋值，且 browserManager 仅在函数体内使用，
 // 循环依赖为良性，可安全静态导入（index.ts 本就静态导入，模块在启动期已就绪）。
@@ -150,7 +150,8 @@ async function freshRole(req: AuthedRequest): Promise<string> {
 }
 
 // ---------- 工具 ----------
-type AuthedRequest = Request & {
+// 导出供 routes/* 的模块做 import type 使用（类型导出编译期擦除，不产生运行时依赖）
+export type AuthedRequest = Request & {
   uid?: number
   tid?: number
   username?: string
@@ -2646,59 +2647,9 @@ function buildApiRouter(): express.Router {
   })
 
   // ===== 操作日志 =====
-  // 操作日志导出：CSV / JSON，便于审计留存。需鉴权，且只导出当前团队。
-  // 静态路径 /logs/export 必须排在 GET /logs 之前（路由顺序约定）。
-  // 复用与列表一致的关键词筛选，并额外支持 only-sensitive / action / 时间区间过滤。
-  router.get('/logs/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const format = String(req.query.format || 'csv').toLowerCase()
-    const repo = AppDataSource.getRepository(OperationLogEntity)
-    const qb = repo
-      .createQueryBuilder('l')
-      .where('l.teamId = :tid', { tid: req.tid })
-      .orderBy('l.id', 'DESC')
-    if (req.query.keyword) {
-      qb.andWhere('(l.username LIKE :kw OR l.action LIKE :kw OR l.detail LIKE :kw)', { kw: `%${req.query.keyword}%` })
-    }
-    if (req.query.sensitive === '1') {
-      qb.andWhere('l.sensitive = :s', { s: true })
-    }
-    if (req.query.action) {
-      qb.andWhere('l.action = :act', { act: String(req.query.action) })
-    }
-    if (req.query.from) {
-      const from = new Date(String(req.query.from))
-      if (!isNaN(from.getTime())) qb.andWhere('l.createdAt >= :from', { from })
-    }
-    if (req.query.to) {
-      const to = new Date(String(req.query.to))
-      if (!isNaN(to.getTime())) qb.andWhere('l.createdAt <= :to', { to })
-    }
-    const list = await qb.getMany()
-    const ts = exportStamp()
-    // 先写审计日志（导出本身属敏感操作），再返回文件；二者互不阻塞。
-    await writeLog(req, 'export_logs', `导出操作日志（格式=${format}，共 ${list.length} 条）`)
-    if (format === 'json') {
-      res.setHeader('Content-Type', 'application/json; charset=utf-8')
-      res.setHeader('Content-Disposition', `attachment; filename="operation-logs-${ts}.json"`)
-      res.send(logsToJson(list))
-      return
-    }
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-    res.setHeader('Content-Disposition', `attachment; filename="operation-logs-${ts}.csv"`)
-    res.send(logsToCsv(list))
-  })
-
-  router.get('/logs', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(OperationLogEntity)
-    const qb = repo
-      .createQueryBuilder('l')
-      .where('l.teamId = :tid', { tid: req.tid })
-      .orderBy('l.id', 'DESC')
-      .take(500)
-    if (req.query.keyword) qb.andWhere('(l.username LIKE :kw OR l.action LIKE :kw OR l.detail LIKE :kw)', { kw: `%${req.query.keyword}%` })
-    const list = await qb.getMany()
-    res.json(list)
-  })
+  // 路由实现已抽到 src/main/routes/logs.ts（server.ts 过大，按域逐步拆分）。
+  // getDs 传函数而非值：AppDataSource 是运行时赋值的 export let，按值捕获会拿到 undefined。
+  registerLogRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   // ===== API 令牌 =====
   router.get('/tokens', authMiddleware, async (req: AuthedRequest, res: Response) => {
