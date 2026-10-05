@@ -23,7 +23,10 @@ const COMPILES = [
   { name: 'envExpiry', files: ['src/shared/envExpiry.ts', 'src/shared/fingerprint.ts'], out: '.tmp_env' },
   { name: 'candidate4', files: ['src/shared/webgpu.ts', 'src/shared/canvasNoise.ts'], out: '.tmp_c4' },
   { name: 'fingerprint', files: ['src/shared/fingerprint.ts'], out: '.tmp_nf' },
-  { name: 'jwtSecret', files: ['src/main/jwtSecret.ts'], out: '.tmp_jwt' }
+  { name: 'jwtSecret', files: ['src/main/jwtSecret.ts'], out: '.tmp_jwt' },
+  // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
+  // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
+  { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -35,7 +38,8 @@ const TESTS = [
   { name: 'candidate4', file: 'tests/candidate4.test.cjs' },
   { name: 'healthcheck_sim', file: 'tests/healthcheck_sim.cjs' },
   { name: 'normalize_fingerprint', file: 'tests/normalize_fingerprint.test.cjs' },
-  { name: 'jwtSecret', file: 'tests/jwtSecret.test.cjs' }
+  { name: 'jwtSecret', file: 'tests/jwtSecret.test.cjs' },
+  { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 
 function run(bin, args, label) {
