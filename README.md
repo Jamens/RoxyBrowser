@@ -364,7 +364,11 @@ src/
 │   ├── rpaMarket.ts          # RPA 市场：内置预设脚本目录（纯数据模块，可离线单测）
 │   ├── healthProbe.ts        # 环境体检采集：在环境窗口内执行 JS，读回真实生效的指纹值
 │   ├── fingerprintScan.ts    # 在线检测：站点定义 / 文本提取 / 导航扫描（runSiteScan、extractHighlights 纯函数，可单测）
-│   └── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
+│   ├── cookieText.ts         # Cookie 纯函数：实体→DTO 映射 + Netscape / Set-Cookie / JSON 三格式文本解析（可离线单测）
+│   ├── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
+│   ├── routes/               # 按域拆出的路由模块（依赖经 deps 注入，避免与 server.ts 形成运行时循环依赖）
+│   │   ├── logs.ts           #   操作日志：列表（take 500）+ CSV/JSON 导出
+│   │   └── cookies.ts        #   Cookie 管理：增删改查 / 批量导入导出 / 立即注入已打开窗口
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
