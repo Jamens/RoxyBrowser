@@ -9,6 +9,23 @@
 
 ---
 
+## 2026-10-06 · 修复：实体注册遗漏（全新安装必崩）+ 发版护栏与首片拆分
+
+### 修复
+- **DataSource 实体注册遗漏**（`src/main/server.ts`，提交 `e6b6c3b`）：`entities.ts` 定义了 **15** 个实体，但 DataSource 的 `entities` 数组只注册了 **13** 个，漏掉 `TeamInviteEntity`（团队邮箱邀请，`team_invites`）与 `AssistantSkillEntity`（AI 助手技能库，`assistant_skills`）。经 `information_schema` 实测确认：库里只有 13 张表，**这两张表连现网数据库都不存在**，且 `db/schema.sql` 也没有手工补建。`synchronize` 只会为**已注册**实体建表，因此这两个功能一调用就报 `ER_NO_SUCH_TABLE`，属全新安装必崩的缺陷。已补进注册数组，应用下次启动即自动建表（纯增量，无需手工 SQL）。
+  - 根因值得记：**不是 `synchronize` 本身有问题**——对现有 13 张表做 schema 差异校验，零 drift，同步机制健康。
+
+### 新增
+- **`pnpm db:check` 库表结构只读检查**（`scripts/db-schema-log.ts`，提交 `996ec12`）：`synchronize: true` 的固有矛盾是「首次安装免手动建表」与「发版改实体可能静默丢列」相冲突。本脚本用 TypeORM `schemaBuilder.log()` 列出「若执行 synchronize 会发生什么」，逐条标注增量/破坏性，**只读、不执行任何 DDL**。正是它定位出上面的缺陷。当前输出：2 条待执行变更（均为 CREATE TABLE）、0 条破坏性。
+
+### 重构
+- **操作日志路由抽离**（`src/main/routes/logs.ts`，提交 `7a9d617`）：`server.ts` 已 4306 行，为全项目最大技术债，开始按域增量拆分。本次抽出操作日志域（列表 + CSV/JSON 导出，54 行），逻辑逐行照搬不改行为。两个关键点：跨模块只 `import type`（编译期擦除，避免 server → routes → server 运行时循环依赖）；`AppDataSource` 因是 `export let` 必须以 `getDs: () => AppDataSource` 传入，按值捕获会拿到 `undefined`。server.ts 4306 → 4262 行。
+
+### 文档
+- README 补齐此前遗漏的候选①②③④、安全加固与工程化脚本说明（提交 `c2fc316`、`0994cb2`）：新增「环境生命周期 / 到期管理」「WebGL ↔ OS 一致性守卫」两节，补充追踪器屏蔽 2.0、候选④ 四项技术细节，并新增注意事项「新增实体必须注册进 DataSource」。
+
+---
+
 ## 2026-09-30 · 维护与加固：JWT 密钥、一键测试、产物清理
 
 ### 修复 / 新增
