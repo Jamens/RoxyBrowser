@@ -369,7 +369,8 @@ src/
 │   ├── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
 │   ├── routes/               # 按域拆出的路由模块（依赖经 deps 注入，避免与 server.ts 形成运行时循环依赖）
 │   │   ├── logs.ts           #   操作日志：列表（take 500）+ CSV/JSON 导出
-│   │   └── cookies.ts        #   Cookie 管理：增删改查 / 批量导入导出 / 立即注入已打开窗口
+│   │   ├── cookies.ts        #   Cookie 管理：增删改查 / 批量导入导出 / 立即注入已打开窗口
+│   │   └── v1Cookie.ts       #   Cookie 自动化接口（Bearer 令牌鉴权，按 teamId + profileId 过滤）
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
