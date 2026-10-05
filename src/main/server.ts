@@ -69,7 +69,7 @@ import { renderAcceptInvitePage } from './acceptInvitePage'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 import { registerLogRoutes } from './routes/logs'
 import { registerCookieRoutes } from './routes/cookies'
-import { mapCookie, parseCookieText } from './cookieText'
+import { registerV1CookieRoutes } from './routes/v1Cookie'
 import { isAdminRole, ownerScope, ownerAndWhere, type AuthedRequest } from './authScope'
 // browserManager 与 server 存在循环依赖（browserManager 静态引用 server 的 AppDataSource）。
 // 经核查：AppDataSource 为 `export let` 运行时赋值，且 browserManager 仅在函数体内使用，
@@ -2979,143 +2979,8 @@ function buildApiRouter(): express.Router {
   })
 
   // ===== Cookie（v1 自动化读写，按环境隔离）=====
-  v1.get('/cookies', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const profileId = Number((req.query as Record<string, string>).profileId)
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const list = await repo.find({ where: { teamId: tid, profileId }, order: { domain: 'ASC', name: 'ASC' } })
-    res.json({ code: 0, data: list.map(mapCookie) })
-  })
-
-  v1.post('/cookies', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const b = req.body || {}
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: Number(b.profileId), teamId: tid } })
-    if (!profile) return res.status(400).json({ code: 400, message: 'profile not found' })
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const c = await repo.save(
-      repo.create({
-        teamId: tid,
-        ownerId: 0,
-        profileId: profile.id,
-        domain: (b.domain || '').trim(),
-        name: (b.name || '').trim(),
-        value: b.value == null ? '' : String(b.value),
-        path: b.path || '/',
-        secure: !!b.secure,
-        httpOnly: !!b.httpOnly,
-        sameSite: b.sameSite || 'unspecified',
-        expirationDate: b.expirationDate ? new Date(b.expirationDate) : null,
-        hostOnly: b.hostOnly == null ? true : !!b.hostOnly
-      })
-    )
-    res.json({ code: 0, data: mapCookie(c) })
-  })
-
-  v1.put('/cookies/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!c) return res.status(404).json({ code: 404, message: 'cookie not found' })
-    const b = req.body || {}
-    for (const f of ['domain', 'name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'expirationDate', 'hostOnly'] as const) {
-      if (f in b) {
-        if (f === 'expirationDate') (c as any)[f] = b[f] ? new Date(b[f]) : null
-        else if (f === 'value') (c as any)[f] = b[f] == null ? '' : String(b[f])
-        else (c as any)[f] = b[f]
-      }
-    }
-    await repo.save(c)
-    res.json({ code: 0, data: mapCookie(c) })
-  })
-
-  v1.delete('/cookies/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const c = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!c) return res.status(404).json({ code: 404, message: 'cookie not found' })
-    await repo.remove(c)
-    res.json({ code: 0, data: { id: c.id } })
-  })
-
-  v1.delete('/cookies', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const profileId = Number((req.query as Record<string, string>).profileId)
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const r = await repo.delete({ teamId: tid, profileId })
-    res.json({ code: 0, data: { deleted: r.affected || 0 } })
-  })
-
-  v1.post('/cookies/import', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const b = req.body || {}
-    const profileId = Number(b.profileId)
-    const text: string = b.text || ''
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    if (!text.trim()) return res.status(400).json({ code: 400, message: 'empty cookie text' })
-    const { cookies, failed } = parseCookieText(text)
-    if (!cookies.length) return res.status(400).json({ code: 400, message: 'no cookie parsed', data: { failed } })
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const saved = await repo.save(
-      cookies.map((c) =>
-        repo.create({
-          teamId: tid,
-          ownerId: 0,
-          profileId,
-          domain: (c.domain || '').trim(),
-          name: (c.name || '').trim(),
-          value: c.value == null ? '' : String(c.value),
-          path: c.path || '/',
-          secure: !!c.secure,
-          httpOnly: !!c.httpOnly,
-          sameSite: c.sameSite || 'unspecified',
-          expirationDate: c.expirationDate ? new Date(c.expirationDate) : null,
-          hostOnly: c.hostOnly == null ? true : !!c.hostOnly
-        })
-      )
-    )
-    res.json({ code: 0, data: { imported: saved.length, failed } })
-  })
-
-  v1.get('/cookies/export', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const profileId = Number((req.query as Record<string, string>).profileId)
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    const repo = AppDataSource.getRepository(CookieEntity)
-    const list = await repo.find({ where: { teamId: tid, profileId }, order: { domain: 'ASC', name: 'ASC' } })
-    const text = list
-      .map((c) => {
-        const flag = c.hostOnly ? 'FALSE' : 'TRUE'
-        const exp = c.expirationDate ? Math.floor(new Date(c.expirationDate).getTime() / 1000) : 0
-        return [c.domain, flag, c.path || '/', c.secure ? 'TRUE' : 'FALSE', exp, c.name, c.value].join('\t')
-      })
-      .join('\n')
-    res.json({ code: 0, data: { text, count: list.length } })
-  })
-
-  v1.post('/cookies/apply', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const profileId = Number((req.query as Record<string, string>).profileId || (req.body || {}).profileId)
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    try {
-      const n = await applyCookies(profileId)
-      res.json({ code: 0, data: { applied: n } })
-    } catch (e) {
-      res.status(400).json({ code: 400, message: (e as Error).message })
-    }
-  })
+  // 已抽到 src/main/routes/v1Cookie.ts；解析/映射复用 cookieText.ts，与内部接口同一套语义。
+  registerV1CookieRoutes(v1, { getDs: () => AppDataSource, applyCookies })
 
   // ===== RPA 脚本（v1 自动化触发）=====
   // 列出当前团队的脚本（用于外部自动化查找 id / 步数 / 是否含变量）
