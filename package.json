@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "node scripts/run-tests.mjs",
     "clean:out": "node scripts/clean-out.mjs",
+    "db:check": "node node_modules/typescript/bin/tsc scripts/db-schema-log.ts src/main/entities.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --experimentalDecorators --emitDecoratorMetadata --outDir .tmp_dbsl && node .tmp_dbsl/scripts/db-schema-log.js",
     "icon": "node scripts/gen-tray-icon.mjs && node scripts/gen-app-icon.mjs",
     "dist:dir": "electron-vite build && electron-builder --win --dir",
     "dist": "electron-vite build && electron-builder --win --x64",
