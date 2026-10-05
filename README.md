@@ -31,6 +31,9 @@ pnpm dev          # 开发模式（vite HMR + 自动重启 Electron）
 pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
+
+pnpm test         # 一键跑完全量离线测试（8 个：自动编译共享模块 + 逐个运行）
+pnpm clean:out    # 精确回收 out/ 里的陈旧构建产物（默认 dry-run，加 --apply 才真删）
 ```
 
 首次启动会自动建库、建表，并创建默认账号：**`admin` / `123456`**。
@@ -159,6 +162,14 @@ mysql -uroot -p1234560 < db/schema.sql
 
 > 不会复制 Cookie——登录态复制过去等于主动制造关联；也不继承代理绑定，需另行分配；账号资料可选一并复制。
 
+### 环境生命周期 / 到期管理（可选到期时间 + 列表预警 + 到期拦截）
+
+批量养号总有「这个号该下线了」的需求。本项目刻意**不做订阅计费**，到期只作为轻量的「该清理了」信号。
+
+- **不新增数据库列**（项目铁律 #24）：到期时间存于 `ProfileEntity.fingerprint` 这一 JSON 列内（键 `expiresAt`，ISO 字符串），经 `src/shared/envExpiry.ts` 的 `getEnvExpiresAt` / `withEnvExpiresAt` 两个纯函数读写，前后端共用。
+- **关键不变量**：`normalizeFingerprint` 必须**保留** `expiresAt` 这个自定义键。编辑 / 导入落库前都会跑归一化，一旦把它当成「未知字段」丢掉，到期时间就会**静默消失**——`tests/envExpiry.test.cjs` 专门锁死这一条。
+- **三处生效**：环境列表新增「到期」列（复用代理到期的预警样式）；打开单个环境前拦截已过期环境并给出友好提示；批量打开同样拦截。
+
 ### 全空间快照（团队整体打包 / 迁移 + 定时备份）
 
 做跨境多账号的，迟早要面对「换机器 / 重装 / 整机迁移」——把分散在数据库里的环境、代理、RPA、扩展一个个导出来再一个个灌进去既慢又容易漏。全空间快照把**整个团队空间**打成一个 JSON 文件：
@@ -264,6 +275,17 @@ app.listen(4000)
 - **清单原则（关键，别乱加）**：只拦**明确的分析 / 广告子域**，绝不拦主域——拦 `facebook.com` 会让用户直接登不上号，拦 `connect.facebook.net` 才只是干掉 SDK 而不影响登录；CDN（jsdelivr / unpkg / cdnjs）与错误上报（Sentry / Bugsnag）也不在清单内，否则页面会碎或报错刷屏。
 - **开关**：`Fingerprint.blockTrackers`，新建环境**默认开启**（与 Canvas / Audio 噪声一致），可在环境表单「高级设置」里单独关闭；克隆派生继承母本设置，保持批量号行为一致。
 - **兼容性**：本功能上线前创建的环境没有该字段，按「不改变既有环境行为」的原则默认不拦截，在表单里开启后生效。
+- **2.0：只靠主机清单会漏**。埋点脚本经常就托管在**你自己的站点或 CDN** 下（`/gtag/js`、`/matomo.php`、`/analytics.js`），主机名是自家域名，永远不会命中域名清单。`isTrackerRequest` 因此改为**双路判定**：域名清单 + **子资源路径签名**。
+- **不误杀原则（比功能本身更重要）**：路径签名只对**非顶层文档**生效——命中 `mainFrame` 一律放行，否则用户停在一个恰好带 `gtag` 字样的页面上会整页打不开。`localhost` / `127.0.0.1` / `10.x` / `192.168.x` 私有网段与 `blob:` / `data:` / `about:` 全部放过，避免误伤本地开发与内网业务。
+- **覆盖 WebSocket / fetch / beacon**：这三类请求在 Chromium 里同样以 `webRequest` 事件出现且都带 hostname，无需额外机制即被同一套判定覆盖。
+
+### WebGL ↔ OS 一致性守卫（自相矛盾比单项错更致命）
+
+原有 WebGL 体检项只验「设定值 == 回读值」，证明的是**注入生效**，不是「组合起来像不像真人」。而检测站真正盯的是**矛盾**：iOS 伪装却报出 NVIDIA 独显、Android 伪装却报出桌面 GPU——这类组合在真实世界根本不存在，等于直接自曝「这个环境被改过」。
+
+- **实现**：`src/shared/webglOsMatch.ts` 纯函数 `webglMatchesOs(os, vendor, renderer)`，零依赖可离线单测（`tests/webglOsMatch.test.cjs`，23 例）。
+- **规则按 OS 收紧**：iOS / macOS **必须**是 Apple（ANGLE 始终报 Apple）；Android 禁桌面 GPU（NVIDIA / AMD / Intel）但放行 Adreno / Mali / PowerVR；Windows / Linux 反过来禁移动 GPU，但不强制具体桌面品牌。
+- **老数据不误报**：字段为空时标记「不适用」（weight 0），不计入总分——区分「环境限制」与「注入失败」是体检的基本原则。
 
 ### 指纹深度补齐（WebGPU + WebAudio）
 
@@ -283,6 +305,13 @@ app.listen(4000)
 - **刻意不注入 `outputLatency`**：真实 AudioContext 在无音频播放时该值为 0，强行填 0.015~0.045 会与真实人群脱节，而它本身几乎不泄漏硬件信息——收益不足以抵消穿帮风险。
 
 两项均已接入**环境体检**（新增 `WebGPU 显卡` / `音频特征` / `音频压缩器 reduction` 三个检查项），可在体检报告里直接看到注入是否生效。
+
+**后续补强（继续对齐真实 Chrome 的暴露面）**：
+
+- **WebGPU 软件渲染回退不伪装**（`webGpuSpoofAllowed`）：`adapter.isFallbackAdapter === true`（SwiftShader / llvmpipe）时**不覆盖** vendor / architecture。否则会造出一个新的矛盾——「WebGL 说 RTX 4090、WebGPU 说软件渲染」，正是上面那条原则的延伸。
+- **子群尺寸改为原生透传**（`subgroupMinSize` / `subgroupMaxSize`）：体检新增「WebGPU 子群尺寸」项，只校验「min ≤ max 且 > 0」的自洽性，weight 0 不计分。
+- **Canvas 噪声改为按画布确定性派生**（`src/shared/canvasNoise.ts`）：检测站的**首要**检查点是「同一块画布读两次是否一致」。此前噪声种子共享一个随调用推进的 rng，两次读取结果不同 → 直接暴露注入。现在种子由 `(环境种子, 宽, 高)` 派生，相同画布必得完全相同的噪声序列。配套两条：极小画布（< 8px 的 1×N 纯色参考条）跳过噪声，避免被「反篡改纯色探针」识别；种子为 0 / NaN 时退回 `webglVendor` 哈希，防止无种子环境共用同一套噪声被聚类。体检 `canvasNoise` 项新增**一致性要求**（探针画两遍比 `toDataURL`），不一致即判红——那是真实注入缺陷，不是环境限制。
+- **WebAudio IAMF 刻意不注入**：IAMF 属**编解码能力查询**（`canPlayType` / `MediaCapabilities`），由 Chromium 版本与 OS 决定，**不是硬件指纹**；且本项目 Electron 内置 Chromium 低于 152，原生即不支持，伪造反而制造「浏览器声称支持、实际解不了」的矛盾。体检新增「音频编解码能力」信息项（weight 0）如实展示环境的编解码面，并记录「不注入」这一决策。
 
 ### 在线检测（外部视角验证）
 
@@ -333,7 +362,8 @@ src/
 │   ├── exporters.ts          # 可复用导出/导入原子操作（整环境 / 代理池 / RPA），供各模块路由与全空间快照共用
 │   ├── rpaMarket.ts          # RPA 市场：内置预设脚本目录（纯数据模块，可离线单测）
 │   ├── healthProbe.ts        # 环境体检采集：在环境窗口内执行 JS，读回真实生效的指纹值
-│   └── fingerprintScan.ts    # 在线检测：站点定义 / 文本提取 / 导航扫描（runSiteScan、extractHighlights 纯函数，可单测）
+│   ├── fingerprintScan.ts    # 在线检测：站点定义 / 文本提取 / 导航扫描（runSiteScan、extractHighlights 纯函数，可单测）
+│   └── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
@@ -341,6 +371,9 @@ src/
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
+│   ├── canvasNoise.ts        # Canvas 噪声种子：按 (环境种子,宽,高) 确定性派生，保证同画布读两次一致（纯函数，可单测）
+│   ├── webglOsMatch.ts       # WebGL ↔ OS 一致性守卫：显卡品牌与操作系统的矛盾检测（纯函数，可单测）
+│   ├── envExpiry.ts          # 环境到期时间读写（expiresAt 存 fingerprint JSON，不新增数据库列，纯函数，可单测）
 │   ├── countries.ts          # 16 个主流跨境电商国家（国家码 / 中英文名 / IANA 时区 / 默认语言）
 │   ├── locales.ts            # 支持的语言（zh-CN / en-US / ja-JP / de-DE）与 antd·dayjs 包名映射
 │   ├── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）
@@ -360,8 +393,10 @@ src/
 3. **列名**：未启用 snake_case 命名策略，数据库列名与属性名一致（如 `teamId`），QueryBuilder 里不可写 `team_id`。
 4. **`ELECTRON_RUN_AS_NODE`**：若当前终端设置了该环境变量，Electron 会以纯 Node 模式启动导致 `ipcMain` 等 API 不可用，启动前请 `unset ELECTRON_RUN_AS_NODE`（Windows PowerShell：`$env:ELECTRON_RUN_AS_NODE=$null`）。
 5. **`pnpm add` 中断会弄脏 node_modules**：pnpm 依赖安装被中断（如 electron postinstall 失败）后，可能留下断裂的 symlink，表现为 `Cannot find package 'electron-vite'`。此时执行 `node scripts/fix-pnpm-links.mjs` 可就地重建链接（junction 方式，不删除任何文件）；彻底解决请删掉 `node_modules` 后重装。
-6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可。
+6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 7. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
+8. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
+9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 8 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 
 ## 打包分发
 
