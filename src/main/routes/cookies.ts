@@ -2,8 +2,7 @@ import { Router, type Response, type NextFunction } from 'express'
 import type { DataSource } from 'typeorm'
 import { CookieEntity, ProfileEntity } from '../entities'
 import { mapCookie, parseCookieText } from '../cookieText'
-// 仅类型导入：编译期擦除，不产生 server → routes → server 的运行时循环依赖
-import type { AuthedRequest } from '../server'
+import { ownerScope, type AuthedRequest } from '../authScope'
 
 export interface CookieRouteDeps {
   /**
@@ -12,8 +11,6 @@ export interface CookieRouteDeps {
    */
   getDs: () => DataSource
   authMiddleware: (req: AuthedRequest, res: Response, next: NextFunction) => void
-  /** 账户隔离条件构造（admin 不加 ownerId 条件） */
-  ownerScope: (req: AuthedRequest, extra?: Record<string, unknown>) => Record<string, unknown>
   writeLog: (req: AuthedRequest, action: string, detail: string) => Promise<void>
   /** browserManager 提供的「立即注入已打开窗口」，经 deps 注入以避免 routes → browserManager 的运行时依赖 */
   applyCookies: (profileId: number) => Promise<number>
@@ -28,7 +25,7 @@ export interface CookieRouteDeps {
  * /cookies/:id 注册，否则会被「:id」当成参数吞掉。
  */
 export function registerCookieRoutes(router: Router, deps: CookieRouteDeps): void {
-  const { getDs, authMiddleware, ownerScope, writeLog, applyCookies } = deps
+  const { getDs, authMiddleware, writeLog, applyCookies } = deps
 
   // 列出某环境的 Cookie（必须传 profileId，且属于当前团队）
   router.get('/cookies', authMiddleware, async (req: AuthedRequest, res: Response) => {

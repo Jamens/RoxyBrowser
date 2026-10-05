@@ -70,6 +70,7 @@ import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 import { registerLogRoutes } from './routes/logs'
 import { registerCookieRoutes } from './routes/cookies'
 import { mapCookie, parseCookieText } from './cookieText'
+import { isAdminRole, ownerScope, ownerAndWhere, type AuthedRequest } from './authScope'
 // browserManager 与 server 存在循环依赖（browserManager 静态引用 server 的 AppDataSource）。
 // 经核查：AppDataSource 为 `export let` 运行时赋值，且 browserManager 仅在函数体内使用，
 // 循环依赖为良性，可安全静态导入（index.ts 本就静态导入，模块在启动期已就绪）。
@@ -127,19 +128,9 @@ export function setWindowsProvider(fn: () => { id: number; title: string }[]) {
   windowsProvider = fn
 }
 
-// 账户级隔离：普通用户（member）只看到自己 ownerId 的数据；owner/admin 看全部（管理员视角）。
-// 团队管理类接口（成员/团队信息/操作日志/设置）保持团队维度，不套用此隔离。
-function isAdminRole(role?: string): boolean {
-  return role === 'owner' || role === 'admin'
-}
-function ownerScope(req: AuthedRequest, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  if (isAdminRole(req.role)) return { ...extra }
-  return { ownerId: req.uid, ...extra }
-}
-// 给 QueryBuilder 追加账户隔离条件（admin 不加）
-function ownerAndWhere(qb: { andWhere: (sql: string, params?: Record<string, unknown>) => unknown }, req: AuthedRequest, alias = 'p') {
-  if (!isAdminRole(req.role)) qb.andWhere(`${alias}.ownerId = :oid`, { oid: req.uid })
-}
+// 账户隔离的 isAdminRole / ownerScope / ownerAndWhere 与 AuthedRequest 类型已抽到
+// src/main/authScope.ts，供 server.ts 与 routes/* 共用——避免 routes 反向 import server，
+// 也不必在每个域的 deps 里层层传递 ownerScope。
 
 // 实时角色：JWT 里的 role 在「调整成员角色」后会过期，敏感操作以数据库为准，保证权限调整即时生效
 async function freshRole(req: AuthedRequest): Promise<string> {
@@ -152,19 +143,6 @@ async function freshRole(req: AuthedRequest): Promise<string> {
 }
 
 // ---------- 工具 ----------
-// 导出供 routes/* 的模块做 import type 使用（类型导出编译期擦除，不产生运行时依赖）
-export type AuthedRequest = Request & {
-  uid?: number
-  tid?: number
-  username?: string
-  role?: string
-  /**
-   * API 令牌身份（v1 的 tokenAuthMiddleware 注入）。
-   * 令牌调用没有登录态、拿不到 uid，但审计必须能追溯「哪个令牌、谁创建的」，
-   * 否则令牌能建环境 / 删数据 / 导出 Cookie 却零留痕，形成审计盲区。
-   */
-  apiToken?: { id: number; name: string; ownerId: number }
-}
 
 function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization || ''
@@ -2106,7 +2084,6 @@ function buildApiRouter(): express.Router {
   registerCookieRoutes(router, {
     getDs: () => AppDataSource,
     authMiddleware,
-    ownerScope,
     writeLog,
     applyCookies
   })

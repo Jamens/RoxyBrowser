@@ -3,7 +3,7 @@ import type { DataSource } from 'typeorm'
 import { OperationLogEntity } from '../entities'
 import { exportStamp, logsToCsv, logsToJson } from '../logExport'
 // 仅类型导入：编译期完全擦除，不会与 server.ts 形成运行时循环依赖
-import type { AuthedRequest } from '../server'
+import type { AuthedRequest } from '../authScope'
 
 export interface LogRouteDeps {
   /**
