@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ConfigProvider, theme, Card, Tabs, Form, Input, Button } from 'antd'
+import { useState, useEffect } from 'react'
+import { ConfigProvider, theme, Card, Tabs, Form, Input, Button, Alert } from 'antd'
 import { UserOutlined, LockOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useAppCtx } from '../hooks/useApp'
 import { useNavigate } from 'react-router-dom'
@@ -16,6 +16,22 @@ export default function Login() {
   const t = useT()
   // 登录二次验证（2FA）：密码通过后若后端返回挑战令牌，则进入动态码输入步骤
   const [challengeToken, setChallengeToken] = useState<string | null>(null)
+  // 被踢回登录页的原因（由 SessionGuard 写入 sessionStorage，见 App.tsx）。
+  // 没有它的话用户只会看到「莫名其妙回到登录页」，无从判断发生了什么。
+  const [expiredReason, setExpiredReason] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      const r = sessionStorage.getItem('roxy_session_expired_reason')
+      if (r) {
+        setExpiredReason(r)
+        // 只展示一次，刷新后不该还挂着
+        sessionStorage.removeItem('roxy_session_expired_reason')
+      }
+    } catch {
+      /* 无痕模式下可能不可读，忽略 */
+    }
+  }, [])
 
   const doLogin = async (values: { username: string; password: string }) => {
     setLoading(true)
@@ -78,6 +94,9 @@ export default function Login() {
             与白卡严重冲突。此处用独立 light ConfigProvider 让表单控件始终浅色，与白卡自洽。 */}
         <ConfigProvider theme={{ algorithm: theme.defaultAlgorithm, token: { colorPrimary: '#2b5cff', borderRadius: 8 } }}>
         <Card className="login-card" style={{ width: 400 }}>
+          {expiredReason && (
+            <Alert type="warning" showIcon closable style={{ marginBottom: 14 }} message="登录已失效" description={expiredReason} />
+          )}
           {challengeToken ? (
             <Form layout="vertical" onFinish={verifyTwoFa}>
               <div style={{ textAlign: 'center', marginBottom: 14, color: '#1f2b4d', fontWeight: 600, fontSize: 16 }}>

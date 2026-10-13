@@ -17,7 +17,17 @@ import AssistantChat from './components/AssistantChat'
 function SessionGuard() {
   const navigate = useNavigate()
   useEffect(() => {
-    setSessionExpiredHandler(() => navigate('/login', { replace: true }))
+    // 把服务端给出的失效原因带到登录页显示。用户报「莫名退出登录」时，
+    // 有了这行提示就能一眼看出是令牌过期、被撤销，还是别的问题——
+    // 否则只能去翻服务端日志，本机开发还能看，线上报障就完全盲了。
+    setSessionExpiredHandler((reason) => {
+      try {
+        sessionStorage.setItem('roxy_session_expired_reason', reason)
+      } catch {
+        /* 无痕模式下可能不可写，忽略 */
+      }
+      navigate('/login', { replace: true })
+    })
     return () => setSessionExpiredHandler(null)
   }, [navigate])
   return null
