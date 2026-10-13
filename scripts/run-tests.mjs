@@ -39,6 +39,10 @@ const COMPILES = [
   { name: 'envPartition', files: ['src/shared/envPartition.ts'], out: '.tmp_ep' },
   { name: 'assistantPlan', files: ['src/shared/assistantPlan.ts'], out: '.tmp_ap' },
   { name: 'expiryAlert', files: ['src/shared/expiryAlert.ts'], out: '.tmp_xa' },
+  // healthBaseline 曾经漏配这一条：测试 require 的 .tmp_hb 目录只靠早期手工编译的
+  // 残留产物存在，全新 clone 跑 pnpm test 会直接 MODULE_NOT_FOUND。编译清单必须
+  // 覆盖 tests/ 下所有 `require('../.tmp_*')` 的目标目录，新增模块时同步补这里。
+  { name: 'healthBaseline', files: ['src/shared/healthBaseline.ts'], out: '.tmp_hb' },
   // healthFix 依赖 healthcheck（uaOs）与 countries（时区/语言表）
   { name: 'healthFix', files: ['src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hf', extra: ['--lib', 'es2020,dom'] },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
@@ -83,8 +87,9 @@ function run(bin, args, label) {
 
 console.log('──────── 编译共享模块 ────────')
 for (const c of COMPILES) {
-  // 先清空再编，避免残留旧产物导致测试读到过期实现
-  fs.rmSync(path.join(root, c.out), { recursive: true, force: true })
+  // 先清空再编，避免残留旧产物导致测试读到过期实现。
+  // best-effort：受限于沙箱/权限删不掉时降级为「覆盖编译」，不能让清理失败中断测试。
+  try { fs.rmSync(path.join(root, c.out), { recursive: true, force: true }) } catch { /* 忽略 */ }
   const args = [
     tscBin,
     ...c.files,
@@ -107,6 +112,23 @@ for (const c of COMPILES) {
   }
 }
 
+// 前置自检：tests/ 里 require 到的每个 .tmp_* 目录，都必须有对应的 tsc 产出条目。
+// 漏配时测试仍能"通过"——因为本地可能残留着上一次手工编译的产物，但全新 clone
+// 跑 pnpm test 会直接 MODULE_NOT_FOUND。healthBaseline 就踩过这个坑。
+const compiledOuts = new Set(COMPILES.map((c) => c.out))
+const requiredOuts = new Set()
+for (const t of TESTS) {
+  let src = ''
+  try { src = fs.readFileSync(path.join(root, t.file), 'utf8') } catch { /* 文件缺失交由运行阶段报错 */ }
+  for (const m of src.matchAll(/require\(\s*['"]\.\.\/(\.tmp_[A-Za-z0-9_]+)/g)) requiredOuts.add(m[1])
+}
+const missingOuts = [...requiredOuts].filter((d) => !compiledOuts.has(d))
+if (missingOuts.length) {
+  console.error(`\n编译清单缺项：${missingOuts.join(', ')}`)
+  console.error('tests/ 引用了这些目录，但 COMPILES 里没有产出它们的条目。')
+  process.exit(1)
+}
+
 console.log('\n──────── 运行测试 ────────')
 const results = []
 for (const t of TESTS) {
@@ -119,4 +141,20 @@ console.log('\n════════ 汇总 ════════')
 for (const r of results) console.log(`  ${r.ok ? '✅ PASS' : '❌ FAIL'}  ${r.name}`)
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length} passed, ${failed.length} failed`)
+
+// 清理编译产物。.tmp_* 只是 tsc 的中间输出，测试跑完即无用。
+// 教训：此前没有这一步，每加一个 shared 模块就多一个目录，根目录一度堆到
+// 61 个 .tmp_* / 7.1M，被当成"垃圾文件"。全绿时自动回收，失败时保留便于复现。
+const outDirs = [...new Set(COMPILES.map((c) => c.out))]
+if (failed.length === 0) {
+  let cleaned = 0
+  for (const d of outDirs) {
+    try { fs.rmSync(path.join(root, d), { recursive: true, force: true }); cleaned++ } catch { /* best-effort */ }
+  }
+  console.log(cleaned === outDirs.length
+    ? `已清理 ${cleaned} 个编译临时目录`
+    : `已清理 ${cleaned}/${outDirs.length} 个编译临时目录（其余删除失败，可手工 rm -rf .tmp_*）`)
+} else {
+  console.log(`有失败用例，保留编译产物便于调试：${outDirs.join(', ')}`)
+}
 process.exit(failed.length === 0 ? 0 : 1)
