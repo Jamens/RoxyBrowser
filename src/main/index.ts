@@ -204,7 +204,7 @@ if (!gotLock) {
       const message = (err as Error).message || String(err)
       console.error('[roxy] 启动失败:', message)
       const { dialog } = require('electron') as typeof import('electron')
-      dialog.showErrorBox('RoxyBrowser Clone 启动失败', `无法连接数据库或启动服务：\n\n${message}\n\n请确认 MySQL 已启动（默认 127.0.0.1:3307，root/1234560）`)
+      dialog.showErrorBox('RoxyBrowser Clone 启动失败', `无法连接数据库或启动服务：\n\n${message}\n\n请确认 MySQL 已启动（默认 127.0.0.1:3306，root/1234560）`)
       app.quit()
       return
     }

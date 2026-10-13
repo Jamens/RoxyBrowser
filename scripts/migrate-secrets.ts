@@ -33,7 +33,7 @@ async function main() {
   const key = getSecretKeyMaterial()
   const conn = await createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
-    port: Number(process.env.DB_PORT || 3307),
+    port: Number(process.env.DB_PORT || 3306),
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASS || '1234560',
     database: process.env.DB_NAME || 'roxy_browser'
@@ -94,7 +94,7 @@ main().catch((e: any) => {
   // ECONNREFUSED 是最常见的失败：MySQL 没起。给出可操作的提示，而不是甩一串 errno
   if (e?.code === 'ECONNREFUSED') {
     console.error(
-      `\n连不上数据库（${e.address ?? '127.0.0.1'}:${e.port ?? 3307}）。\n` +
+      `\n连不上数据库（${e.address ?? '127.0.0.1'}:${e.port ?? 3306}）。\n` +
         `请先启动 MySQL（默认 root/1234560，库名 roxy_browser），或用环境变量 DB_HOST / DB_PORT / DB_USER / DB_PASS 覆盖。\n` +
         `参考 README「数据库（必读）」一节的 docker run 示例。`
     )

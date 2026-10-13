@@ -102,9 +102,12 @@ import {
 } from './browserManager'
 
 // ---------- 配置 ----------
+// 默认端口 3306（Docker / 官方安装版的 MySQL 默认监听端口）。环境变量 DB_PORT 仍可覆盖。
+// 注：README 早期的 docker run 示例用的是 -p 3307:3306（宿主 3307 → 容器 3306），
+// 那是为了避开本机已有的 3306。若你沿用那种映射，用 DB_PORT=3307 覆盖即可。
 const DB_CONFIG = {
   host: process.env.DB_HOST || '127.0.0.1',
-  port: Number(process.env.DB_PORT || 3307),
+  port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASS || '1234560',
   database: process.env.DB_NAME || 'roxy_browser'

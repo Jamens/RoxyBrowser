@@ -21,7 +21,7 @@
 | 构建   | electron-vite 5 + Vite 7 + pnpm                                                  |
 | 前端   | React 19 + TypeScript + Ant Design 6 + React Router 6                            |
 | 后端   | Express + TypeORM（内嵌在 Electron 主进程，本地 API + 自动化 API）               |
-| 数据库 | MySQL（**需自备服务**；默认 `127.0.0.1:3307`，`root` / `1234560`，库名 `roxy_browser` 由应用首次启动自动创建） |
+| 数据库 | MySQL（**需自备服务**；默认 `127.0.0.1:3306`，`root` / `1234560`，库名 `roxy_browser` 由应用首次启动自动创建） |
 
 ## 快速开始
 
@@ -66,20 +66,21 @@ pnpm clean:out    # 精确回收 out/ 里的陈旧构建产物（默认 dry-run�
 ```bash
 docker run -d --name roxy-mysql \
   -e MYSQL_ROOT_PASSWORD=1234560 \
-  -p 3307:3306 \
+  -p 3306:3306 \
   mysql:8.0 \
   --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
 ```
 
 > 容器启动后稍等几秒（MySQL 初始化需要时间），用 `docker logs -f roxy-mysql` 看到 `ready for connections` 后再启动应用。
-> 等价替代：本机安装 MySQL 5.7+ / 8.0 并监听 `3307`，或用 XAMPP、既有 MySQL 实例——只要满足下方连接信息即可。
+> 等价替代：本机安装 MySQL 5.7+ / 8.0 并监听 `3306`，或用 XAMPP、既有 MySQL 实例——只要满足下方连接信息即可。
+> **端口冲突？** 若你本机 3306 已被别的 MySQL 占用，把上面的 `-p 3306:3306` 改成 `-p 3307:3306`（宿主 3307 → 容器 3306），启动时带 `DB_PORT=3307` 即可，无需改代码。
 
 ### 2. 默认连接信息
 
 | 项 | 默认值 | 覆盖环境变量 |
 | -- | -- | -- |
 | 地址 | `127.0.0.1` | `DB_HOST` |
-| 端口 | `3307` | `DB_PORT` |
+| 端口 | `3306` | `DB_PORT` |
 | 用户 | `root` | `DB_USER` |
 | 密码 | `1234560` | `DB_PASS` |
 | 库名 | `roxy_browser`（不存在会自动创建） | `DB_NAME` |
@@ -104,7 +105,7 @@ mysql -uroot -p1234560 < db/schema.sql
 
 它与自动 `synchronize` **二选一**即可；脚本全是 `IF NOT EXISTS`，重复执行也安全。
 
-> 若 MySQL 未启动，应用启动会弹出错误框：「无法连接数据库或启动服务……请确认 MySQL 已启动（默认 127.0.0.1:3307，root/1234560）」。
+> 若 MySQL 未启动，应用启动会弹出错误框：「无法连接数据库或启动服务……请确认 MySQL 已启动（默认 127.0.0.1:3306，root/1234560）」。
 
 ## 核心功能
 
