@@ -10,6 +10,7 @@ import {
   FileTextOutlined,
   ApiOutlined,
   LogoutOutlined,
+  DesktopOutlined,
   ChromeOutlined,
   SettingOutlined,
   SnippetsOutlined,
@@ -50,7 +51,7 @@ const buildMenus = (t: TranslateFn) => [
 ]
 
 export default function AppLayout() {
-  const { message } = useAppCtx()
+  const { message, modal } = useAppCtx()
   const navigate = useNavigate()
   const location = useLocation()
   const [me, setMe] = useState<{ username: string; nickname: string; role: string } | null>(null)
@@ -99,9 +100,39 @@ export default function AppLayout() {
   }
 
   const logout = () => {
-    clearToken()
-    message.success(t('layout.logoutSuccess'))
-    navigate('/login')
+    // 顺序很关键：必须**先发请求再清本地令牌**。
+    // clearToken() 之后请求就不再带 Authorization 头，服务端鉴权会失败，
+    // 撤销也就不会执行——恰好是这个功能要修的那个洞。
+    const done = () => {
+      clearToken()
+      message.success(t('layout.logoutSuccess'))
+      navigate('/login')
+    }
+    api.post('/api/auth/logout').then(done).catch(() => {
+      // 服务端不可达时仍要完成本地登出（用户视角一致）；
+      // 只是「其他设备同步下线」这次没生效，下次登录会重新签发令牌。
+      done()
+    })
+  }
+
+  const logoutAll = async () => {
+    modal.confirm({
+      title: t('layout.logoutAllConfirm'),
+      content: t('layout.logoutAllDesc'),
+      okText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await api.post('/api/auth/logout-all')
+        } finally {
+          // 服务端已递增 tokenVersion，本机令牌也已失效；
+          // 无论请求是否成功都要清本地，否则下次请求会 401 循环。
+          clearToken()
+          navigate('/login', { replace: true })
+        }
+      }
+    })
   }
 
   return (
@@ -161,6 +192,13 @@ export default function AppLayout() {
           <Dropdown
             menu={{
               items: [
+                {
+                  key: 'logout-all',
+                  icon: <DesktopOutlined />,
+                  label: t('layout.logoutAll'),
+                  onClick: logoutAll
+                },
+                { type: 'divider' as const },
                 {
                   key: 'logout',
                   icon: <LogoutOutlined />,

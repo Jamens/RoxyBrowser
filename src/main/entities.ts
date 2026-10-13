@@ -63,6 +63,15 @@ export class UserEntity {
   @Column({ type: 'tinyint', default: 0 })
   twoFactorEnabled: boolean
 
+  /**
+   * 会话版本号：递增即吊销该用户**全部**已签发的会话令牌。
+   * 登出 / 改密码 / 管理员强制下线都靠它实现——见 `shared/sessionRevoke.ts`。
+   * 不用 JWT 黑名单是因为黑名单要无限增长且过期清理出错（漏删 = 死令牌仍有效），
+   * 而我们真正需要的语义是「让某个用户的全部会话失效」，一个整数就够了。
+   */
+  @Column({ type: 'int', default: 0 })
+  tokenVersion: number
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }

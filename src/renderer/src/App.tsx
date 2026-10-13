@@ -1,13 +1,27 @@
-import { useLayoutEffect, lazy, Suspense } from 'react'
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useLayoutEffect, lazy, Suspense, useEffect } from 'react'
+import { HashRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { ConfigProvider, theme, App as AntdApp, Spin } from 'antd'
 import { useIsDark } from './theme'
 import { I18nProvider, useI18n } from './i18n'
 import { antdLocaleFor } from './i18n/antdLocale'
+import { setSessionExpiredHandler } from './api'
 import Login from './pages/Login'
 import AppLayout from './pages/Layout'
 import BrowserTab from './pages/BrowserTab'
 import AssistantChat from './components/AssistantChat'
+
+/**
+ * 会话守卫：把「服务端已吊销本会话」转成一次自动登出。
+ * 无需渲染任何 UI，故返回 null——它只是把 api.ts 的回调接到 navigate 上。
+ */
+function SessionGuard() {
+  const navigate = useNavigate()
+  useEffect(() => {
+    setSessionExpiredHandler(() => navigate('/login', { replace: true }))
+    return () => setSessionExpiredHandler(null)
+  }, [navigate])
+  return null
+}
 
 // 启动速度优化：除登录 / 浏览器全屏页外，其余页面按需懒加载，
 // 首屏只加载 AppLayout 骨架 + 当前路由对应 chunk，其余页面进入时再拉取。
@@ -73,6 +87,10 @@ function AppShell() {
       */}
       <AntdApp style={{ height: '100%' }}>
         <HashRouter>
+          {/* 会话失效自动登出：服务端吊销令牌后（登出 / 退出所有设备 / 过期），
+              任意接口返回 401 都会清掉本地令牌并跳登录页。
+              注册在 HashRouter 内是因为要用 navigate，且用 useEffect 而非模块级调用。 */}
+          <SessionGuard />
           <Suspense
             fallback={
               <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>

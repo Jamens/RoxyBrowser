@@ -13,6 +13,13 @@ import { getJwtSecret } from './jwtSecret'
 import { lazySecretCrypto } from './secretKey'
 import { clampPort } from '../shared/cdp'
 import {
+  checkSession,
+  nextSessionVersion,
+  SESSION_TTL_DAYS,
+  type SessionClaims,
+  type SessionVerdict
+} from '../shared/sessionRevoke'
+import {
   bumpFailureCount,
   planProxyHealing,
   type FailureCounts,
@@ -154,22 +161,94 @@ async function freshRole(req: AuthedRequest): Promise<string> {
 
 // ---------- 工具 ----------
 
-function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
+/**
+ * 会话鉴权中间件。
+ *
+ * 签名/过期由 `jwt.verify` 校验；**会话撤销**（登出 / 改密码 / 强制下线）
+ * 靠比对 `users.tokenVersion`——版本号落后即视为已撤销。详见 `shared/sessionRevoke.ts`。
+ *
+ * 异步实现对 105 处调用方完全透明：Express 会捕获中间件返回的 Promise 拒绝。
+ * 每请求多一次 `users` 查询是必要代价——无状态 JWT 想支持撤销只能如此，
+ * 且可以命中数据库索引（主键查询）。
+ */
+async function authMiddleware(req: AuthedRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7) : String(req.query.token || '')
+  let claims: SessionClaims
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { uid: number; tid: number; username: string; role: string; purpose?: string }
-    // 拒绝「分步挑战令牌」(purpose 存在)：它只能用于 /auth/2fa/verify 换取会话令牌，
-    // 绝不能当作完整会话令牌去访问受保护接口，否则存在 2FA 降级/绕过风险。
-    if (payload.purpose) return res.status(401).json({ message: '令牌类型无效，请重新登录' })
-    req.uid = payload.uid
-    req.tid = payload.tid
-    req.username = payload.username
-    req.role = payload.role
-    next()
+    claims = jwt.verify(token, JWT_SECRET) as SessionClaims
   } catch {
     res.status(401).json({ message: '未登录或登录已过期' })
+    return
   }
+  const verdict = await checkSessionAndRevoked(claims)
+  if (!verdict.valid) {
+    // 撤销类拒绝带上 code，前端据此清理本地令牌并跳登录页（而不是弹个看不懂的报错）
+    res.status(401).json({ message: verdict.reason, code: verdict.code })
+    return
+  }
+  req.uid = claims.uid
+  req.tid = claims.tid
+  req.username = claims.username
+  req.role = claims.role
+  next()
+}
+
+/** 查库取当前用户的 tokenVersion，再做撤销判定 */
+async function checkSessionAndRevoked(claims: SessionClaims): Promise<SessionVerdict> {
+  // 用户不存在也按撤销处理：账号被删除后其令牌不应继续可用
+  const user = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: claims.uid } })
+  if (!user) return { valid: false, reason: '账号不存在，请重新登录', code: 'session_revoked' }
+  return checkSession(claims, user.tokenVersion)
+}
+
+/**
+ * 签发会话令牌的**唯一入口**。
+ *
+ * 收敛到一处的原因是：5 个签发点（注册 / 登录 / 2FA 验证 / 切换团队 / 其他）
+ * 各自手写 payload 极易漏掉 `ver` 字段——而漏掉的后果是「这个入口签发的令牌
+ * 一律被判为版本 0」，用户改密码后这些令牌不会失效，撤销功能静默破防。
+ * 漏写不会有任何编译错误或测试报错，只会悄悄地让安全机制失效。
+ */
+function signSessionToken(
+  args: { uid: number; username: string; tokenVersion: number | null; tid: number; role: string },
+  ttl: `${number}d` = `${SESSION_TTL_DAYS}d`
+): string {
+  return jwt.sign(
+    {
+      uid: args.uid,
+      tid: args.tid,
+      username: args.username,
+      role: args.role,
+      ver: args.tokenVersion ?? 0
+    },
+    JWT_SECRET,
+    { expiresIn: ttl }
+  )
+}
+
+/** 从实体取签发所需的字段（避免各调用点手工拼装对象） */
+function sessionOf(user: UserEntity, tid: number, role: string) {
+  return { uid: user.id, username: user.username, tokenVersion: user.tokenVersion, tid, role }
+}
+
+/**
+ * 递增 tokenVersion 吊销该用户全部会话，并写审计日志。
+ *
+ * 刻意**不给当前调用方返回新令牌**——撤销后当前设备也必须重新登录。
+ * 若「退出所有设备」还让本机保持登录，用户会觉得按钮没生效，实际上是自欺欺人。
+ */
+async function revokeAllSessions(uid: number, tid: number, username: string, reason: string): Promise<void> {
+  const userRepo = AppDataSource.getRepository(UserEntity)
+  const user = await userRepo.findOne({ where: { id: uid } })
+  if (!user) return
+  user.tokenVersion = nextSessionVersion(user.tokenVersion ?? 0)
+  await userRepo.save(user)
+  await writeLog(
+    { uid, tid, username, role: 'member' } as AuthedRequest,
+    'logout',
+    `${reason}：已吊销该用户全部会话（其他设备需重新登录）`
+  )
 }
 
 function tokenAuthMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -1054,7 +1133,7 @@ function buildApiRouter(): express.Router {
     // 默认分组
     const groupRepo = AppDataSource.getRepository(GroupEntity)
     await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
-    const token = jwt.sign({ uid: user.id, tid: team.id, username, role: 'owner' }, JWT_SECRET, { expiresIn: '7d' })
+    const token = signSessionToken(sessionOf(user, team.id, 'owner'))
     res.json({ token, user: { id: user.id, username, nickname: user.nickname, role: 'owner' } })
   })
 
@@ -1075,21 +1154,52 @@ function buildApiRouter(): express.Router {
       await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
       teamId = team.id
     }
-    // 登录二次验证（TOTP）：已启用则只发短期挑战令牌，需再用动态码换取正式令牌
+    // 登录二次验证（TOTP）：已启用则只发短期挑战令牌，需再用动态码换取正式令牌。
+    // 挑战令牌同样带上 ver —— 否则用户改密码后，5 分钟内已发出的挑战令牌
+    // 仍能换成正式令牌，撤销机制被绕过。
     if (user.twoFactorEnabled && user.twoFactorSecret) {
       const challengeToken = jwt.sign(
-        { uid: user.id, tid: teamId, username: user.username, role: member?.role || 'owner', purpose: '2fa' },
+        {
+          uid: user.id,
+          tid: teamId,
+          username: user.username,
+          role: member?.role || 'owner',
+          purpose: '2fa',
+          ver: user.tokenVersion ?? 0
+        },
         JWT_SECRET,
         { expiresIn: '5m' }
       )
       return res.json({ twoFactorRequired: true, challengeToken })
     }
-    const token = jwt.sign(
-      { uid: user.id, tid: teamId, username: user.username, role: member?.role || 'owner' },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    )
+    const token = signSessionToken(sessionOf(user, teamId, member?.role || 'owner'))
     res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: member?.role || 'owner' } })
+  })
+
+  // ===== 会话撤销 =====
+// 此前「登出」只是前端清 localStorage，令牌在服务端依然有效满 7 天——
+// 令牌一旦被截获（XSS / 日志泄漏 / 备份文件），攻击者可在有效期内完整使用该账号。
+// 递增 users.tokenVersion 即吊销该用户全部已签发令牌（O(1)，无需黑名单）。
+router.post('/auth/logout', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    await revokeAllSessions(req.uid!, req.tid!, req.username || '', '用户登出')
+    res.json({ ok: true })
+  })
+
+  router.post('/auth/logout-all', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    await revokeAllSessions(req.uid!, req.tid!, req.username || '', '退出所有设备')
+    res.json({ ok: true })
+  })
+
+  // 当前会话状态：供设置页展示「登录有效期」「会话是否仍有效」
+  router.get('/auth/session', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const user = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: req.uid } })
+    res.json({
+      ok: true,
+      ttlDays: SESSION_TTL_DAYS,
+      twoFactorEnabled: !!user?.twoFactorEnabled,
+      username: req.username,
+      teamId: req.tid
+    })
   })
 
   router.get('/auth/me', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -1147,11 +1257,11 @@ function buildApiRouter(): express.Router {
     } catch {
       /* 窗口关闭异常时跳过 */
     }
-    const token = jwt.sign(
-      { uid: req.uid, tid: teamId, username: req.username, role: member.role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    )
+    // 重发令牌必须带上当前 tokenVersion：否则切换团队签出的新令牌会「领先」
+    // 于库里版本，下一次校验会被判为 session_revoked 而把用户踢下线
+    const swUser = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: req.uid } })
+    if (!swUser) return res.status(401).json({ message: '账号不存在' })
+    const token = signSessionToken(sessionOf(swUser, teamId, member.role))
     await AppDataSource.getRepository(OperationLogEntity).save({
       teamId,
       userId: req.uid,
@@ -1219,11 +1329,7 @@ function buildApiRouter(): express.Router {
     if (!user || !user.twoFactorEnabled || !user.twoFactorSecret)
       return res.status(401).json({ message: '2FA 状态异常，请重新登录' })
     if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
-    const token = jwt.sign(
-      { uid: user.id, tid: payload.tid, username: user.username, role: payload.role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    )
+    const token = signSessionToken(sessionOf(user, payload.tid, payload.role))
     res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: payload.role } })
   })
 

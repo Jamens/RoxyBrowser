@@ -106,6 +106,10 @@ const zhCN = {
   'login.slideIsolateDesc': '每个账号独享一套设备指纹与出口 IP，跨境电商、社媒矩阵批量运营互不串号。',
 
   // ---- 顶栏 ----
+'layout.logoutAll': '退出所有设备',
+  'layout.logoutAllConfirm': '退出所有设备？',
+  'layout.logoutAllDesc': '将立即吊销你名下所有已登录设备（含本机）的会话，其他设备需要重新登录。若怀疑账号被盗，建议同时修改密码。',
+
   'layout.logout': '退出登录',
   'layout.logoutSuccess': '已退出登录',
   'layout.memory': '内存',
@@ -565,6 +569,10 @@ const enUS: MessageDict = {
   'login.slideIsolateTitle': 'Anti-association · Isolated profiles',
   'login.slideIsolateDesc': 'Each account gets its own device fingerprint and exit IP, so cross-border stores and social matrices never get linked.',
 
+'layout.logoutAll': 'Sign out all devices',
+  'layout.logoutAllConfirm': 'Sign out all devices?',
+  'layout.logoutAllDesc': 'Immediately revokes all sessions signed in under your account (including this device); other devices must sign in again. If you suspect the account was compromised, change your password as well.',
+
   'layout.logout': 'Sign out',
   'layout.logoutSuccess': 'Signed out',
   'layout.memory': 'Memory',
@@ -1023,6 +1031,10 @@ const jaJP: MessageDict = {
   'login.slideIsolateTitle': '紐付け防止 · 独立環境',
   'login.slideIsolateDesc': '各アカウントが固有の指紋と出口 IP を持ち、越境 EC や SNS 運用でも紐付け判定されません。',
 
+'layout.logoutAll': '全デバイスからログアウト',
+  'layout.logoutAllConfirm': '全デバイスからログアウトしますか？',
+  'layout.logoutAllDesc': 'アカウントにログイン中のすべてのデバイス（このデバイスを含む）のセッションを即座に無効化します。他のデバイスでは再ログインが必要になります。アカウントの乗っ取りが疑われる場合は、パスワードも変更してください。',
+
   'layout.logout': 'ログアウト',
   'layout.logoutSuccess': 'ログアウトしました',
   'layout.memory': 'メモリ',
@@ -1479,6 +1491,10 @@ const deDE: MessageDict = {
   'login.slidePrivacyDesc': 'End-to-End isolierte Fingerprint-Umgebungen; alle Daten liegen in Ihrer lokalen Datenbank, nichts geht in die Cloud.',
   'login.slideIsolateTitle': 'Keine Verknüpfung · Isolierte Profile',
   'login.slideIsolateDesc': 'Jedes Konto erhält eigenen Fingerprint und eigene Exit-IP – Shops und Social-Media-Konten werden nicht verknüpft.',
+
+'layout.logoutAll': 'Von allen Geräten abmelden',
+  'layout.logoutAllConfirm': 'Von allen Geräten abmelden?',
+  'layout.logoutAllDesc': 'Hebt alle Sessions Ihres Kontos (einschließlich diesem Gerät) sofort auf. Andere Geräte müssen sich neu anmelden. Bei Verdacht auf Kontoübernahme ändern Sie bitte auch das Passwort.',
 
   'layout.logout': 'Abmelden',
   'layout.logoutSuccess': 'Abgemeldet',
