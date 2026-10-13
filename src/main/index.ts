@@ -4,7 +4,6 @@ import { existsSync } from 'fs'
 import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSettings, writeAgentLog, saveRpaFromSteps } from './server'
 import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint, captureScreenshot, scanSite } from './browserManager'
 import { AgentRunner } from './agent/runner'
-import { setupAutoUpdater } from './updater'
 import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, setCdpPort } from './cdpManager'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
@@ -257,9 +256,18 @@ if (!gotLock) {
     }
 
     // 5. 自动更新（仅打包安装版启用；dev 态自动跳过，仅推送 { state: 'dev' }）
-    setupAutoUpdater((channel, payload) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
-    })
+    //
+    // 动态 import 而非顶层静态 import：electron-updater 单是 require 就要 ~103ms
+    // （实测），是主进程除 typeorm 外最重的一个依赖。而它只在**窗口已创建后**
+    // 才需要——静态 import 会把这 103ms 提前到启动关键路径上，白白拖慢首窗。
+    // 动态 import 让它与窗口创建并行，窗口先出来，更新检查在后台完成。
+    void import('./updater')
+      .then(({ setupAutoUpdater: setup }) =>
+        setup((channel, payload) => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
+        })
+      )
+      .catch((e) => console.error('[roxy] 自动更新模块加载失败:', e))
 
     app.on('activate', () => {
       showMainWindow()

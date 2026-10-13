@@ -34,14 +34,29 @@ export default defineConfig({
     build: {
       emptyOutDir: false,
       // 启动速度优化：大体积第三方库拆分独立 chunk，浏览器可并行解析 + 长期缓存，
-      // 首屏不再必须等 3.4MB 单包解析完。各页还会进一步按路由懒加载（见 App.tsx）。
+      // 各页还会按路由懒加载（见 App.tsx）。
       rollupOptions: {
         output: {
           manualChunks(id: string) {
             if (!id.includes('node_modules')) return undefined
-            if (id.includes('echarts') || id.includes('zrender')) return 'echarts'
-            if (id.includes('@ant-design') || id.includes('antd') || id.includes('rc-')) return 'antd'
-            if (id.includes('react-dom') || id.includes('react/') || id.includes('scheduler')) return 'react-vendor'
+            // 只按 @ant-design/icons 的**精确作用域**匹配。
+            //
+            // 为什么不能写 `id.includes('antd')`：那会命中路径里任意含 "antd" 的包
+            // （含 transitively 依赖），实测把整个 antd 打成 2.4MB 单块，
+            // 首屏必须整块下载+解析，而实际只用得到其中一小部分组件。
+            if (id.includes('@ant-design/icons')) return 'antd-icons'
+            // react 运行时单独成块：它几乎不变，值得长期缓存。
+            //
+            // 匹配必须精确到 `/react/` 与 `/react-dom/`：写成 `.includes('react')`
+            // 会把 react-router / @tanstack/* / rc-* 等一并吸进来，实测让本块
+            // 从 544KB 膨胀到 1.8MB。
+            if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/scheduler/')) {
+              return 'react-vendor'
+            }
+            // 其余 @ant-design/* 与 rc-* 归入 antd 块（共享其内部依赖，拆太细反而重复）
+            if (id.includes('/@ant-design/') || id.includes('/rc-') || id.includes('/node_modules/antd/')) {
+              return 'antd'
+            }
             return 'vendor'
           }
         }

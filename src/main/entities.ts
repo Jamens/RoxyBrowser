@@ -247,6 +247,9 @@ export class ProxyEntity {
 
 @Entity('profiles')
 @Index(['teamId'])
+// 覆盖 `WHERE status = 'running'`：启动自愈与「运行中」筛选都靠它。
+// 缺索引时环境一多就是全表扫——这是启动路径上的固定开销。
+@Index(['status'])
 export class ProfileEntity {
   @PrimaryGeneratedColumn()
   id: number

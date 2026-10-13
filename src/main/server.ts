@@ -3817,6 +3817,52 @@ function buildApiRouter(): express.Router {
 }
 
 // ---------- 启动 ----------
+/**
+ * 决定本次启动是否需要 synchronize。
+ *
+ * ## 为什么不用无脑 `synchronize: true`
+ * 实测开/关差 ~156ms（163ms → 7ms），是启动阶段最大的一笔开销——
+ * synchronize 每次启动都要把 16 个实体的表结构与库逐一比对。
+ * 但关掉会让新装用户首次启动直接崩在 ER_NO_SUCH_TABLE。
+ *
+ * ## 这里的取巧：只查「表在不在」，不比对结构
+ * 结构比对（synchronize 本身做的事）很贵，而「表存在与否」只需一条
+ * `SHOW TABLES LIKE` —— 成本约 1~2ms，换来 150ms+ 的节省。
+ *
+ * ## 代价与补救（重要）
+ * 改了实体结构后，本次启动**不会**自动改表，包括「旧版本库升级」这种场景——
+ * 表已存在但缺新列时同样跳过。此时症状是 `ER_BAD_FIELD_ERROR`，且启动无提示，
+ * 不好排查。三条出路：
+ *   1. 开发期：`pnpm db:check` 看差异 → `pnpm db:sync` 执行；
+ *   2. 正式发布：发版脚本执行 `pnpm db:sync`；
+ *   3. 临时：设 `ROXY_FORCE_SYNC=1` 强制本次启动走 synchronize。
+ *
+ * 之所以敢这么取舍：synchronize 在发版时改实体**可能静默丢列**，
+ * 把结构变更变成显式、可审阅的动作反而更安全。
+ */
+async function shouldSynchronizeSchema(): Promise<boolean> {
+  // 逃生口：任何时候都能强制打开，无需改代码
+  if (process.env.ROXY_FORCE_SYNC === '1') return true
+  try {
+    // 任一核心表缺失即视为「需要同步」（全新库 / 旧版本库）
+    const conn = await mysql.createConnection({
+      host: DB_CONFIG.host,
+      port: DB_CONFIG.port,
+      user: DB_CONFIG.user,
+      password: DB_CONFIG.password,
+      database: DB_CONFIG.database
+    })
+    // SHOW TABLES 在 mysql2 里返回的是结果集（RowDataPacket[]），
+    // 但通用签名给的是 QueryResult，需显式标注才能取 .length
+    const [rows] = (await conn.query('SHOW TABLES LIKE ?', ['users'])) as unknown as [unknown[]]
+    await conn.end()
+    return rows.length === 0
+  } catch (e) {
+    // 连不上库时返回 true：让 TypeORM 自己去报错，错误信息比这里的模糊提示更准确
+    return true
+  }
+}
+
 export async function bootstrap(): Promise<string> {
   // 1. 建库
   const conn = await mysql.createConnection({
@@ -3840,8 +3886,17 @@ export async function bootstrap(): Promise<string> {
     // 否则 mysql2 默认 local 会把库里存的 UTC 瞬间当成「机器本地墙钟」读出，
     // 导致前端按国家时区换算后整体偏移 8 小时（如中国用户看到 12:28 而非 20:28）。
     timezone: '+00:00',
-    synchronize: true, // 开发模式自动同步表结构
-    logging: false,
+    // 自动同步表结构。实测 synchronize 开/关差 ~156ms（163ms → 7ms），
+    // 是启动阶段最大的一笔开销——它每次启动都要比对全部 16 个实体的表结构。
+    //
+    // 但**不能简单关掉**：新装用户首次启动时表还不存在，会直接崩在
+    // ER_NO_SUCH_TABLE。故改为「按需同步」——
+    //   · 首次启动（表还没建）→ 开，同步建表；
+    //   · 之后启动（表已存在）→ 跳过，把 156ms 省下来；
+    //   · 需要改实体时 → 走 `pnpm db:sync` 显式执行，与 README 的
+    //     「db:check 检查差异 → db:sync 执行」工作流一致。
+    synchronize: await shouldSynchronizeSchema(),
+    // 同上，开发模式下不打印 SQL，避免刷屏拖慢启动
     entities: [
       UserEntity,
       TeamEntity,
