@@ -209,7 +209,10 @@ export default function Logs() {
     {
       title: '操作',
       dataIndex: 'action',
-      width: 130,
+      // 最坏情况需 140px：「删除环境」标签 64 + 敏感标签 40 + gap 4 + 单元格内边距 32。
+      // 原 130px 溢出约 10px，敏感操作的双标签会紧贴到详情列上。
+      // 取 180px 另为未映射的英文 action 留余量（如 api_random_fingerprint 约 170px）。
+      width: 180,
       render: (v, r) => (
         <Space size={4}>
           <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
@@ -352,7 +355,7 @@ function ArchivePanel({ onReverted }: { onReverted: () => void }) {
     {
       title: '操作',
       dataIndex: 'action',
-      width: 130,
+      width: 180,
       // 与热区保持一致：sensitive 是 tinyint 数字，必须 !! 转布尔，否则渲染出「0」
       render: (v: string, r: ArchivedLogDTO) => (
         <Space size={4}>
