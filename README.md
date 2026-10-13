@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（13 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（14 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
 pnpm migrate:secrets --apply  # 真执行迁移
@@ -142,6 +142,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **账号-环境批量关联（应用层）**：账号中心列表勾选多个账号，一键统一绑定到某个目标环境（改写 AccountEntity.profileId）
 - **列表搜索 / 筛选 / 收藏（应用层）**：环境列表与账号列表均支持——环境：关键词搜索（名称/备注/平台）+ 分组筛选；账号：关键词搜索（平台/账号/备注）+ 所属环境筛选 + 平台筛选；两者均可叠加（后端 GET 参数）。两列表均新增首列星标「收藏」与工具栏「仅看收藏」开关，收藏集存于浏览器 localStorage（不落库、不加列），删除后自动裁剪脏 ID。；仅对当前用户可见的账号生效（member 只动自己账号），目标环境须为有效非模板环境。免去逐条在编辑弹窗里选环境。——彻底规避「两个环境共用同一代理」这一防关联大忌（与旧的「绑定代理=全部绑同一代理」反模式相反）。支持按国家 / 类型过滤；已独占合规代理的环境原地保留、运行中的环境不动、池不足的环境标记跳过（绝不强行复用）。分配核心逻辑抽成纯函数 allocateProxies（已离线单测 20 例全绿）。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
+- **接口限流 + 登录锁定**：滑动窗口限流抬高暴力尝试成本；登录失败按**用户名**计数并临时锁定，锁定事件写日志 + 推 webhook，详见下节
 - **凭据静态加密**：账号密码 / 代理密码 / 2FA 密钥 / 云端 API Key 全部以 AES-256-GCM 密文入库，密钥来自环境变量或本地文件、**绝不回落默认值**；历史明文可一键迁移，详见下节
 - **CDP 调试端口**：可选开启后可用 Playwright / Puppeteer 等外部工具接管环境窗口，并给出「环境 → target」映射；**仅监听 127.0.0.1**，详见下节
 
@@ -331,6 +332,27 @@ app.listen(4000)
 - **不会自动跳回**：检测后停在检测站结果页（而不是退回起始页），因为跳回会重新加载、可能丢失用户登录态或表单；需要时请自行后退。
 - **隐私提示**：此功能会把环境窗口的真实指纹发送给第三方站点，UI 已用 Alert 明确告知；对高价值账号环境请谨慎使用。
 
+### 接口限流 + 登录锁定
+
+**先说清风险评估，避免过度设计**：本地 API 只监听 `127.0.0.1`（`server.ts` 的 `s.listen(port, '127.0.0.1')`），**不暴露局域网**——外部攻击面本就很小。所以限流的价值不是「防网络攻击」，而是两个仍然成立的点：
+
+1. **浏览器里的恶意脚本**：`fetch('http://127.0.0.1:39100/api/...')` 对同机任何网页都成立。CORS 只阻止**读**响应，不阻止**发出**请求，所以同源策略挡不住这里。
+2. **登录爆破**：本机任意进程可无限次尝试 `/auth/login`，而默认账号是 `admin / 123456`，无锁定机制时爆破成本几乎为零。
+
+- **滑动窗口而非固定窗口**：固定窗口（每分钟计数清零）有经典绕过——窗口末尾打满 N 次、下个窗口开头再打 N 次，实际 2 倍速率。滑动窗口按时间戳保留每次请求，边界无法卡。判定逻辑在 `src/shared/rateLimit.ts`（纯函数，可离线单测）。
+- **登录失败按「用户名」计数而非 IP** —— 这是本功能最关键的一个决策。本地所有请求都来自 `127.0.0.1`，若按 IP 计数，等于**所有人共用一个额度**：攻击者只要猛打任意账号，就能把正常用户一起锁在门外（自我 DoS）。按用户名计数才能精准打击爆破目标。
+- **但按用户名计数可被「轮换用户名」绕过** —— 故注册接口也限流（每客户端每小时 10 次），否则攻击者注册新号重试就能规避锁定。
+- **锁定检查必须在比对密码之前**：先查锁定可直接拒掉；若先比对密码，被锁期间攻击者仍能不断发送密码尝试（拿不到会话，但等于保留了密码爆破的探测能力）。
+- **锁定到期后失败计数必须清零** —— 否则用户解封后第一次输错就又被锁，永远解不开。实现上采用**惰性清理**（下次调用检查入口时 `pruneHits` 顺手清），不额外起定时器。
+- **剩余次数提示只在临界值给**（剩余 ≤3）：过早提示等于帮爆破者精确定位阈值。
+- **超限不消费额度**：若被拒的请求也记入窗口，会错误地延长恢复时间。
+- **状态码区分**：限流 429、锁定 423（Locked），响应带 `Retry-After` 与 `X-RateLimit-Remaining`。
+- **限额走内存缓存**：限流中间件在每个请求前执行，若每次 `await getSettings()` 就多一次 MySQL 查询，高频轮询下成瓶颈。缓存在 `PUT /settings` 时失效重取，兼顾「改设置立即生效、无需重启」。
+- **`/healthz` 不限流**：外部调度器可能高频探测，超限会导致误判服务已死。
+- **锁定事件写操作日志 + 推 webhook**（`login_locked`），可接告警及时察觉账号正被爆破。此刻可能尚未登录（甚至在爆破不存在的用户名），故用系统日志入口记 `tid=0` ——「谁被攻击」比「记在哪个团队下」更重要。
+
+设置页 →「安全」分区可调三项：接口限流（0 = 关闭）、锁定阈值（0 = 不锁定）、锁定时长。
+
 ### 凭据静态加密（AES-256-GCM）
 
 此前 `accounts.password`、`proxies.password`、`users.twoFactorSecret` 与 `app_settings.aiAgent.cloudApiKey` **全部明文入库**——全项目没有任何加解密实现。对一个以「多账号防关联」为卖点、且专门做了 `api_tokens` 敏感拦截的产品，一份 mysqldump 就等于全部店铺账号 + 2FA 长期接管权，是自相矛盾的硬伤。
@@ -458,6 +480,7 @@ src/
 │   ├── cdp.ts                # CDP 调试端点：端口规整 / 分配 / endpoint 拼装（**零 Node 依赖**，renderer 也会 import）
 │   ├── proxyHeal.ts          # 代理故障自愈：阈值闸门 / 合规替代代理挑选 / 跨环境出口 IP 去重（纯函数，可单测）
 │   ├── sessionRevoke.ts      # 会话撤销判定：tokenVersion 比对 / 类型校验（纯函数，可单测）
+│   ├── rateLimit.ts          # 接口限流与登录锁定：滑动窗口 / 失败计数 / 锁定到期（纯函数，可单测）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -486,13 +509,14 @@ src/
 6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 7. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 8. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 13 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 14 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 10. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 11. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 12. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
 13. **`src/shared/` 禁止 import Node 模块**：shared 是主进程 / 渲染进程共用层，只要 renderer 侧（`@shared/xxx`）引用到某个文件，该文件就会被 vite 打进浏览器包。引入 `net` / `fs` / `path` 等会直接构建失败，报 `Module "net" has been externalized for browser compatibility`。需要 Node 能力的实现拆成两个文件——纯逻辑留 `shared/`、Node 侧留 `main/`（如 `shared/cdp.ts` 只有端口规整与 endpoint 拼装，`probePort` 在 `main/cdpManager.ts`）。
 14. **新增 `jwt.sign` 会话令牌只能走 `signSessionToken()`**：手写 payload 漏掉 `ver`（会话版本号）不会有任何编译错误或测试报错，只会让该入口签发的令牌**永不被撤销**——撤销功能静默破防，且极难定位。判定逻辑见 `shared/sessionRevoke.ts`。同理，任何"要求客户端重新登录"的改动都必须同时确认 `api.ts` 的 401 分支能正确清理本地令牌并跳登录页。
-15. **往 `routes/` 拆路由必须经 deps 注入，且不得反向 import server**：`routes/* → server → routes` 会形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 `undefined`——表现为「一调用就报 undefined」，且只在启动后才暴露。故 `getDs` 一律传 `() => AppDataSource` 函数；跨模块只用 `import type`（编译期擦除）。另注意**注册顺序**：`/logs/export` 这类静态路径必须先于 `/logs` 注册，否则被动态路由抢先匹配。
+15. **往 `routes/` 拆路由必须经 deps 注入，且不得反向 import server**：`routes/* → server → routes` 会形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 `undefined`——表现为「一调用就报 undefined」，且只在启动后才暴露。故 `getDs` 一律传 `() => AppDataSource` 函数；跨模块只用 `import type`（编译期擦除）。连 `clientKeyOf` 这类纯工具也下沉到 `shared/`，避免 `routes → main` 的反向依赖。另注意**注册顺序**：`/logs/export` 这类静态路径必须先于 `/logs` 注册，否则被动态路由抢先匹配。
+16. **每请求前执行逻辑不要直接查库**：限流中间件在每个请求前跑，若每次 `await getSettings()` 就多一次 MySQL 查询，高频轮询下成瓶颈。用内存缓存 + 在写入口（`PUT /settings`）失效重取，兼顾「改设置立即生效」。同理，`BucketStore` 用定时 `sweep` 清理空桶，且定时器要 `unref()` 以免阻止应用退出。
 
 ## 打包分发
 
