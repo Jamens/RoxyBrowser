@@ -119,10 +119,18 @@ export function diffBaseline(
       skipReason
     })
   }
-  // 回归的排最前，其余按降幅从大到小（变差的在前，变好的在后）
+  // 回归的排最前，其余按降幅从大到小（变差的在前，变好的在后）。
+  //
+  // **delta 相同时必须用 key 兜底**，否则顺序取决于两个都不是契约的东西：
+  //   ① 插入顺序来自 `Object.keys(baseline.items)`，即基线 JSON 的键书写顺序；
+  //   ② `Array.prototype.sort` 的稳定性自 ES2019 起才是规范保证，
+  //      且不同引擎 / 不同数组长度走不同算法（实测 15 项并列项顺序会随输入键序漂移）。
+  // 那种「当前恰好稳定」的隐式依赖，会在换引擎或将来重构时静默变样——
+  // 表现为告警顺序随机跳动，用户会以为是误报。显式 tie-breaker 把它变成契约。
   out.sort((a, b) => {
     if (a.regressed !== b.regressed) return a.regressed ? -1 : 1
-    return a.delta - b.delta
+    if (a.delta !== b.delta) return a.delta - b.delta
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
   })
   return out
 }

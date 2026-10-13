@@ -140,6 +140,24 @@ t('scanExpiring：按剩余天数升序（最紧急的排最前）', () => {
   assert.deepStrictEqual(r.map((x) => x.daysLeft), [-3, 1, 5])
 })
 
+t('scanExpiring：剩余天数并列时按 id 排序，不随输入顺序漂移', () => {
+  // 回归用例：批量买的代理往往同一天到期 → daysLeft 完全并列。
+  // 原先只写 `a.daysLeft - b.daysLeft`，并列时返回 0，顺序取决于输入顺序 +
+  // sort 稳定性，而这个顺序会直接进用户看到的告警文案。
+  const items = [item(9, 3), item(3, 3), item(7, 3), item(1, 3)]
+  const r = scanExpiring({ items, thresholdDays: 7, now: NOW })
+  assert.deepStrictEqual(r.map((x) => x.id), [1, 3, 7, 9], '应按 id 升序，与输入顺序无关')
+
+  const shuffled = [item(7, 3), item(1, 3), item(9, 3), item(3, 3)]
+  const r2 = scanExpiring({ items: shuffled, thresholdDays: 7, now: NOW })
+  assert.deepStrictEqual(r2.map((x) => x.id), [1, 3, 7, 9], '仅输入顺序不同，输出不该变')
+})
+
+t('scanExpiring：daysLeft 不同时仍按紧急度排序（id 兜底不影响主序）', () => {
+  const r = scanExpiring({ items: [item(5, 1), item(2, 5)], thresholdDays: 7, now: NOW })
+  assert.deepStrictEqual(r.map((x) => x.daysLeft), [1, 5], '更紧急的(1天)必须在前')
+})
+
 t('scanExpiring：同时包含已过期与即将到期时，过期的排前面', () => {
   const r = scanExpiring({ items: [item(1, 2), item(2, -10)], thresholdDays: 7, now: NOW })
   assert.strictEqual(r[0].level, 'expired')

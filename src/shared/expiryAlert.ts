@@ -112,8 +112,16 @@ export function scanExpiring(input: ExpiryScanInput): ExpiryAlert[] {
       level: daysLeft < 0 ? 'expired' : 'expiring'
     })
   }
-  // 先过期、再即将到期；同级按剩余天数升序（最紧急的排最前）
-  out.sort((a, b) => a.daysLeft - b.daysLeft)
+  // 先过期、再即将到期；同级按剩余天数升序（最紧急的排最前）。
+  //
+  // **daysLeft 相同时必须用 id兜底**：同日到期的代理/环境**非常常见**
+  // （批量买的往往同一天到期），此时 daysLeft 完全并列，原先 `a.daysLeft - b.daysLeft`
+  // 返回 0，顺序取决于输入顺序 + sort 稳定性。而这个顺序会直接进用户看到的
+  // 告警文案里——顺序随机跳动会让人怀疑「是不是误报了」。
+  out.sort((a, b) => {
+    if (a.daysLeft !== b.daysLeft) return a.daysLeft - b.daysLeft
+    return a.id - b.id
+  })
   return out
 }
 

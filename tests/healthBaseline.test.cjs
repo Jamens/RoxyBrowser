@@ -122,10 +122,46 @@ t('回归项排最前，其次按降幅从大到小', () => {
   assert.strictEqual(d[0].regressed, true, '第一个必须是回归项')
   const regressed = regressedItems(d).map((x) => x.key)
   // 基线均为 80%：a→10%(-70)、c→50%(-30)、d→30%(-50)，故 a、d、c
-  // 降幅：a -70pp、c -30pp、d -30pp（c 与 d 持平，按 key 字典序 c 在前）
+  // 降幅：a -70pp、c -30pp、d -30pp；c 与 d 持平，按 key 字典序 c 在前
   assert.deepStrictEqual(regressed, ['a', 'c', 'd'], '回归项内按降幅从大到小')
   assert.deepStrictEqual(d.map((x) => x.key), ['a', 'c', 'd', 'b'], '整体：回归在前，改善在后')
   assert.ok(d.find((x) => x.key === 'b'), '改善项也要列出（让用户知道在变好）')
+})
+
+// ---------- 并列项顺序：必须是契约，不能靠 sort 的稳定性兜 ----------
+t('并列项（delta 相同）按 key 字典序，不随输入键序漂移', () => {
+  // 回归用例：原先只写 `a.delta - b.delta`，并列时返回 0，顺序取决于
+  // Object.keys 的插入顺序 + V8 排序稳定性。实测 15 项并列时顺序会随输入键序漂移，
+  // 表现为告警顺序随机跳动、用户误以为是误报。
+  const items = {}
+  const cur = {}
+  for (let i = 0; i < 15; i++) {
+    items[`k${i}`] = { passed: 8, failed: 2, na: 0 }
+    cur[`k${i}`] = { passed: 5, failed: 5, na: 0 } // 全部 -30pp，完全并列
+  }
+  const mk = (obj) => ({ savedAt: '', probed: 10, avgScore: 90, items: obj })
+
+  const forward = diffBaseline(mk(items), cur).map((x) => x.key)
+  const reversed = {}
+  Object.keys(items).reverse().forEach((k) => { reversed[k] = items[k] })
+  const backward = diffBaseline(mk(reversed), cur).map((x) => x.key)
+
+  assert.deepStrictEqual(forward, backward, '仅键书写顺序不同，输出却不同 → 顺序依赖输入顺序')
+  assert.deepStrictEqual(forward, [...forward].sort(), '并列项应按 key 字典序排列')
+})
+
+t('小样本量的并列项同样按 key 排序（≤10 项也走同一规则）', () => {
+  const items = { b: { passed: 8, failed: 2, na: 0 }, a: { passed: 8, failed: 2, na: 0 }, c: { passed: 8, failed: 2, na: 0 } }
+  const cur = { a: { passed: 0, failed: 10, na: 0 }, b: { passed: 0, failed: 10, na: 0 }, c: { passed: 0, failed: 10, na: 0 } }
+  const d = diffBaseline({ savedAt: '', probed: 10, avgScore: 90, items }, cur)
+  assert.deepStrictEqual(d.map((x) => x.key), ['a', 'b', 'c'])
+})
+
+t('delta 不同时仍按降幅排序（tie-breaker 不影响主序）', () => {
+  const base = bl({ a: { passed: 8, failed: 2, na: 0 }, b: { passed: 8, failed: 2, na: 0 } })
+  const cur = { a: { passed: 3, failed: 7, na: 0 }, b: { passed: 6, failed: 4, na: 0 } } // a -50pp, b -20pp
+  const d = diffBaseline(base, cur)
+  assert.deepStrictEqual(d.map((x) => x.key), ['a', 'b'], '降幅大的必须在前，与 key 无关')
 })
 
 // ---------- 文案 ----------
