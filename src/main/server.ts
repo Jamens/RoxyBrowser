@@ -54,7 +54,6 @@ import {
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { getEnvExpiresAt } from '../shared/envExpiry'
-import { planBatch, canPurge, canRestore, type TrashItemLike } from '../shared/trashBatch'
 import { substituteSteps } from '../shared/rpa'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
@@ -95,13 +94,13 @@ import {
   getRunningWindowIds,
   replayRpaScript,
   closeWindow,
-  applyCookies,
-  clearProfilePartition
+  applyCookies
 } from './browserManager'
 // 扩展管理与 RPA 脚本域已拆出；下面这些浏览器侧能力随之只在 routes/rpa.ts 里被引用。
 import { registerExtensionRoutes } from './routes/extensions'
 import { registerRpaRoutes } from './routes/rpa'
 import { registerAssistantRoutes } from './routes/assistant'
+import { registerTrashRoutes } from './routes/trash'
 
 // ---------- 配置 ----------
 // 默认端口 3306（Docker / 官方安装版的 MySQL 默认监听端口）。环境变量 DB_PORT 仍可覆盖。
@@ -1178,183 +1177,10 @@ function buildApiRouter(): express.Router {
     await writeLog(req, 'quick_create_profile', `快速创建环境「${p.name}」(#${p.id})`)
     res.json(mapProfile(p))
   })
-  // ===== 回收站（软删除）：列表 / 恢复 / 彻底删除 =====
-  // 注意路由顺序：静态段 /trash 必须排在参数段 /:id 之前
-  router.get('/profiles/trash', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const qb = repo
-      .createQueryBuilder('p')
-      .where('p.teamId = :tid', { tid: req.tid })
-      .andWhere('p.isTemplate = 0')
-      .andWhere('p.deletedAt IS NOT NULL')
-      .orderBy('p.deletedAt', 'DESC')
-    ownerAndWhere(qb, req)
-    const list = await qb.getMany()
-    res.json(
-      list.map((p) => ({
-        id: p.id,
-        name: p.name,
-        seq: p.seq,
-        platform: p.platform,
-        proxyId: p.proxyId,
-        deletedAt: p.deletedAt,
-        // 必须带上 status：批量彻底删除要拦「窗口正在运行」的环境。
-        // 回收站里的环境理论上都是 idle，但软删除后仍可能被 RPA / 自动化
-        // 重新拉起，此时不带上就会漏判，把运行中的环境删掉。
-        status: p.status
-      }))
-    )
-  })
-
-  router.post('/profiles/:id/restore', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    if (!p.deletedAt) return res.status(400).json({ message: '该环境不在回收站中' })
-    p.deletedAt = null
-    await repo.save(p)
-    await writeLog(req, 'restore_profile', `从回收站恢复环境「${p.name}」(#${p.id})`)
-    res.json({ ok: true })
-  })
-
-  router.delete('/profiles/:id/purge', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    if (!p.deletedAt) return res.status(400).json({ message: '仅回收站中的环境可彻底删除' })
-    if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口' })
-    // 彻底删除：级联清理关联账号与 Cookie，并把绑定该代理的其他环境解绑（沿用旧删除语义）
-    await repo.remove(p)
-    const accRepo = AppDataSource.getRepository(AccountEntity)
-    await accRepo.delete({ profileId: p.id })
-    const cookieRepo = AppDataSource.getRepository(CookieEntity)
-    await cookieRepo.delete({ profileId: p.id })
-    // 清理该环境的持久化分区（Cookie/localStorage/缓存）。
-    // 必须做：数据库里的 Cookie 记录删了，但 Chromium 自己写的 localStorage、
-    // IndexedDB、Service Worker 缓存还在分区目录里。id 被复用时新环境会继承旧环境的
-    // 登录态 —— 指纹浏览器最不能容忍的串号。清理失败不阻断删除（记录已没了，
-    // 此时把用户卡在报错里毫无意义），只把结果如实回报。
-    const partitionCleared = await clearProfilePartition(p.id, 'purge', true)
-    await writeLog(
-      req,
-      'purge_profile',
-      `彻底删除环境「${p.name}」(#${p.id})（含账号与 Cookie）` +
-        (partitionCleared ? '，已清理浏览器数据分区' : '，浏览器数据分区清理失败')
-    )
-    res.json({ ok: true, partitionCleared })
-  })
-
-  /**
-   * 手动清理某环境的浏览器数据分区（Cookie / localStorage / 缓存）。
-   *
-   * ## 为什么需要「不删环境也能清」
-   * 自动清理只在彻底删除时发生，但真实场景里磁盘压力往往来自**还在用**的环境：
-   * 跑了一周的账号环境缓存能到几百 MB，用户不会为了清缓存去删环境。
-   * 给一个显式入口，让用户在不丢环境的前提下回收空间。
-   *
-   * 注意这是**破坏性**操作：清完该环境的站点登录态会没（数据库里持久化的
-   * Cookie 会保留？——不会，Chromium 层清掉后 seedCookies 下次开窗会重新注入，
-   * 所以导入型 Cookie 仍在；仅本地存储/缓存/未持久化的会话丢失）。
-   */
-  router.post('/profiles/:id/clear-partition', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const id = Number(req.params.id)
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id, ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    const cleared = await clearProfilePartition(id, 'manual', !!p.deletedAt)
-    if (!cleared) {
-      const win = getRunningWindowIds().includes(id)
-      return res.status(400).json({
-        message: win ? '窗口正在运行，请先关闭该环境窗口再清理浏览器数据' : '清理失败，请查看主进程日志'
-      })
-    }
-    await writeLog(req, 'clear_partition', `清理环境「${p.name}」(#${id}) 的浏览器数据分区`)
-    res.json({ ok: true, partitionCleared: true })
-  })
-
-  /** Date | null → ISO 字符串 | null（批量判定只关心「是否为空」，统一成字符串好过类型） */
-function isoOf(d: Date | null | undefined): string | null {
-  return d ? d.toISOString() : null
-}
-
-// ===== 回收站批量操作 =====
-  // 为什么需要批量接口而不是前端循环调单条：
-  // ① 循环 50 次单条接口 = 50 次鉴权 + 50 次日志写入，慢且容易撞限流；
-  // ② 单条接口中途失败时前端无法区分「已删」与「未删」，重试会造成重复操作；
-  // ③ 批量审计日志需要聚合成一条，否则 50 个环境删除会刷出 50 行日志。
-  //
-  // **逐条独立判定**（见 shared/trashBatch.ts）：一条失败不影响其他，
-  // 但拒绝原因必须如实回报——否则用户以为全删了，实际有几个还在。
-  const readTrashBatch = async (req: AuthedRequest): Promise<ProfileEntity[]> => {
-    const ids = Array.isArray(req.body?.ids)
-      ? (req.body.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0)
-      : []
-    // 上限保护：一次删太多会长时间持锁，且用户多半是误操作
-    if (!ids.length) throw new Error('请选择至少一个环境')
-    if (ids.length > 200) throw new Error('一次最多操作 200 个环境')
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    // ownerScope 必带：批量是批量越权的高发路径，绝不能只信前端传来的 id
-    return repo.find({ where: { id: In(ids), ...ownerScope(req) } })
-  }
-
-  router.post('/profiles/batch-restore', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profiles = await readTrashBatch(req)
-    const plan = planBatch(
-      profiles.map((p) => ({ id: p.id, name: p.name, deletedAt: isoOf(p.deletedAt), status: p.status })),
-      canRestore
-    )
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    let done = 0
-    for (const id of plan.okIds) {
-      try {
-        await repo.update({ id }, { deletedAt: null })
-        done++
-      } catch (e) {
-        console.error(`[roxy] 批量恢复失败 #${id}:`, (e as Error).message)
-      }
-    }
-    if (done > 0) {
-      await writeLog(req, 'restore_profile', `批量恢复 ${done} 个环境（回收站）${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`)
-    }
-    res.json({ ok: true, restored: done, rejected: plan.rejected })
-  })
-
-  router.post('/profiles/batch-purge', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profiles = await readTrashBatch(req)
-    const plan = planBatch(
-      profiles.map((p) => ({ id: p.id, name: p.name, deletedAt: isoOf(p.deletedAt), status: p.status })),
-      canPurge
-    )
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const accRepo = AppDataSource.getRepository(AccountEntity)
-    const cookieRepo = AppDataSource.getRepository(CookieEntity)
-    let done = 0
-    let partitionCleared = 0
-    for (const id of plan.okIds) {
-      const p = profiles.find((x) => x.id === id)
-      if (!p) continue
-      try {
-        // 与单条 purge 保持完全一致的级联语义：账号、Cookie 一并清理
-        await repo.remove(p)
-        await accRepo.delete({ profileId: id })
-        await cookieRepo.delete({ profileId: id })
-        // 分区清理与单条同路径；失败只计数，不影响 done（数据库已删，卡住用户没意义）
-        if (await clearProfilePartition(id, 'purge', true)) partitionCleared++
-        done++
-      } catch (e) {
-        console.error(`[roxy] 批量彻底删除失败 #${id}:`, (e as Error).message)
-      }
-    }
-    if (done > 0) {
-      await writeLog(
-        req,
-        'purge_profile',
-        `批量彻底删除 ${done} 个环境（含账号与 Cookie，已清理 ${partitionCleared} 个浏览器数据分区）` +
-          `${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`
-      )
-    }
-    res.json({ ok: true, purged: done, partitionCleared, rejected: plan.rejected })
-  })
+  // 回收站域（软删除：列表 / 恢复 / 彻底删除 / 手动清分区 + 两个批量接口）见 routes/trash.ts。
+  // **注册位置不可挪动**：静态段 /profiles/trash 必须排在 /profiles/:id 之前，
+  // 否则会被 :id 抢先匹配，回收站页面直接报「环境不存在」。
+  registerTrashRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const repo = AppDataSource.getRepository(ProfileEntity)
