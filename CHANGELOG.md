@@ -9,6 +9,30 @@
 
 ---
 
+## 2026-10-13 · 新增：CDP 调试端口（外部自动化工具接管环境窗口）
+
+### 新增
+
+- **CDP 调试端口**（`src/shared/cdp.ts` + `src/main/cdpManager.ts` + 设置页「调试端口」分区 + `tests/cdp.test.cjs`）：此前外部自动化只能通过本地 HTTP API「开关环境」，无法真正**操作**页面——Playwright / Puppeteer / Selenium 一律接不进来，等于半封闭。开启后外部工具可直接接管运行中的环境窗口。
+  - **形态与市面产品的关键差异（文档里专门写了）**：市面产品多为「每环境一个独立 Chrome 进程 → 每环境一个端口」；本项目是 Electron 应用，环境窗口是同一 Chromium 实例内的多个 `BrowserWindow`，而 `remote-debugging-port` 是**进程级命令行开关**（app ready 前设置一次、全局生效），不存在「每窗口一个端口」。故形态为 **1 个端点 + 多个 target**，工具连一次即可看到全部环境窗口。
+  - **环境 ↔ target 精确映射**（`browser-preload.ts` 注入 `window.__roxyProfileId`，主进程逐 target 发 `Runtime.evaluate` 求值）：外部工具从 CDP 只拿到 `targetId + url + title`，无从判断哪个 target 对应哪个环境——同一站点开多个环境时靠 URL 猜必然出错。标记设为不可枚举，尽量不干扰特征检测面；映射结果直接展示在设置页表格。
+  - **配置存本地文件而非数据库（本功能最 tricky 的一点）**：`app.commandLine.appendSwitch` 必须在 `app.whenReady()` **之前**调用，而 MySQL 是在 `whenReady` 里才连的（`bootstrap`）——读到设置那一刻数据库还连不上。若开关存在 `app_settings` 表，启动时序成死结：要读设置 → 需要 DB → 需要 whenReady → 但 whenReady 前就得设好开关。故运行时只认 `~/.roxy-clone/cdp-config.json`（与 `jwt-secret` / `secret-key` 同属「影响启动的本地配置」），`app_settings` 里只留一份供设置页回显。
+  - **需重启生效**（Chromium 命令行开关无法运行时更改），端口被占用时自动顺延；`cdp-info.json` 写的是**实际生效**端口，工具侧应读它而非配置值。
+  - **安全**：端点等同于完整浏览器控制权（读页面 / 执行脚本 / 注入 Cookie），故默认关闭、仅监听 `127.0.0.1`（不开 `0.0.0.0`）、开启与关闭均写操作日志（`enable_cdp` / `disable_cdp`），设置页有醒目 Alert。
+  - **接口**：`GET /api/v1/cdp`（Bearer）返回 endpoint / 实际端口 / target 映射；`GET`+`PUT /api/cdp`（登录态）供设置页读写。
+  - **四语文案**齐备（zh / en / ja / de），含安全警告的本地化表述。
+
+### 重构
+
+- **`src/shared/` 剔除 Node 依赖**：端口探测 `probePort` 原放在 `shared/cdp.ts`（用了 `net`），但设置页要 import 该文件的类型与常量，会把 `net` 打进 renderer 包导致构建失败（`Module "net" has been externalized for browser compatibility`）。已拆为 `shared/cdp.ts`（零 Node 依赖的端口规整 / 分配 / endpoint 拼装）+ `main/cdpManager.ts`（Node 侧探测），并在 README 新增注意事项固化这条边界。
+
+### 验证
+
+- `pnpm test` **11/11 全绿**（新增 cdp 22 例，含端口顺延、越界规整、首选段耗尽回落、**无端口可用时必须抛错而非返回已占用端口**、endpoint 仅回环、target 过滤）。
+- `pnpm typecheck` 零错误；`pnpm build` 构建成功零告警。
+
+---
+
 ## 2026-10-13 · 新增：凭据静态加密（账号密码 / 代理密码 / 2FA 密钥 / 云端 API Key）
 
 ### 新增

@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（9 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（11 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
 pnpm migrate:secrets --apply  # 真执行迁移
@@ -142,6 +142,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **列表搜索 / 筛选 / 收藏（应用层）**：环境列表与账号列表均支持——环境：关键词搜索（名称/备注/平台）+ 分组筛选；账号：关键词搜索（平台/账号/备注）+ 所属环境筛选 + 平台筛选；两者均可叠加（后端 GET 参数）。两列表均新增首列星标「收藏」与工具栏「仅看收藏」开关，收藏集存于浏览器 localStorage（不落库、不加列），删除后自动裁剪脏 ID。；仅对当前用户可见的账号生效（member 只动自己账号），目标环境须为有效非模板环境。免去逐条在编辑弹窗里选环境。——彻底规避「两个环境共用同一代理」这一防关联大忌（与旧的「绑定代理=全部绑同一代理」反模式相反）。支持按国家 / 类型过滤；已独占合规代理的环境原地保留、运行中的环境不动、池不足的环境标记跳过（绝不强行复用）。分配核心逻辑抽成纯函数 allocateProxies（已离线单测 20 例全绿）。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
 - **凭据静态加密**：账号密码 / 代理密码 / 2FA 密钥 / 云端 API Key 全部以 AES-256-GCM 密文入库，密钥来自环境变量或本地文件、**绝不回落默认值**；历史明文可一键迁移，详见下节
+- **CDP 调试端口**：可选开启后可用 Playwright / Puppeteer 等外部工具接管环境窗口，并给出「环境 → target」映射；**仅监听 127.0.0.1**，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -344,6 +345,26 @@ app.listen(4000)
 
 离线单测：`tests/secretCrypto.test.cjs`（40 例全绿）覆盖往返一致（含中文 / emoji / 换行 / 256 字符）、随机 IV、篡改检测、错误密钥 fail-closed、历史明文兼容、空值语义、密钥优先级。
 
+### CDP 调试端口（外部自动化工具接管环境）
+
+此前外部自动化只能通过本地 HTTP API「开关环境」，无法真正**操作**页面——Playwright / Puppeteer / Selenium 一律接不进来，等于半封闭。开启 CDP 后，外部工具可直接接管运行中的环境窗口。
+
+- **形态差异（重要，先看这段）**：市面上的指纹浏览器多为「每环境一个独立 Chrome 进程 → 每环境一个端口」，工具用 `connectOverCDP('http://127.0.0.1:<该环境端口>')` 直连单个环境。**本项目是 Electron 应用**，环境窗口是同一个 Chromium 实例内的多个 `BrowserWindow`，而 `remote-debugging-port` 是**进程级命令行开关**（app ready 前设置一次、全局生效），没有「每窗口一个端口」。因此形态是 **1 个端点 + 多个 target**：工具连一次即可看到全部环境窗口。
+- **环境 ↔ target 精确映射**：外部工具从 CDP 拿到的只是 `targetId + url + title`，无从判断「哪个 target 是哪个环境」——同一站点开了多个环境时靠 URL 猜必然出错。`browser-preload.ts` 因此注入 `window.__roxyProfileId`（不可枚举，尽量不干扰特征检测面），主进程逐 target 发 `Runtime.evaluate` 求值，把 target 精确映射回环境 id，结果直接展示在设置页表格里，工具侧照着取即可。
+- **配置存本地文件而非数据库**：这是本功能最 tricky 的一点。`app.commandLine.appendSwitch` 必须在 `app.whenReady()` **之前**调用，而 MySQL 是在 `whenReady` 里才连的（`bootstrap`）——**读到设置那一刻数据库还连不上**。若开关存在 `app_settings` 表，启动时序成死结：要读设置 → 需要 DB → 需要 whenReady → 但 whenReady 前就得设好开关。故运行时只认本地文件 `~/.roxy-clone/cdp-config.json`（与 `jwt-secret` / `secret-key` 同属「影响启动的本地配置」），`app_settings` 里只留一份供设置页回显。
+- **需重启生效**：Chromium 命令行开关无法运行时更改，设置页已明确提示。端口被占用时会**自动顺延**，`cdp-info.json` 里写的是**实际生效**的端口，工具侧应读它而非配置值。
+- **安全**：CDP 端点等同于**完整浏览器控制权**（读页面、执行脚本、注入 Cookie）。因此默认**关闭**、仅监听 `127.0.0.1`（不开 `0.0.0.0`，局域网无法连接）、开启/关闭均写操作日志（`enable_cdp` / `disable_cdp`，属敏感操作）。设置页有醒目 Alert。
+- **接口**：`GET /api/v1/cdp`（Bearer 令牌）返回 endpoint、实际端口与 target 映射；`GET/PUT /api/cdp`（登录态）供设置页读写配置。
+
+```js
+// Playwright：连上后按 __roxyProfileId 区分环境
+const browser = await chromium.connectOverCDP('http://127.0.0.1:39222')
+for (const ctx of browser.contexts()) {
+  const page = await ctx.newPage()
+  // ... 用 GET /api/v1/cdp 拿到的 profileId → targetId 映射定位到具体环境
+}
+```
+
 ### 脚本市场（RPA 预设目录）
 
 指纹浏览器的核心场景是跨境电商 / 海外社媒矩阵运营，这类账号的日常操作高度重复。脚本市场把这些高频流程固化为**内置预设**，用户在 RPA 页「脚本市场」Tab 一键安装到自己的脚本库即可回放，省去从零录制。
@@ -376,6 +397,7 @@ src/
 │   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
 │   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）+ 凭据加密 Transformer
 │   ├── secretKey.ts          # 凭据加密密钥：环境变量 > ~/.roxy-clone/secret-key > 随机生成（绝不回落默认值）
+│   ├── cdpManager.ts         # CDP 调试端口：app.commandLine 开关 / 端口探测 / target→profileId 映射（Node 侧）
 │   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发
 │   ├── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
@@ -395,6 +417,7 @@ src/
 │   ├── types.ts              # DTO 与指纹类型
 │   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池 / GEO 坐标 / 反追踪开关）
 │   ├── secretCrypto.ts       # 凭据静态加密：AES-256-GCM 加解密 + rb1: 版本前缀 + 历史明文惰性兼容（纯函数，可单测）
+│   ├── cdp.ts                # CDP 调试端点：端口规整 / 分配 / endpoint 拼装（**零 Node 依赖**，renderer 也会 import）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -423,10 +446,11 @@ src/
 6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 7. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 8. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 10 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 11 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 10. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 11. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 12. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
+13. **`src/shared/` 禁止 import Node 模块**：shared 是主进程 / 渲染进程共用层，只要 renderer 侧（`@shared/xxx`）引用到某个文件，该文件就会被 vite 打进浏览器包。引入 `net` / `fs` / `path` 等会直接构建失败，报 `Module "net" has been externalized for browser compatibility`。需要 Node 能力的实现拆成两个文件——纯逻辑留 `shared/`、Node 侧留 `main/`（如 `shared/cdp.ts` 只有端口规整与 endpoint 拼装，`probePort` 在 `main/cdpManager.ts`）。
 
 ## 打包分发
 
