@@ -1,7 +1,7 @@
 // 离线单测：trackers.ts（追踪器屏蔽 2.0：主机清单 + 子资源路径签名 + 私有网段 / 协议保护）
 // 运行：先 `tsc src/shared/trackers.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_tr`
 //      再 `node tests/trackers.test.cjs`
-const { isTrackerUrl, isTrackerRequest } = require('../.tmp_tr/trackers.js')
+const { isTrackerUrl, isTrackerRequest } = require('../.tmp_tr/shared/trackers.js')
 
 let failed = 0
 function check(name, cond, extra) {

@@ -5,7 +5,7 @@
 const { mkdtempSync, readFileSync, writeFileSync, existsSync } = require('fs')
 const { tmpdir } = require('os')
 const { join } = require('path')
-const { getJwtSecret } = require('../.tmp_jwt/jwtSecret.js')
+const { getJwtSecret } = require('../.tmp_jwt/main/jwtSecret.js')
 
 // 历史硬编码默认值，必须永远不再出现
 const LEGACY_DEFAULT = 'roxy-clone-secret-9f8e7d6c'

@@ -1,7 +1,7 @@
 // 离线单测：webglMatchesOs（WebGL 显卡品牌 ↔ 操作系统 一致性守卫）
 // 运行：先 `tsc src/shared/webglOsMatch.ts --module commonjs --target es2020 --esModuleInterop --skipLibCheck --outDir .tmp_hc`
 //      再 `node tests/webglOsMatch.test.cjs`
-const { webglMatchesOs } = require('../.tmp_hc/webglOsMatch.js')
+const { webglMatchesOs } = require('../.tmp_hc/shared/webglOsMatch.js')
 
 let failed = 0
 function check(name, cond, extra) {

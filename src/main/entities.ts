@@ -5,8 +5,39 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   Index,
-  Unique
+  Unique,
+  ValueTransformer
 } from 'typeorm'
+import { lazySecretCrypto } from './secretKey'
+
+/**
+ * 凭据列的透明加解密 Transformer。
+ *
+ * 为什么放在 ORM 层而不是在每个路由里手动 encrypt/decrypt：
+ * 凭据散落在几十条读写路径上（账号 CRUD、代理检测、导出、快照、RPA、AI 助手…），
+ * 手动改造必然漏——**漏一处就是明文落库或密文当密码用**。ValueTransformer 让
+ * 「进入实体即加密、离开实体即解密」成为默认行为，新增代码无需记得加解密，
+ * 也就不会漏。这是唯一能保证「以后也不漏」的做法。
+ *
+ * 代价：Transformer 对**所有** find/save 生效，包括 `repo.save(整个实体)` 的回写——
+ * 但因为解密后的值是明文、再加密后 ciphertext 不同（随机 IV），回写不会造成数据损坏，
+ * 只会让 updatedAt 类字段照常更新。
+ */
+const secretTransformer: ValueTransformer = {
+  to: (value?: unknown) => lazySecretCrypto().encrypt(value),
+  from: (value?: unknown) => lazySecretCrypto().decrypt(value)
+}
+
+/**
+ * 凭据列的 varchar 宽度上限。
+ *
+ * 必须加宽，否则**静默截断**——这是最容易踩的坑：明文 256 字符的密码加密后
+ * 约 256*4/3 + 12(IV) + 16(tag) + 前缀 ≈ 385 字符，塞进 varchar(256) 会被 MySQL
+ * 截掉尾部，解密时 GCM 认证失败 → 密码错误，且报错点离病因十万八千里。
+ * 512 对 256 字符明文留足余量（且账号密码远达不到 256 字符）。
+ */
+export const SECRET_COLUMN_LENGTH = 512
+
 
 @Entity('users')
 @Unique(['username'])
@@ -24,7 +55,9 @@ export class UserEntity {
   nickname: string
 
   // 登录二次验证（TOTP）：secret 为 base32 编码的 TOTP 密钥；enabled 表示已启用
-  @Column({ type: 'varchar', length: 64, nullable: true })
+  // 静态加密：TOTP 密钥泄漏 = 账号被长期接管（攻击者可离线生成任意 6 位动态码），
+  // 其敏感度与明文密码同级，不能只保护账号密码却放过它
+  @Column({ type: 'varchar', length: SECRET_COLUMN_LENGTH, nullable: true, transformer: secretTransformer })
   twoFactorSecret: string | null
 
   @Column({ type: 'tinyint', default: 0 })
@@ -158,7 +191,9 @@ export class ProxyEntity {
   @Column({ type: 'varchar', length: 128, default: '' })
   username: string
 
-  @Column({ type: 'varchar', length: 256, default: '' })
+  // 静态加密：代理凭据高频出现在「检测代理」「导出池」「环境 DTO」等路径，
+  // 走统一 Transformer 避免任何一条路径漏加密
+  @Column({ type: 'varchar', length: SECRET_COLUMN_LENGTH, default: '', transformer: secretTransformer })
   password: string
 
   @Column({ type: 'varchar', length: 256, default: '' })
@@ -339,7 +374,8 @@ export class AccountEntity {
   @Column({ type: 'varchar', length: 128 })
   username: string
 
-  @Column({ type: 'varchar', length: 256, default: '' })
+  // 静态加密：账号密码是本项目最敏感的数据（防关联场景下等于全部店铺资产）
+  @Column({ type: 'varchar', length: SECRET_COLUMN_LENGTH, default: '', transformer: secretTransformer })
   password: string
 
   @Column({ type: 'varchar', length: 256, default: '' })

@@ -4,7 +4,7 @@
 //   node node_modules/typescript/bin/tsc src/shared/fingerprint.ts --module commonjs --target es2020 \
 //       --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_nf
 //   再 node tests/normalize_fingerprint.test.cjs
-const { normalizeFingerprint } = require('../.tmp_nf/fingerprint.js')
+const { normalizeFingerprint } = require('../.tmp_nf/shared/fingerprint.js')
 
 let failed = 0
 function check(name, cond) {

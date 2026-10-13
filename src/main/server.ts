@@ -10,6 +10,7 @@ import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import { getJwtSecret } from './jwtSecret'
+import { lazySecretCrypto } from './secretKey'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
@@ -446,14 +447,57 @@ async function checkProxy(
   }
 }
 
+// ---------- 设置里的凭据字段（JSON 列，无法用 ORM Transformer）----------
+// app_settings.settings 是 json 列，TypeORM 的 ValueTransformer 只作用于独立标量列，
+// 因此 cloudApiKey 必须在这两个入口手动加解密。入口只有 getSettings()（读）与
+// PUT /settings（写）两处，收敛在此避免遗漏。
+const SETTINGS_SECRET_PATHS: string[][] = [['aiAgent', 'cloudApiKey']]
+
+/** 深拷贝后加密设置内的凭据字段（不可原地改：merged 可能是调用方持有的对象） */
+function encryptSettingsSecrets<T extends Record<string, unknown>>(settings: T): T {
+  const clone = { ...settings } as Record<string, unknown>
+  for (const path of SETTINGS_SECRET_PATHS) {
+    let holder = clone
+    for (let i = 0; i < path.length - 1; i++) {
+      const next = holder[path[i]]
+      if (!next || typeof next !== 'object') break
+      holder = { ...(next as Record<string, unknown>) } as Record<string, unknown>
+      // 逐层回填，保证在原对象上也能看到替换后的子对象
+      clone[path[i]] = holder
+    }
+    const last = path[path.length - 1]
+    if (holder[last] !== undefined) holder[last] = lazySecretCrypto().encrypt(holder[last])
+  }
+  return clone as T
+}
+
+/** 解密设置内的凭据字段（与 encryptSettingsSecrets 对称） */
+function decryptSettingsSecrets<T extends Record<string, unknown>>(settings: T): T {
+  const clone = { ...settings } as Record<string, unknown>
+  for (const path of SETTINGS_SECRET_PATHS) {
+    let holder = clone
+    for (let i = 0; i < path.length - 1; i++) {
+      const next = holder[path[i]]
+      if (!next || typeof next !== 'object') break
+      holder = { ...(next as Record<string, unknown>) } as Record<string, unknown>
+      clone[path[i]] = holder
+    }
+    const last = path[path.length - 1]
+    if (holder[last] !== undefined) holder[last] = lazySecretCrypto().decrypt(holder[last])
+  }
+  return clone as T
+}
+
 // 读取合并后的全局设置（兜底默认值）
 export async function getSettings(): Promise<AppSettings> {
   const repo = AppDataSource.getRepository(AppSettingsEntity)
   const row = await repo.findOne({ where: { key: 'global' } })
   const settings = { ...DEFAULT_SETTINGS, ...((row?.settings as Partial<AppSettings>) || {}) }
+  // 解密凭据字段：调用方（AI Agent / 连通性探针 / 助手 Planner）拿到的必须是可直接用的明文
+  const decrypted = decryptSettingsSecrets(settings as unknown as Record<string, unknown>) as unknown as AppSettings
   // 每次读取设置都刷新 webhook 内存缓存（启动 / PUT /settings 后自动生效，无需单独查库）
-  setCachedWebhooks(Array.isArray(settings.webhooks) ? settings.webhooks : [])
-  return settings
+  setCachedWebhooks(Array.isArray(decrypted.webhooks) ? decrypted.webhooks : [])
+  return decrypted
 }
 
 // 代理定时巡检调度器
@@ -2383,9 +2427,8 @@ function buildApiRouter(): express.Router {
 
   // 全局设置（单例，key='global'）
   router.get('/settings', authMiddleware, async (_req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AppSettingsEntity)
-    const row = await repo.findOne({ where: { key: 'global' } })
-    res.json(row?.settings ? { ...DEFAULT_SETTINGS, ...row.settings } : DEFAULT_SETTINGS)
+    // 复用 getSettings 走同一条解密路径，避免「读接口与内部调用解密行为不一致」
+    res.json(await getSettings())
   })
 
   router.put('/settings', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -2404,8 +2447,10 @@ function buildApiRouter(): express.Router {
       merged.aiAgent = { ...DEFAULT_SETTINGS.aiAgent, ...(merged.aiAgent as Record<string, unknown>) }
     }
     let row = await repo.findOne({ where: { key: 'global' } })
-    if (!row) row = repo.create({ key: 'global', settings: merged })
-    else row.settings = merged
+    // 落库前加密凭据字段（JSON 列无 Transformer，只能在此收口）
+    const toPersist = encryptSettingsSecrets(merged)
+    if (!row) row = repo.create({ key: 'global', settings: toPersist })
+    else row.settings = toPersist
     await repo.save(row)
     // 设置变更后刷新 webhook 内存缓存（避免每次事件查库）
     setCachedWebhooks(Array.isArray(merged.webhooks) ? (merged.webhooks as WebhookConfig[]) : [])

@@ -6,7 +6,8 @@
 //     --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_ck
 //   node tests/cookieText.test.cjs
 const assert = require('assert')
-const { mapCookie, parseCookieText } = require('../.tmp_ck/cookieText.js')
+// 产物路径带 main/ 前缀：tsc 以 rootDir=src 为基准保留 main/ shared/ 层级
+const { mapCookie, parseCookieText } = require('../.tmp_ck/main/cookieText.js')
 
 let pass = 0
 function check(name, fn) {

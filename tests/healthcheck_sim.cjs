@@ -3,7 +3,7 @@
 // 编译：node node_modules/typescript/bin/tsc src/shared/healthcheck.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --lib es2020,dom --outDir .tmp_hc
 // 运行：node tests/healthcheck_sim.cjs
 
-const { buildHealthReport } = require('../.tmp_hc/healthcheck.js')
+const { buildHealthReport } = require('../.tmp_hc/shared/healthcheck.js')
 
 // 一个完整的探针基线（所有必填字段给中性默认值），按场景覆盖
 function baseProbe() {

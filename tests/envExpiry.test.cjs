@@ -3,8 +3,8 @@
 //   tsc src/shared/envExpiry.ts src/shared/fingerprint.ts --module commonjs --target es2020 \
 //       --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_env
 //   再 node tests/envExpiry.test.cjs
-const { getEnvExpiresAt, withEnvExpiresAt } = require('../.tmp_env/envExpiry.js')
-const { normalizeFingerprint } = require('../.tmp_env/fingerprint.js')
+const { getEnvExpiresAt, withEnvExpiresAt } = require('../.tmp_env/shared/envExpiry.js')
+const { normalizeFingerprint } = require('../.tmp_env/shared/fingerprint.js')
 
 let failed = 0
 function check(name, cond, extra) {

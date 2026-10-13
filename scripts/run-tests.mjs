@@ -24,6 +24,8 @@ const COMPILES = [
   { name: 'candidate4', files: ['src/shared/webgpu.ts', 'src/shared/canvasNoise.ts'], out: '.tmp_c4' },
   { name: 'fingerprint', files: ['src/shared/fingerprint.ts'], out: '.tmp_nf' },
   { name: 'jwtSecret', files: ['src/main/jwtSecret.ts'], out: '.tmp_jwt' },
+  // secretKey 依赖 shared/secretCrypto，tsc 会自动一并编进同一临时目录
+  { name: 'secretCrypto', files: ['src/shared/secretCrypto.ts', 'src/main/secretKey.ts'], out: '.tmp_sc' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
@@ -39,6 +41,7 @@ const TESTS = [
   { name: 'healthcheck_sim', file: 'tests/healthcheck_sim.cjs' },
   { name: 'normalize_fingerprint', file: 'tests/normalize_fingerprint.test.cjs' },
   { name: 'jwtSecret', file: 'tests/jwtSecret.test.cjs' },
+  { name: 'secretCrypto', file: 'tests/secretCrypto.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 
@@ -61,6 +64,10 @@ for (const c of COMPILES) {
     '--esModuleInterop',
     '--skipLibCheck',
     ...(c.extra || []),
+    // 显式钉死 rootDir=src：否则 tsc 会按「当前编译文件集的公共祖先目录」推算，
+    // 导致同一份代码在不同编译批次下产物层级不一致（有时扁平、有时带 main/ shared/ 前缀），
+    // 测试里的 require 路径就会时灵时不灵。钉死后层级恒定为 src 的子目录结构。
+    '--rootDir', 'src',
     '--outDir', c.out
   ]
   const { ok } = run(process.execPath, args, `compile:${c.name}`)

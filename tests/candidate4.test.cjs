@@ -5,8 +5,8 @@
 // 然后：node tests/candidate4.test.cjs
 
 const assert = require('assert')
-const { webGpuSpoofAllowed } = require('../.tmp_c4/webgpu.js')
-const { hashString, canvasNoiseSeed, isTinyCanvas, effectiveCanvasSeed } = require('../.tmp_c4/canvasNoise.js')
+const { webGpuSpoofAllowed } = require('../.tmp_c4/shared/webgpu.js')
+const { hashString, canvasNoiseSeed, isTinyCanvas, effectiveCanvasSeed } = require('../.tmp_c4/shared/canvasNoise.js')
 
 // 与 preload 同源的 mulberry32：用于验证「相同 (seed,w,h) 派生出完全相同的噪声序列」
 function mulberry32(a) {
