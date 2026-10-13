@@ -65,6 +65,17 @@ const CONSISTENCY_LABELS: Record<string, string> = {
 const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '#ff4d4f')
 
 // ===== 批量体检总览：后端聚合数据结构 =====
+interface HealthFixProposal {
+  key: 'tzVsProxy' | 'langVsTz' | 'uaVsOs'
+  fixable: boolean
+  reason?: string
+  describe?: string
+  fields?: string[]
+}
+
+/** 单环境体检报告 = 后端 HealthReport + 可自动修复项 */
+type HealthReportWithFixes = HealthReport & { fixes?: HealthFixProposal[] }
+
 interface BatchHealthItemStat {
   key: string
   passed: number
@@ -210,7 +221,10 @@ export default function Environments() {
   const [accountsDrawerEnv, setAccountsDrawerEnv] = useState<ProfileDTO | null>(null)
   const [accountRows, setAccountRows] = useState<AccountDTO[]>([])
   const [accountsLoading, setAccountsLoading] = useState(false)
-  const [healthReport, setHealthReport] = useState<HealthReport | null>(null)
+  const [healthReport, setHealthReport] = useState<HealthReportWithFixes | null>(null)
+  // 一键修复一致性
+  const [fixing, setFixing] = useState(false)
+  const [fixResult, setFixResult] = useState<{ applied: string[]; before: Record<string, unknown>; after: Record<string, unknown>; summary: string } | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [healthName, setHealthName] = useState('')
   // 在线检测站实战验证：体检是「自己出题自己判卷」，这里让第三方站点从外部视角评判
@@ -812,6 +826,62 @@ export default function Environments() {
     }
     await batchExtendExpiry(expiryMode, expiryMode === 'add' ? expiryDays : undefined, expiryDate ?? undefined)
     setExpiryModalOpen(false)
+  }
+
+  /**
+   * 一键修复体检发现的一致性问题。
+   *
+   * 指纹是这个产品的全部价值，**不做无声自动修改** —— 必须先弹确认、
+   * 把「将要改哪些字段、改成什么」摊开给用户看，确认后才落库。
+   * 修复后必须重新体检：改完的字段要经过一次窗口内实测才算真的生效。
+   */
+  const runFixConsistency = (profileId: number, keys: string[]) => {
+    if (!keys.length) return
+    Modal.confirm({
+      title: '按体检建议修复一致性？',
+      width: 560,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 8 }}>
+            将修改以下字段（每项都以「代理 / 设定系统」为基准推算）：
+          </div>
+          <ul style={{ paddingLeft: 18, margin: 0 }}>
+            {healthReport?.fixes
+              ?.filter((f) => keys.includes(f.key))
+              .map((f) => (
+                <li key={f.key} style={{ marginBottom: 4 }}>
+                  <b>{CONSISTENCY_LABELS[f.key] || f.key}</b>：{f.describe}
+                </li>
+              ))}
+          </ul>
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 10 }}
+            message="环境窗口需处于已关闭状态；修复后请重新体检确认生效。"
+          />
+        </div>
+      ),
+      okText: '确认修复',
+      cancelText: '取消',
+      onOk: async () => {
+        setFixing(true)
+        setFixResult(null)
+        try {
+          const res = await api.post<{ applied: string[]; before: Record<string, unknown>; after: Record<string, unknown>; summary: string }>(
+            `/api/profiles/${profileId}/fix-consistency`,
+            { keys, preview: false }
+          )
+          setFixResult(res)
+          message.success('已修复，请重新体检确认')
+          load()
+        } catch (e) {
+          message.error((e as Error).message)
+        } finally {
+          setFixing(false)
+        }
+      }
+    })
   }
 
   const duplicate = async (id: number) => {
@@ -1446,6 +1516,73 @@ export default function Environments() {
             <Typography.Title level={5} style={{ marginTop: 20 }}>
               一致性检查（关联高危信号）
             </Typography.Title>
+
+            {/* 一键修复：多数不一致是确定性的（时区该跟代理、语言该跟时区、UA 该跟系统），
+                逐项列出能修 / 不能修并给理由，绝不静默自动改——指纹是这个产品的全部价值。 */}
+            {(() => {
+              const fixes = healthReport.fixes || []
+              const fixable = fixes.filter((f) => f.fixable)
+              const unfixable = fixes.filter((f) => !f.fixable)
+              if (!fixes.length) return null
+              return (
+                <Alert
+                  type={fixable.length ? 'warning' : 'info'}
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message={
+                    fixable.length
+                      ? `发现 ${fixable.length} 项可自动修复的一致性问题`
+                      : '有不一致项，但无法自动修复'
+                  }
+                  description={
+                    <div style={{ fontSize: 13 }}>
+                      {fixable.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          {fixable.map((f) => (
+                            <div key={f.key} style={{ marginBottom: 3 }}>
+                              <Tag color="green">可修</Tag>
+                              <b style={{ marginRight: 6 }}>{CONSISTENCY_LABELS[f.key] || f.key}</b>
+                              {f.describe}
+                            </div>
+                          ))}
+                          <Button
+                            type="primary"
+                            size="small"
+                            loading={fixing}
+                            style={{ marginTop: 8 }}
+                            onClick={() => runFixConsistency(healthId, fixable.map((f) => f.key))}
+                          >
+                            一键修复这 {fixable.length} 项
+                          </Button>
+                        </div>
+                      )}
+                      {unfixable.length > 0 && (
+                        <div>
+                          {unfixable.map((f) => (
+                            <div key={f.key} style={{ marginBottom: 3 }}>
+                              <Tag>需手动</Tag>
+                              <b style={{ marginRight: 6 }}>{CONSISTENCY_LABELS[f.key] || f.key}</b>
+                              {f.reason}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {fixResult && (
+                        <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid #f0f0f0' }}>
+                          <b>本次改动（改后请重新体检确认）</b>
+                          {fixResult.applied.map((k) => (
+                            <div key={k} style={{ marginTop: 3, fontFamily: 'monospace', fontSize: 12 }}>
+                              {k}: {String(fixResult.before[k] ?? '（无）')} → {String(fixResult.after[k] ?? '（无）')}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  }
+                />
+              )
+            })()}
+
             <Table
               size="small"
               rowKey="key"

@@ -2,12 +2,14 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { DataSource } from 'typeorm'
 import { In } from 'typeorm'
 import { ProfileEntity, ProxyEntity, CookieEntity, AccountEntity, TeamMemberEntity, TeamEntity, AppSettingsEntity } from '../entities'
+import { normalizeFingerprint, getTimezoneOffsetMinutes } from '../../shared/fingerprint'
 import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
 import { getEnvExpiresAt } from '../../shared/envExpiry'
 import { buildHealthReport, healthItemLabel, type HealthReport } from '../../shared/healthcheck'
 import { diffBaseline, regressedItems, regressedText, MIN_SAMPLES, type HealthBaseline } from '../../shared/healthBaseline'
+import { proposeFixes, mergePatches, fixSummary } from '../../shared/healthFix'
 import { SCAN_SITES, getScanSite, type ScanResult } from '../fingerprintScan'
 import type { Fingerprint } from '../../shared/types'
 
@@ -112,8 +114,76 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       proxyCountry,
       audioSeed: p.id * 2654435761
     })
-    res.json(report)
+    // 体检结果顺带带上「可自动修复项」：多数一致性问题是确定性的，
+    // 让用户自己开编辑弹窗逐项改是多余的一步。
+    const failed = report.consistency.filter((c) => !c.ok && !c.skipped).map((c) => c.key)
+    const proposals = failed.length
+      ? proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, proxyCountry, failed)
+      : []
+    res.json({ ...report, fixes: proposals })
   })
+
+  // ===== 一键修复一致性 =====
+  // 只改「事实 ↔ 配置」里的**配置**一侧，且逐项给理由：
+  // 返回提案供用户确认，不做无声自动修改——指纹是这产品的全部价值，
+  // 悄悄改用户的配置比不提供这个功能更糟。
+  router.post('/profiles/:id/fix-consistency', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = getDs().getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
+    // dryRun（默认）：只回提案不动数据，供前端预览「将要改哪些字段」
+    if (req.body?.preview !== false) {
+      const keys: string[] = Array.isArray(req.body?.keys) ? (req.body.keys as string[]) : []
+      const proposals = keys.length
+        ? proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, p.proxyId ? await proxyCountryOf(p.proxyId) : '', keys)
+        : []
+      return res.json({ ok: true, dryRun: true, proposals, summary: fixSummary(proposals) })
+    }
+    const keys: string[] = Array.isArray(req.body?.keys) ? (req.body.keys as string[]) : []
+    if (!keys.length) return res.status(400).json({ message: '未指定要修复的一致性项' })
+    if (p.status === 'running') {
+      // 运行中改指纹不会作用于已开的窗口，只会让「库里的配置」与「窗口里的实际」彻底对不上
+      return res.status(400).json({ message: '请先关闭该环境窗口再修复：运行中改指纹不会生效，只会造成库与窗口不一致' })
+    }
+    const pc = p.proxyId ? await proxyCountryOf(p.proxyId) : ''
+    const proposals = proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, pc, keys)
+    const { patch, conflicts } = mergePatches(proposals)
+    if (conflicts.length) {
+      return res.status(400).json({ message: `多项修复指向同一字段（${conflicts.join('、')}），已放弃以免相互覆盖` })
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ message: `没有可自动修复的项。${fixSummary(proposals.filter((x) => !x.fixable))}` })
+    }
+    const before = (p.fingerprint || {}) as Record<string, unknown>
+    const next = normalizeFingerprint({ ...(before as Partial<Fingerprint>), ...patch } as Partial<Fingerprint>)
+    // tzOffset 与 timezone 必须同步：只改 timezone 不改偏移，
+    // 会出现「时区是纽约、UTC 偏移还是 -480」这种一眼假的对撞。
+    next.tzOffset = getTimezoneOffsetMinutes(next.timezone)
+    p.fingerprint = next as unknown as ProfileEntity['fingerprint']
+    await repo.save(p)
+    await writeLog(req, 'fix_consistency', `（助手/UI）自动修复环境「${p.name}」(#${p.id}) 的一致性：${fixSummary(proposals)}`)
+    res.json({
+      ok: true,
+      applied: Object.keys(patch),
+      proposals,
+      summary: fixSummary(proposals),
+      before: pick(before, Object.keys(patch)),
+      after: pick(next as unknown as Record<string, unknown>, Object.keys(patch))
+    })
+  })
+
+  // 取代理国家名（修复时区锚点要用）
+  async function proxyCountryOf(proxyId: number): Promise<string> {
+    const px = await getDs().getRepository(ProxyEntity).findOne({ where: { id: proxyId } })
+    return px?.country || ''
+  }
+  /** 只挑出关心的字段做前后对比——改了什么必须让用户看得见 */
+  function pick(src: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const k of keys) out[k] = src[k]
+    return out
+  }
 
   // 批量体检总览：一次对 N 个选中环境跑体检，聚合出「系统级问题分布」+ 逐环境报告。
   // 每个环境需处于 running（探针必须在真实窗口内执行，与单环境体检一致）；未运行的环境标记为 skipped，

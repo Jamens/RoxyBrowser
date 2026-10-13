@@ -218,8 +218,11 @@ export function getTimezoneOffsetMinutes(timeZone: string): number {
     get('minute'),
     get('second')
   )
-  // (asUTC - now) 即目标时区的「东向偏移」分钟数（东为正，如上海 +480、纽约 -240）。
-  // Date.getTimezoneOffset() 的语义与之相反（UTC+8 返回 -480），因此要取负。
+  // 结果与 `Date.prototype.getTimezoneOffset()` 保持同一语义：**UTC − 本地**的分钟数，
+  // 即 UTC+8 返回 -480、UTC-4 返回 +240。与宿主机时区无关，只看目标时区。
+  //
+  // （此前此处注释写的是「东为正，如上海 +480、纽约 -240」，与实际实现相反——
+  // 实测上海得 -480、纽约得 240，是 JS 语义。注释已改正，避免按它写断言的人反复踩坑。）
   //
   // 注意：这里绝不能减去 now.getTimezoneOffset()——那会把「宿主机自身」的偏移掺进来，
   // 既让结果偏离正确值，又导致同一 profile 在不同时区的机器上生成出不同的 tzOffset。
