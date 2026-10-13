@@ -28,6 +28,12 @@ interface ActionProposal {
   params: Record<string, unknown>
   /** 来自 forEach 展开时的出处提示（对查询第 q 的 n 行逐条执行） */
   batch?: { queryIndex: number; total: number; rowIndex: number }
+  /**
+   * 来自 collect 汇总时的出处提示：一次动作覆盖 n 个 id。
+   * 与 batch 互斥 —— batch 会渲染成 N 条各带一个按钮，
+   * bulk 渲染成一条并显示「将影响 n 个环境」，避免用户点到手酸。
+   */
+  bulk?: { queryIndex: number; total: number }
 }
 interface AssistantReply {
   ok: boolean
@@ -328,6 +334,11 @@ export default function AssistantChat() {
                 <span style={{ fontSize: 12, color: '#8c9bb0' }}>
                   {t('assistant.batchFromQuery', { q: a.batch.queryIndex + 1, n: a.batch.total })}
                 </span>
+              )}
+              {a.bulk && (
+                <Tag color="orange" style={{ fontSize: 12 }}>
+                  {t('assistant.bulkAffected', { n: a.bulk.total })}
+                </Tag>
               )}
               <Button size="small" type="primary" danger={a.danger === 'destructive'} onClick={() => onActionClick(a)}>
                 {a.danger === 'safe' ? t('assistant.confirmAction') : a.danger === 'medium' ? t('assistant.dangerMedium') : t('assistant.dangerDestructive')}

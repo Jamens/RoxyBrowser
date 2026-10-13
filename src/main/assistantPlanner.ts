@@ -6,11 +6,16 @@
 // 所有敏感 / 权限校验都在后端硬兜底，不依赖模型自觉。
 
 import type { DataSource } from 'typeorm'
-import type { AIAgentSettings, RpaStep } from '../shared/types'
+import { In } from 'typeorm'
+import type { AIAgentSettings, RpaStep, Fingerprint } from '../shared/types'
+import { DEFAULT_START_URL } from '../shared/types'
 import { substituteSteps } from '../shared/rpa'
 import { ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat } from './agent/cloud'
-import { openWindow, replayRpaScript, getRunningWindowIds } from './browserManager'
+import { openWindow, replayRpaScript, getRunningWindowIds, probeFingerprint } from './browserManager'
+import { randomFingerprint } from '../shared/fingerprint'
+import { buildHealthReport } from '../shared/healthcheck'
+import { importProfileItems } from './exporters'
 import {
   ASSISTANT_ENTITIES,
   ASSISTANT_ACTIONS,
@@ -34,7 +39,7 @@ import {
   RpaScriptEntity,
   AssistantSkillEntity
 } from './entities'
-import { expandActions, resolveRelTime, type Plan, type PlanQuery } from '../shared/assistantPlan'
+import { expandActions, resolveRelTime, MAX_COLLECT_IDS, type Plan, type PlanQuery } from '../shared/assistantPlan'
 
 /** 调用方注入的上下文（由 server 路由从已鉴权的 req 取出） */
 export interface PlannerCtx {
@@ -107,6 +112,13 @@ export interface AssistantActionProposal {
   params: Record<string, unknown>
   /** 来自 forEach 展开时记录出处，供前端展示「对查询①的 N 行 · 第 k 行」 */
   batch?: { queryIndex: number; total: number; rowIndex: number }
+  /**
+   * 来自 collect 汇总时记录出处。bulk 与 batch **互斥**：
+   * batch = N 条独立动作（逐条确认），bulk = 1 条动作内含 N 个 id（确认一次）。
+   * 前端靠这个区分该渲染成列表还是单个确认卡片 —— 若两者都当普通动作处理，
+   * 批量场景会退化成让用户点 N 次「确认」，正是 collect 要避免的。
+   */
+  bulk?: { queryIndex: number; total: number }
 }
 export interface AssistantResult {
   ok: boolean
@@ -357,7 +369,8 @@ async function executePlan(
       danger: def.danger,
       target: { entity: e.target.entity || e.kind, id: e.target.id },
       params: e.params,
-      batch: e.batch
+      batch: e.batch,
+      bulk: e.bulk
     })
   }
 
@@ -417,6 +430,70 @@ function num(v: unknown): number {
   return Number(v)
 }
 
+/** 单个创建动作的环境数量上限。50 是 UI 批量创建的同一量级；
+ *  更高就该走「导入 JSON」或去 UI 里做，不该由一句话触发几千次写库。 */
+const MAX_CREATE_COUNT = 50
+
+/**
+ * 解析批量动作的 id 数组。
+ *
+ * 三个坑都在这里挡掉：
+ * 1. 模型可能传单个 id（`profileIds: 12`）而非数组 —— 兼容成 [12]；
+ * 2. 可能混进非整数 / 负数 / 0 —— 直接丢弃，否则 `In([0, -1])` 会静默匹配不到任何行，
+ *    动作「成功执行了 0 条」，用户却以为改掉了。
+ * 3. 数量超上限 —— 截断并如实回报，不静默丢。
+ */
+function idList(v: unknown): number[] {
+  const arr = Array.isArray(v) ? v : v === undefined || v === null ? [] : [v]
+  const out: number[] = []
+  const seen = new Set<number>()
+  for (const x of arr) {
+    const n = Number(x)
+    if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue
+    seen.add(n)
+    out.push(n)
+  }
+  return out
+}
+
+/**
+ * 批量动作的公共前置：按归属取环境、剔除不该动的。
+ *
+ * @param skipRunning 是否跳过运行中的环境。改指纹/绑代理必须跳过
+ *   （窗口正在用这套指纹运行，改了下一次采集就与库里对不上）；
+ *   删除也跳过（运行中的窗口关不掉，软删后状态会自相矛盾）。
+ */
+async function loadTargets(
+  ctx: PlannerCtx,
+  admin: boolean,
+  ids: number[],
+  opts: { skipRunning: boolean; includeDeleted?: boolean }
+): Promise<{ targets: ProfileEntity[]; skipped: number; notFound: number }> {
+  if (!ids.length) return { targets: [], skipped: 0, notFound: 0 }
+  const repo = ctx.ds.getRepository(ProfileEntity)
+  const rows = await repo.find({
+    where: { id: In(ids), teamId: ctx.tid, ...(admin ? {} : { ownerId: ctx.uid }) }
+  })
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const targets: ProfileEntity[] = []
+  let skipped = 0
+  let notFound = 0
+  for (const id of ids) {
+    const p = byId.get(id)
+    if (!p) { notFound++; continue }
+    if (!opts.includeDeleted && p.deletedAt) { skipped++; continue }
+    if (opts.skipRunning && p.status === 'running') { skipped++; continue }
+    targets.push(p)
+  }
+  return { targets, skipped, notFound }
+}
+
+/** 批量结果里「共 N 条，其中跳过 X 条」的统一措辞。
+ *  刻意不隐瞒跳过数：只报成功数的话，用户会以为运行中的窗口也改了。 */
+function bulkMessage(done: number, extra: string): string {
+  return `已处理 ${done} 个环境${extra}`
+}
+
 export async function executeAssistantAction(kind: string, params: Record<string, unknown>, ctx: PlannerCtx): Promise<ActionExecResult> {
   const def = ASSISTANT_ACTIONS[kind]
   if (!def) return { ok: false, message: `不支持的动作：${kind}` }
@@ -466,6 +543,167 @@ export async function executeAssistantAction(kind: string, params: Record<string
       await ctx.ds.getRepository(ProfileEntity).save(p)
       await audit(ctx, 'assign_proxy', `（助手）为环境「${p.name}」(#${p.id}) 分配代理「${px.name}」(#${px.id})`, true)
       return { ok: true, message: `已为环境「${p.name}」分配代理「${px.name}」` }
+    }
+    case 'healthcheckEnv': {
+      const profileId = num(params.profileId)
+      const p = await ctx.ds.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: ctx.tid, ...(admin ? {} : { ownerId: ctx.uid }) } })
+      if (!p) return { ok: false, message: '环境不存在' }
+      if (p.deletedAt) return { ok: false, message: '该环境已删除，请先从回收站恢复' }
+      // 体检必须在真实窗口内采集实际生效的指纹，静态比对库里配置没有意义
+      if (p.status !== 'running' || !getRunningWindowIds().includes(profileId)) {
+        return { ok: false, message: `环境「${p.name}」未运行，请先打开窗口再体检` }
+      }
+      const actual = await probeFingerprint(profileId)
+      if (!actual) return { ok: false, message: '环境窗口未运行，请打开后再体检' }
+      if (actual.error) return { ok: false, message: `指纹采集失败：${actual.error}` }
+      let proxyCountry = ''
+      if (p.proxyId) {
+        const px = await ctx.ds.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } })
+        proxyCountry = px?.country || ''
+      }
+      // audioSeed 必须与 preload 注入端同源（profileId * 2654435761），
+      // 否则算出的音频期望值与窗口内实际注入值对不上，会永远判不合格
+      const report = buildHealthReport(p.fingerprint as unknown as Partial<Fingerprint>, actual, {
+        proxyCountry,
+        audioSeed: p.id * 2654435761
+      })
+      await audit(ctx, 'healthcheck_profile', `（助手）体检环境「${p.name}」(#${p.id})：伪装度 ${report.score}`)
+      // weight=0 的项表示「不适用」（如没绑代理时的出口国家比对），
+      // 不算作不合格——否则每个无代理环境都会被报「有 N 项不合格」
+      const bad = report.items.filter((i) => !i.ok && i.weight > 0).length
+      const badCons = report.consistency.filter((i) => !i.ok && !i.skipped).length
+      const total = bad + badCons
+      return {
+        ok: true,
+        message: `环境「${p.name}」体检：伪装度 ${report.score} 分（${total ? `${total} 项不合格` : '全部合格'}）`,
+        detail: report
+      }
+    }
+    case 'createEnv': {
+      const count = Math.max(1, Math.min(MAX_CREATE_COUNT, Math.floor(Number(params.count)) || 1))
+      const name = String(params.name || '').trim()
+      const platform = String(params.platform || '').trim()
+      const startUrl = String(params.startUrl || '').trim() || DEFAULT_START_URL
+      const repo = ctx.ds.getRepository(ProfileEntity)
+      // seq 在团队内递增，与 UI 的「快速创建」取相同起点（1001）
+      const max = await repo
+        .createQueryBuilder('p')
+        .select('MAX(p.seq)', 'm')
+        .where('p.teamId = :tid', { tid: ctx.tid })
+        .andWhere('p.ownerId = :oid', { oid: ctx.uid })
+        .getRawOne<{ m: number | null }>()
+      let seq = (max?.m || 1000) + 1
+      const created: Array<{ id: number; name: string }> = []
+      for (let i = 0; i < count; i++) {
+        const p = await repo.save(
+          repo.create({
+            teamId: ctx.tid,
+            ownerId: ctx.uid,
+            name: name || `环境 ${seq}`,
+            seq,
+            remark: '',
+            platform,
+            startUrl,
+            proxyId: null,
+            fingerprint: randomFingerprint() as unknown as Record<string, unknown>,
+            isTemplate: false,
+            createdBy: ctx.uid
+          })
+        )
+        seq += 1
+        created.push({ id: p.id, name: p.name })
+      }
+      await audit(ctx, 'create_profile', `（助手）创建 ${created.length} 个环境${name ? `（名称前缀「${name}」）` : ''}`)
+      return { ok: true, message: `已创建 ${created.length} 个环境`, detail: { created } }
+    }
+    case 'importEnvs': {
+      const raw = params.items
+      const items = (Array.isArray(raw) ? raw : []) as Array<Record<string, unknown>>
+      if (!items.length) return { ok: false, message: '没有可导入的环境数据（items 为空）' }
+      if (items.length > MAX_CREATE_COUNT) {
+        return { ok: false, message: `一次最多导入 ${MAX_CREATE_COUNT} 个环境，当前 ${items.length} 个；请分批导入` }
+      }
+      // 复用导出器里的导入实现：与 UI 的「导入环境」和全空间快照导入同源，
+      // 分组/代理/账号/Cookie 的复用与落库规则不会在这里长出第二套
+      const summary = await importProfileItems(items, { tid: ctx.tid, uid: ctx.uid, role: ctx.role })
+      if (summary.created === 0) return { ok: false, message: '没有有效的环境可导入（每项需含 name 与 fingerprint）' }
+      await audit(
+        ctx,
+        'import_profiles',
+        `（助手）导入 ${summary.created} 个环境（分组 ${summary.groupsCreated}、代理 ${summary.proxiesCreated}、账号 ${summary.accountsCreated}、Cookie ${summary.cookiesCreated}）`
+      )
+      return {
+        ok: true,
+        message: `已导入 ${summary.created} 个环境（新建分组 ${summary.groupsCreated} 个、代理 ${summary.proxiesCreated} 条、账号 ${summary.accountsCreated} 条）`,
+        detail: summary
+      }
+    }
+    case 'randomizeFingerprints': {
+      const ids = idList(params.profileIds).slice(0, MAX_COLLECT_IDS)
+      if (!ids.length) return { ok: false, message: '未指定有效的环境（profileIds 为空或全是非法 id）' }
+      const { targets, skipped, notFound } = await loadTargets(ctx, admin, ids, { skipRunning: true })
+      if (!targets.length) {
+        return { ok: false, message: `没有可改动的环境（跳过 ${skipped} 个，其中运行中或已删除；未找到 ${notFound} 个）` }
+      }
+      for (const p of targets) {
+        p.fingerprint = randomFingerprint() as unknown as Record<string, unknown>
+        await ctx.ds.getRepository(ProfileEntity).save(p)
+      }
+      await audit(ctx, 'batch_randomize', `（助手）批量重随机 ${targets.length} 个环境的指纹（跳过 ${skipped} 个）`, true)
+      return {
+        ok: true,
+        message: bulkMessage(targets.length, skipped || notFound ? `，跳过 ${skipped + notFound} 个（运行中/已删除/不存在）` : ''),
+        detail: { updated: targets.length, skipped: skipped + notFound }
+      }
+    }
+    case 'batchAssignProxy': {
+      const ids = idList(params.profileIds).slice(0, MAX_COLLECT_IDS)
+      if (!ids.length) return { ok: false, message: '未指定有效的环境（profileIds 为空或全是非法 id）' }
+      const rawProxy = params.proxyId
+      // proxyId 允许显式传 null：用户说「批量解绑代理」时这是唯一正确表达。
+      // 用 undefined 判断而非真值判断，否则 null 会被误当成「没传」。
+      const unbind = rawProxy === null || rawProxy === ''
+      const proxyId = unbind ? null : Number(rawProxy)
+      let proxyName = '无（解绑）'
+      if (!unbind) {
+        if (!proxyId) return { ok: false, message: 'proxyId 非法' }
+        const px = await ctx.ds.getRepository(ProxyEntity).findOne({ where: { id: proxyId, teamId: ctx.tid, ...(admin ? {} : { ownerId: ctx.uid }) } })
+        if (!px) return { ok: false, message: '代理不存在' }
+        proxyName = px.name
+      }
+      const { targets, skipped, notFound } = await loadTargets(ctx, admin, ids, { skipRunning: true })
+      if (!targets.length) {
+        return { ok: false, message: `没有可绑定的环境（跳过 ${skipped} 个，其中运行中或已删除；未找到 ${notFound} 个）` }
+      }
+      for (const p of targets) {
+        p.proxyId = proxyId
+        await ctx.ds.getRepository(ProfileEntity).save(p)
+      }
+      await audit(ctx, 'batch_bind_proxy', `（助手）批量绑定 ${targets.length} 个环境到代理「${proxyName}」`, true)
+      return {
+        ok: true,
+        message: bulkMessage(targets.length, skipped || notFound ? `，跳过 ${skipped + notFound} 个（运行中/已删除/不存在）` : '') + `，代理：${proxyName}`,
+        detail: { updated: targets.length, skipped: skipped + notFound, proxyId }
+      }
+    }
+    case 'batchDeleteEnvs': {
+      const ids = idList(params.profileIds).slice(0, MAX_COLLECT_IDS)
+      if (!ids.length) return { ok: false, message: '未指定有效的环境（profileIds 为空或全是非法 id）' }
+      const { targets, skipped, notFound } = await loadTargets(ctx, admin, ids, { skipRunning: true })
+      if (!targets.length) {
+        return { ok: false, message: `没有可删除的环境（跳过 ${skipped} 个，其中运行中或已删除；未找到 ${notFound} 个）` }
+      }
+      const now = new Date()
+      for (const p of targets) {
+        p.deletedAt = now
+        await ctx.ds.getRepository(ProfileEntity).save(p)
+      }
+      await audit(ctx, 'batch_delete_profile', `（助手）批量删除 ${targets.length} 个环境（进回收站，可还原）`, true)
+      return {
+        ok: true,
+        message: bulkMessage(targets.length, `（已进回收站，可还原）${skipped || notFound ? `，跳过 ${skipped + notFound} 个` : ''}`),
+        detail: { updated: targets.length, skipped: skipped + notFound }
+      }
     }
     case 'renameProfile': {
       const profileId = num(params.profileId)

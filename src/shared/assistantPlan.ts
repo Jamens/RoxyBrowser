@@ -30,6 +30,23 @@ export interface PlanAction {
   params?: Record<string, unknown>
   /** 多步编排：对指定查询的每行展开成一组动作 */
   forEach?: PlanForEach
+  /**
+   * 批量编排：把指定查询的**所有行**汇总成**一条**动作，
+   * 目标 id 收集到 params[collect] 键下。
+   *
+   * 为什么需要它：`forEach` 是「N 行 → N 条动作」，适合逐个处理
+   * （「把 3 个过期代理逐个删掉」）。但「给这 12 个环境批量换代理」
+   * 应该是**一次**动作 ——否则用户要确认 12 次，且中途失败会留下
+   * 半改半不改的状态。让模型自己枚举 12 个 id 更是错漏高发。
+   */
+  collect?: PlanCollect
+}
+
+export interface PlanCollect {
+  /** 引用 queries 数组的下标（0 基） */
+  fromQuery: number
+  /** 目标参数键，如 "profileIds"。该键的值为 number[] */
+  collect: string
 }
 
 export interface Plan {
@@ -48,6 +65,8 @@ export interface ExpandedAction {
   params: Record<string, unknown>
   /** 来自 forEach 展开时记录出处，供前端展示「对查询①的 N 行 · 第 k 行」 */
   batch?: { queryIndex: number; total: number; rowIndex: number }
+  /** 来自 collect 汇总时记录出处，供前端展示「对查询①的 N 行（一次性）」 */
+  bulk?: { queryIndex: number; total: number }
 }
 
 /** 一行查询结果的最小形态（只需 rows，纯函数不关心列定义） */
@@ -81,11 +100,27 @@ function baseTargetId(a: PlanAction): number {
   )
 }
 
+/** 写死 200 这个上限的理由与查询 limit 一致：模型可能误填一个巨大的 id 列表，
+ *  逐条 UPDATE/DELETE 会让用户等很久，且中途失败难以回滚。真要处理 500 条，
+ *  用户该去 UI 里勾选 + 分批，而不是让一句话悄悄跑 500 次写操作。 */
+export const MAX_COLLECT_IDS = 200
+
+/**
+ * 从一行里取主键。查询行统一带 `_id`（runOneQuery 注入），
+ * 退化到 `id` 是为了兼容「技能模板里手写的裸行」这种历史数据。
+ */
+function rowId(row: Record<string, unknown>): number | null {
+  const v = row._id !== undefined && row._id !== null ? row._id : row.id
+  const n = Number(v)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
 /**
  * 把计划里的动作列表展开成可执行的单条动作序列。
- * - 不带 forEach 的动作原样保留（保持旧行为，向后兼容）。
+ * - 不带 forEach / collect 的动作原样保留（保持旧行为，向后兼容）。
  * - 带 forEach 的动作：对 queries[fromQuery].rows 逐行生成一条动作，
  *   用 map 把行字段填进 params，并以 id/以 Id 结尾的键作为 target.id。
+ * - 带 collect 的动作：把所有行的 _id 汇总进 params[collect]，生成**一条**动作。
  *
  * 纯函数：给定相同输入必然得到相同输出，方便离线单测。
  */
@@ -100,7 +135,8 @@ export function expandActions(plan: Plan, queries: RawQueryLike[]): ExpandedActi
       params: { ...(a.params || {}) }
     }
     const fe = a.forEach
-    const src = fe ? queries[fe.fromQuery] : undefined
+    const co = a.collect
+    const src = fe ? queries[fe.fromQuery] : co ? queries[co.fromQuery] : undefined
     if (fe && src && Array.isArray(src.rows) && src.rows.length) {
       src.rows.forEach((row, idx) => {
         const params: Record<string, unknown> = { ...base.params }
@@ -122,7 +158,27 @@ export function expandActions(plan: Plan, queries: RawQueryLike[]): ExpandedActi
       // 注：forEach 引用的是「空结果 / 越界查询」时，此处不产生任何动作——
       // 避免带着空参数去执行一条无意义的基动作（如 deleteProxy 带空 proxyId）。
       // 不带 forEach 的动作（下方 else）才原样保留。
-    } else if (!fe) {
+    } else if (co && src && Array.isArray(src.rows) && src.rows.length) {
+      const ids: number[] = []
+      const seen = new Set<number>()
+      for (const row of src.rows) {
+        const id = rowId(row)
+        // 去重：查询可能因 enrich 补全产生重复行，重复 id 会导致同一个环境被改两次
+        if (id === null || seen.has(id)) continue
+        seen.add(id)
+        ids.push(id)
+      }
+      if (!ids.length) continue
+      const capped = ids.slice(0, MAX_COLLECT_IDS)
+      out.push({
+        ...base,
+        params: { ...base.params, [co.collect]: capped },
+        // 批量动作没有单一目标，target.id 取首个仅供前端展示与日志用
+        target: { ...base.target, id: base.target.id || capped[0] },
+        label: `${base.label}（${capped.length} 个）`,
+        bulk: { queryIndex: co.fromQuery, total: capped.length }
+      })
+    } else if (!fe && !co) {
       out.push(base)
     }
   }

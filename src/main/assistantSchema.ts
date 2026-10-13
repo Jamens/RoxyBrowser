@@ -258,15 +258,40 @@ export interface AssistantActionDef {
   danger: ActionDanger
   /** 参数说明（仅用于提示，实际由 LLM 填 params） */
   params: string[]
+  /**
+   * 批量动作：params 里是 id 数组而非单个 id。
+   *
+   * 标注这个字段不只是为了文档——执行器需要它决定**归属校验的写法**：
+   * 单个动作是 `where: { id }`，批量是 `where: { id: In(ids) }`。
+   * 漏了 `In()` 而逐条循环，则中途任何一条失败都会留下半改状态。
+   */
+  bulk?: boolean
 }
 
-/** 可被助手执行的动作白名单（危险分级决定确认强度） */
+/**
+ * 可被助手执行的动作白名单（危险分级决定确认强度）。
+ *
+ * 分级的判据不是「看起来严不严重」，而是**出错后的可恢复性**：
+ * - safe：只读或纯派生（打开窗口、跑脚本）。错了重来一次，无残留。
+ * - medium：写库但**可逆**（改名、分配代理、重随机指纹、创建环境）。
+ *   环境/代理是软删除进回收站，误操作能捞回来。
+ * - destructive：改写归属或批量写，且**没有逐条撤销路径**。
+ *
+ * `closeEnv` 没进白名单是有意的：助手关掉用户正在用的窗口，
+ * 可能打断他正在做的操作，而这类现场状态模型无从得知。
+ */
 export const ASSISTANT_ACTIONS: Record<string, AssistantActionDef> = {
   openEnv: { kind: 'openEnv', label: '打开环境', danger: 'safe', params: ['profileId'] },
   runRpa: { kind: 'runRpa', label: '运行RPA脚本', danger: 'safe', params: ['scriptId', 'profileId'] },
+  healthcheckEnv: { kind: 'healthcheckEnv', label: '环境指纹体检', danger: 'safe', params: ['profileId'] },
   assignProxy: { kind: 'assignProxy', label: '为环境分配代理', danger: 'medium', params: ['profileId', 'proxyId'] },
   renameProfile: { kind: 'renameProfile', label: '重命名环境', danger: 'medium', params: ['profileId', 'name'] },
+  createEnv: { kind: 'createEnv', label: '创建环境', danger: 'medium', params: ['name', 'count', 'platform', 'startUrl'] },
+  importEnvs: { kind: 'importEnvs', label: '导入环境（JSON）', danger: 'medium', params: ['items'] },
+  randomizeFingerprints: { kind: 'randomizeFingerprints', label: '批量重随机指纹', danger: 'medium', params: ['profileIds'], bulk: true },
+  batchAssignProxy: { kind: 'batchAssignProxy', label: '批量绑定代理', danger: 'medium', params: ['profileIds', 'proxyId'], bulk: true },
   deleteEnv: { kind: 'deleteEnv', label: '删除环境', danger: 'destructive', params: ['profileId'] },
+  batchDeleteEnvs: { kind: 'batchDeleteEnvs', label: '批量删除环境', danger: 'destructive', params: ['profileIds'], bulk: true },
   deleteProxy: { kind: 'deleteProxy', label: '删除代理', danger: 'destructive', params: ['proxyId'] },
   removeMember: { kind: 'removeMember', label: '移除团队成员', danger: 'destructive', params: ['memberId'] },
   transferEnv: { kind: 'transferEnv', label: '转移环境到其他团队', danger: 'destructive', params: ['profileId', 'targetTeamId'] }
@@ -283,7 +308,7 @@ export function buildAssistantSystemPrompt(now: Date): string {
     .map((e) => `- ${e.entity}（${e.label}）：可查字段 ${e.fields.map((f) => f.name).join(', ')}`)
     .join('\n')
 
-  return `你是一个本地指纹浏览器的「智能助手 / AI 客服」。你可以查询本机数据库来回答用户关于环境、代理、账号、Cookie、扩展、RPA 脚本、操作日志、分组、团队的问题，并可以提议一些操作（打开环境、跑脚本、分配代理、删除等）。
+  return `你是一个本地指纹浏览器的「智能助手 / AI 客服」。你可以查询本机数据库来回答用户关于环境、代理、账号、Cookie、扩展、RPA 脚本、操作日志、分组、团队的问题，并可以提议一些操作（打开环境、跑脚本、创建/批量操作环境、分配代理、删除等）。
 
 # 当前时间
 CURRENT_TIME = ${iso(now)}
@@ -320,9 +345,31 @@ ${catalog}
 }
 
 # 动作白名单（actions[].kind 仅限以下，危险分级决定前端确认强度）
-- openEnv(safe) / runRpa(safe)
-- assignProxy(medium) / renameProfile(medium)
-- deleteEnv(destructive) / deleteProxy(destructive) / removeMember(destructive) / transferEnv(destructive)
+- openEnv(safe) / runRpa(safe) / healthcheckEnv(safe)
+- assignProxy(medium) / renameProfile(medium) / createEnv(medium) / importEnvs(medium)
+- randomizeFingerprints(medium, 批量) / batchAssignProxy(medium, 批量)
+- deleteEnv(destructive) / batchDeleteEnvs(destructive, 批量) /
+  deleteProxy(destructive) / removeMember(destructive) / transferEnv(destructive)
+
+# 批量动作：两种写法，必须分清
+批量动作（randomizeFingerprints / batchAssignProxy / batchDeleteEnvs）的参数
+profileIds 是**数组**。你有两种方式填它，**优先用 collect**：
+
+1) 已有查询结果可用时，用 collect 汇总成一条动作（推荐）：
+   {
+     "kind": "batchAssignProxy",
+     "collect": { "fromQuery": 0, "collect": "profileIds" },
+     "params": { "proxyId": 7 }
+   }
+   这样用户只确认一次，而不是 N 次。
+
+2) 用户明确给了 id 列表时，直接写数组：
+   { "kind": "randomizeFingerprints", "params": { "profileIds": [3, 7, 12] } }
+
+- **不要**用 forEach 来做批量动作。forEach 是「N 行 → N 条独立动作」
+  （适合「把这 3 个过期代理逐个删掉」），用于批量改同一件事会让用户确认 N 次。
+- 永远不要自己枚举查询结果里的 id：查询最多 50 行，且你无法确认哪个该被选中。
+  需要「对查出来的这些做 X」时，一律用 collect。
 
 # 关键语义
 - 「环境快过期 / 哪些环境即将到期」：本系统环境本身没有过期时间，到期的是它所绑定代理的 expiresAt。
@@ -330,6 +377,12 @@ ${catalog}
   reply 中说明「这些环境所绑定代理将在 X 天内到期」，并提示点击跳转查看对应代理与环境。
 - 「最近删了哪些环境」：查询 profiles 表，过滤 deletedAt != null（回收站）。
 - 「哪些代理快到期」：查询 proxies 表，过滤 expiresAt BETWEEN @rel:now 与 @rel:now+7d。
+- 「创建 N 个环境」：createEnv，params 填 { "count": N }；name 省略则自动编号（环境 1001、1002…）。
+- 「给这些环境批量换代理」：先查 environments，再用 batchAssignProxy + collect 汇总。
+- 「体检一下环境 A」：healthcheckEnv（safe）。该动作需要环境处于运行中，
+  若未运行会返回明确提示，你应在 reply 里说明「需要先打开环境」而不是反复重试。
+- 批量动作中的运行中环境会被**自动跳过**（改指纹/绑代理/删除都不动正在跑的窗口），
+  执行结果里的 skipped 数量要如实写进 reply，不要谎称全部完成。
 
 # 规则
 1. 只读查询：不要试图修改数据，修改走 actions。
