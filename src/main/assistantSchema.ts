@@ -292,6 +292,12 @@ export const ASSISTANT_ACTIONS: Record<string, AssistantActionDef> = {
   batchAssignProxy: { kind: 'batchAssignProxy', label: '批量绑定代理', danger: 'medium', params: ['profileIds', 'proxyId'], bulk: true },
   deleteEnv: { kind: 'deleteEnv', label: '删除环境', danger: 'destructive', params: ['profileId'] },
   batchDeleteEnvs: { kind: 'batchDeleteEnvs', label: '批量删除环境', danger: 'destructive', params: ['profileIds'], bulk: true },
+  fixConsistency: {
+    kind: 'fixConsistency',
+    label: '修复指纹一致性',
+    danger: 'medium',
+    params: ['profileId', 'keys']
+  },
   batchExtendExpiry: {
     kind: 'batchExtendExpiry',
     label: '批量改到期时间',
@@ -354,7 +360,7 @@ ${catalog}
 # 动作白名单（actions[].kind 仅限以下，危险分级决定前端确认强度）
 - openEnv(safe) / runRpa(safe) / healthcheckEnv(safe)
 - assignProxy(medium) / renameProfile(medium) / createEnv(medium) / importEnvs(medium)
-- randomizeFingerprints(medium, 批量) / batchAssignProxy(medium, 批量) / batchExtendExpiry(medium, 批量)
+- randomizeFingerprints(medium, 批量) / batchAssignProxy(medium, 批量) / batchExtendExpiry(medium, 批量) / fixConsistency(medium, 单个)
 - deleteEnv(destructive) / batchDeleteEnvs(destructive, 批量) /
   deleteProxy(destructive) / removeMember(destructive) / transferEnv(destructive)
 
@@ -392,6 +398,11 @@ profileIds 是**数组**。你有两种方式填它，**优先用 collect**：
   · mode 三选一：add 各自加 N 天（可负数表示提前）/ set 统一设为指定日期（还需填 expiresAt）/ clear 转为长期有效。
   · 原本就没有到期时间（长期有效）的环境，add 模式下会被跳过；要说清这一点，别让用户以为全部续上了。
   · 延长后**仍在过去**的（过期很久的号 +30 天大概率还是过期）也会如实回报，照实转述给用户。
+- 「修一下这个环境的一致性」：fixConsistency，params 填 { "profileId": N }（keys 可省略，会自动找出所有不一致项）。
+  · 该环境**必须处于已关闭状态**：改指纹不作用于运行中的窗口，只会让库与窗口彻底对不上。
+  · 判定用的是库里的配置值而非窗口实测——修复的前提就是关窗口，那时已无法实测。
+    故修完要提示用户「重新打开窗口并体检确认」。
+  · 不可修的项（如 UA 需绑定具体设备型号）会说明原因，照实转述给用户，不要含糊带过。
 - 批量动作中的运行中环境会被**自动跳过**（改指纹/绑代理/删除都不动正在跑的窗口），
   执行结果里的 skipped 数量要如实写进 reply，不要谎称全部完成。
 

@@ -7,7 +7,7 @@ import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
 import { getEnvExpiresAt } from '../../shared/envExpiry'
-import { buildHealthReport, healthItemLabel, type HealthReport } from '../../shared/healthcheck'
+import { buildHealthReport, healthItemLabel, checkConsistency, type HealthReport } from '../../shared/healthcheck'
 import { diffBaseline, regressedItems, regressedText, MIN_SAMPLES, type HealthBaseline } from '../../shared/healthBaseline'
 import { proposeFixes, mergePatches, fixSummary } from '../../shared/healthFix'
 import { SCAN_SITES, getScanSite, type ScanResult } from '../fingerprintScan'
@@ -147,7 +147,14 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       return res.status(400).json({ message: '请先关闭该环境窗口再修复：运行中改指纹不会生效，只会造成库与窗口不一致' })
     }
     const pc = p.proxyId ? await proxyCountryOf(p.proxyId) : ''
-    const proposals = proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, pc, keys)
+    // 与助手动作同一修法：传**全部**一致性项而非只传用户勾选的那几个。
+    // 修复时区会让原本一致的「语言↔时区」变成不一致，只修勾选的那些会漏掉这部分，
+    // 结果是「修完反而多了一处不一致」。proposeFixes 内部串行推演能处理这个依赖。
+    const fpAll = p.fingerprint as unknown as Partial<Fingerprint>
+    const consAll = checkConsistency(fpAll, pc)
+    const allKeys = consAll.map((c) => c.key)
+    const effectiveKeys = keys.length === allKeys.length ? allKeys : allKeys.filter((k) => keys.includes(k))
+    const proposals = proposeFixes(fpAll, pc, effectiveKeys)
     const { patch, conflicts } = mergePatches(proposals)
     if (conflicts.length) {
       return res.status(400).json({ message: `多项修复指向同一字段（${conflicts.join('、')}），已放弃以免相互覆盖` })

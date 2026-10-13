@@ -13,9 +13,10 @@ import { substituteSteps } from '../shared/rpa'
 import { ollamaChat, type OllamaMessage } from './agent/ollama'
 import { cloudChat } from './agent/cloud'
 import { openWindow, replayRpaScript, getRunningWindowIds, probeFingerprint } from './browserManager'
-import { randomFingerprint } from '../shared/fingerprint'
-import { buildHealthReport } from '../shared/healthcheck'
+import { randomFingerprint, normalizeFingerprint, getTimezoneOffsetMinutes } from '../shared/fingerprint'
+import { buildHealthReport, checkConsistency, inconsistentKeys } from '../shared/healthcheck'
 import { getEnvExpiresAt, withEnvExpiresAt } from '../shared/envExpiry'
+import { proposeFixes, mergePatches } from '../shared/healthFix'
 import { importProfileItems } from './exporters'
 import {
   ASSISTANT_ENTITIES,
@@ -489,6 +490,13 @@ async function loadTargets(
   return { targets, skipped, notFound }
 }
 
+/** 从「修复前」快照里挑出关心的字段，用于回报逐字段 before/after */
+function pickFields(src: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const k of keys) out[k] = src[k]
+  return out
+}
+
 /** 批量结果里「共 N 条，其中跳过 X 条」的统一措辞。
  *  刻意不隐瞒跳过数：只报成功数的话，用户会以为运行中的窗口也改了。 */
 function bulkMessage(done: number, extra: string): string {
@@ -544,6 +552,68 @@ export async function executeAssistantAction(kind: string, params: Record<string
       await ctx.ds.getRepository(ProfileEntity).save(p)
       await audit(ctx, 'assign_proxy', `（助手）为环境「${p.name}」(#${p.id}) 分配代理「${px.name}」(#${px.id})`, true)
       return { ok: true, message: `已为环境「${p.name}」分配代理「${px.name}」` }
+    }
+    case 'fixConsistency': {
+      const profileId = num(params.profileId)
+      const p = await ctx.ds.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: ctx.tid, ...(admin ? {} : { ownerId: ctx.uid }) } })
+      if (!p) return { ok: false, message: '环境不存在' }
+      if (p.deletedAt) return { ok: false, message: '该环境已删除，请先从回收站恢复' }
+      // 运行中改指纹不作用于已开的窗口，只会让「库里的配置」与「窗口里的实际」彻底对不上
+      if (p.status === 'running') {
+        return { ok: false, message: `环境「${p.name}」正在运行，请先关闭窗口再修复——运行中改指纹不会生效` }
+      }
+      const fp = (p.fingerprint || {}) as Partial<Fingerprint>
+      let proxyCountry = ''
+      if (p.proxyId) {
+        const px = await ctx.ds.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } })
+        proxyCountry = px?.country || ''
+      }
+      // **判定用配置值而非窗口实测**：修复的前提就是关窗口，那时已无法实测。
+      // 口径与体检完全一致（共用 checkConsistency），不会出现两边说法矛盾。
+      const consistency = checkConsistency(fp, proxyCountry)
+      const allKeys = consistency.map((c) => c.key)
+      if (!inconsistentKeys(consistency).length) {
+        return { ok: true, message: `环境「${p.name}」当前没有不一致项，无需修复` }
+      }
+      // **传全部三项而非只传不一致的那几项**：三项之间存在修复后才会暴露的依赖
+      // （时区从上海改成纽约后，原本一致的「语言↔时区」就变成了不一致）。
+      // 只传修复前判红的那几项，这部分会被整段漏掉 —— 修完反而留下新的不一致。
+      // proposeFixes 内部是串行推演，传入全部三项后它会基于修复后的中间状态
+      // 重新判定，并对本来就一致的项返回「已一致」的不可修理由。
+      const requested: string[] = Array.isArray(params.keys) ? (params.keys as string[]).map(String) : []
+      const keys = requested.length ? allKeys.filter((k) => requested.includes(k)) : allKeys
+      const proposals = proposeFixes(fp, proxyCountry, keys)
+      const { patch, conflicts } = mergePatches(proposals)
+      if (conflicts.length) {
+        return { ok: false, message: `多项修复指向同一字段（${conflicts.join('、')}），已放弃以免相互覆盖` }
+      }
+      const fixable = proposals.filter((x) => x.fixable)
+      // 「本来就一致」不算「无法修复」——那是正常状态，报给用户会凭空多出几条红字
+      const alreadyOk = new Set(consistency.filter((c) => c.ok || c.skipped).map((c) => c.key))
+      const unfixable = proposals.filter((x) => !x.fixable && !alreadyOk.has(x.key))
+      if (!Object.keys(patch).length) {
+        return { ok: false, message: `没有可自动修复的项。${unfixable.map((x) => x.reason).join('；')}` }
+      }
+      const before = { ...(fp as Record<string, unknown>) }
+      const next = normalizeFingerprint({ ...(fp as Fingerprint), ...patch })
+      // tzOffset 必须随 timezone 同步，否则会留下「时区是纽约、偏移还是 -480」这种一眼假的对撞
+      next.tzOffset = getTimezoneOffsetMinutes(next.timezone)
+      p.fingerprint = next as unknown as ProfileEntity['fingerprint']
+      await ctx.ds.getRepository(ProfileEntity).save(p)
+      const applied = Object.keys(patch)
+      await audit(
+        ctx,
+        'fix_consistency',
+        `（助手）修复环境「${p.name}」(#${p.id}) 的一致性：${applied.join('、')}`,
+        true
+      )
+      const notes: string[] = ['请重新打开窗口并体检确认生效']
+      if (unfixable.length) notes.push(`另有 ${unfixable.length} 项无法自动修复：${unfixable.map((x) => x.reason).join('；')}`)
+      return {
+        ok: true,
+        message: `已修复环境「${p.name}」的 ${applied.length} 个字段（${applied.join('、')}）。${notes.join('。')}`,
+        detail: { applied, before: pickFields(before, applied), after: applied, unfixable: unfixable.map((x) => ({ key: x.key, reason: x.reason })) }
+      }
     }
     case 'healthcheckEnv': {
       const profileId = num(params.profileId)
