@@ -24,6 +24,9 @@ import { BucketStore, consumeRateLimit, type RateDecision } from '../shared/rate
 /** 全局限流状态（进程内；应用重启即清空，符合「防突发」而非「防长期攻击」的定位） */
 const apiBuckets = new BucketStore()
 
+/** 已告警过的桶（接近限额时提示一次，避免每请求刷屏） */
+const warnedBuckets = new Set<string>()
+
 /** 登录桶在 auth 域共享，用 set 避免重复实例 */
 export const loginBuckets = new BucketStore()
 
@@ -61,7 +64,29 @@ export function rateLimit(
       const decision = consumeRateLimit(bucket, Date.now(), limit, windowMs)
       res.setHeader('X-RateLimit-Limit', String(limit))
       res.setHeader('X-RateLimit-Remaining', String(decision.remaining))
+      // 接近限额时提示一次（按桶去重，避免每请求都刷屏）：
+      // 限额快用尽通常意味着轮询过密或某个页面在疯狂请求，
+      // 提前看到比撞墙后排查省事得多。
+      if (decision.remaining <= Math.max(1, Math.floor(limit * 0.1))) {
+        const key = `${bucketPrefix}:warned`
+        if (!warnedBuckets.has(key)) {
+          warnedBuckets.add(key)
+          console.warn(
+            `[rateLimit] ${bucketPrefix} 即将打满（剩余 ${decision.remaining}/${limit}），` +
+              '若随后触发限流请检查轮询频率'
+          )
+          // 下一个窗口自然过期后再允许告警
+          setTimeout(() => warnedBuckets.delete(key), windowMs).unref?.()
+        }
+      }
       if (!decision.allowed) {
+        // 诊断日志：限流是「结果」，真正要查的是「谁在打」。
+        // 没有这条只能看到前端一句「请求过于频繁」，无从定位是轮询太密
+        // 还是用户操作太频繁，也无从判断该调限额还是该降轮询频率。
+        console.warn(
+          `[rateLimit] 触发限流 ${bucketPrefix}: ${req.method} ${req.originalUrl} ` +
+            `(${decision.reason}, 用满 ${limit}/${Math.floor((Date.now() % windowMs) / 1000)}s)`
+        )
         respondDenied(res, decision)
         return
       }

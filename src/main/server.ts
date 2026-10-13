@@ -188,6 +188,9 @@ async function authMiddleware(req: AuthedRequest, res: Response, next: NextFunct
   const verdict = await checkSessionAndRevoked(claims)
   if (!verdict.valid) {
     // 撤销类拒绝带上 code，前端据此清理本地令牌并跳登录页（而不是弹个看不懂的报错）
+    // 诊断日志：会话失效是个**结果**，要查的是「哪个接口在什么情况下被拒」。
+    // 之前只有前端一句「已退出登录」，排查时无法区分是令牌问题还是别的原因。
+    console.warn(`[auth] 会话被拒 (${verdict.code}) ${req.method} ${req.originalUrl}: ${verdict.reason}`)
     res.status(401).json({ message: verdict.reason, code: verdict.code })
     return
   }
