@@ -90,6 +90,7 @@ import { registerProxyRoutes } from './routes/proxies'
 // 这样 routes/proxies 与本文件都能直接 import，不必反向引用形成循环依赖。
 import { allocateProxy, applyProxyCheckResult, checkProxy, computeProxyUsage, ApiError } from './proxyService'
 import { registerCookieRoutes } from './routes/cookies'
+import { registerAccountRoutes } from './routes/accounts'
 import { registerV1CookieRoutes } from './routes/v1Cookie'
 import { registerAuthRoutes } from './routes/auth'
 import { registerSettingsRoutes } from './routes/settings'
@@ -1827,191 +1828,6 @@ function isoOf(d: Date | null | undefined): string | null {
     res.json(listFingerprintPresets())
   })
 
-  // ===== 账号中心 =====
-  router.get('/accounts', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { ...ownerScope(req), isTemplate: false } })
-    const profileIds = new Set(profiles.map((p) => p.id))
-    const profileIdFilter = req.query.profileId ? Number(req.query.profileId) : null
-    const platformFilter = typeof req.query.platform === 'string' ? req.query.platform : ''
-    const keyword = typeof req.query.keyword === 'string' ? req.query.keyword.trim() : ''
-    const all = await repo.find({ order: { id: 'DESC' } })
-    let list = all.filter((a) => profileIds.has(a.profileId))
-    // 列表检索：环境(所属环境) + 平台 + 关键词（平台/账号/备注），与前端工具栏筛选叠加
-    if (profileIdFilter) list = list.filter((a) => a.profileId === profileIdFilter)
-    if (platformFilter) list = list.filter((a) => a.platform === platformFilter)
-    if (keyword) {
-      const kw = keyword.toLowerCase()
-      list = list.filter((a) => `${a.platform} ${a.username} ${a.remark}`.toLowerCase().includes(kw))
-    }
-    const nameMap = new Map(profiles.map((p) => [p.id, p.name]))
-    // 成员角色不返回明文密码（对标官方 3.8.9 账号权限管理），仅打标记由前端展示「无权限查看」
-    const canView = isAdminRole(await freshRole(req))
-    res.json(
-      list.map((a) => ({
-        ...a,
-        password: canView ? a.password : '',
-        passwordMasked: !canView,
-        profileName: nameMap.get(a.profileId) || ''
-      }))
-    )
-  })
-
-  router.post('/accounts', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: Number(req.body.profileId), ...ownerScope(req) } })
-    if (!profile) return res.status(400).json({ message: '环境不存在' })
-    const a = await repo.save(
-      repo.create({
-        profileId: profile.id,
-        ownerId: req.uid!,
-        platform: req.body.platform || '',
-        username: req.body.username || '',
-        password: req.body.password || '',
-        remark: req.body.remark || ''
-      })
-    )
-    await writeLog(req, 'create_account', `在环境「${profile.name}」添加账号 ${a.username}`)
-    res.json(a)
-  })
-
-  router.put('/accounts/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: ownerScope(req) })
-    const ids = new Set(profiles.map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
-    // 成员角色不允许改密码（看不到明文，避免误清空/越权修改）
-    const fields = (await freshRole(req)) === 'member' ? (['platform', 'username', 'remark'] as const) : (['platform', 'username', 'password', 'remark'] as const)
-    for (const f of fields) {
-      if (f in req.body) (a as any)[f] = req.body[f]
-    }
-    await repo.save(a)
-    res.json(a)
-  })
-
-  router.delete('/accounts/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: ownerScope(req) })
-    const ids = new Set(profiles.map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!a || !ids.has(a.profileId)) return res.status(404).json({ message: '账号不存在' })
-    await repo.remove(a)
-    res.json({ ok: true })
-  })
-
-  // 账号-环境批量关联：把选中的多个账号批量绑定到同一个目标环境（设置 account.profileId）。
-  // 仅对 ownerScope 可见的账号生效（member 只能操作自己的账号）；目标环境须为有效的非模板环境。
-  router.post('/accounts/batch-associate', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const accountIds = Array.isArray(req.body?.accountIds)
-      ? (req.body.accountIds as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n))
-      : []
-    const profileId = Number(req.body?.profileId)
-    if (!accountIds.length) return res.status(400).json({ message: '请选择至少一个账号' })
-    if (!Number.isInteger(profileId)) return res.status(400).json({ message: '请选择目标环境' })
-
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const target = await profileRepo.findOne({ where: { id: profileId, isTemplate: false, ...ownerScope(req) } })
-    if (!target) return res.status(400).json({ message: '目标环境不存在或无权访问' })
-
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const accounts = await repo.find({ where: { id: In(accountIds), ...ownerScope(req) } })
-    if (!accounts.length) return res.status(404).json({ message: '未找到可操作的账号' })
-
-    for (const a of accounts) a.profileId = target.id
-    await repo.save(accounts)
-    await writeLog(req, 'batch_associate_account', `批量关联 ${accounts.length} 个账号到环境「${target.name}」`)
-    res.json({ updated: accounts.length })
-  })
-
-  // 账号批量导入：每行支持两种格式
-  //   格式A（带环境，可还原归属）：`#环境序号|环境名,平台,账号,密码,备注`
-  //   格式B（单一环境）：`平台,账号,密码[,备注]`，需配合请求体 profileId 指定归属环境
-  router.post('/accounts/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const text: string = req.body?.text || ''
-    const defaultProfileId: number | null = req.body?.profileId ? Number(req.body.profileId) : null
-    const lines = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-    if (lines.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
-
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: ownerScope(req) })
-    const profileByName = new Map(profiles.map((p) => [p.name, p]))
-    const profileBySeq = new Map(profiles.map((p) => [`#${p.seq}`, p]))
-
-    let ok = 0
-    const failed: string[] = []
-    for (const line of lines) {
-      // 跳过模板表头与注释行（对标官方模板批量导入：模板第一行是表头，; 或 // 开头为注释）
-      if (line.startsWith(';') || line.startsWith('//') || /^(环境|平台)\s*[,，]/.test(line)) continue
-      const parts = line.split(',').map((s) => s.trim())
-      let profileId = defaultProfileId
-      let platform = ''
-      let username = ''
-      let password = ''
-      let remark = ''
-      if (parts.length >= 5) {
-        const envPart = parts[0]
-        const envName = envPart.includes('|') ? envPart.split('|')[1] : envPart
-        const matched = profileByName.get(envName) || profileBySeq.get(envPart)
-        if (matched) profileId = matched.id
-        platform = parts[1]
-        username = parts[2]
-        password = parts[3]
-        remark = parts[4] || ''
-      } else if (parts.length >= 3) {
-        platform = parts[0]
-        username = parts[1]
-        password = parts[2]
-        remark = parts[3] || ''
-      } else if (parts.length === 2) {
-        username = parts[0]
-        password = parts[1]
-      } else {
-        failed.push(line)
-        continue
-      }
-      if (!profileId) {
-        failed.push(`${line} (缺少归属环境)`)
-        continue
-      }
-      if (!username) {
-        failed.push(line)
-        continue
-      }
-      await repo.save(repo.create({ profileId, ownerId: req.uid!, platform: platform || '其他', username, password, remark }))
-      ok += 1
-    }
-    await writeLog(req, 'import_accounts', `批量导入账号 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
-    res.json({ imported: ok, failed })
-  })
-
-  // 账号导出（文本，含环境归属，便于还原）：`#环境序号|环境名,平台,账号,密码,备注`
-  // 含明文密码，仅 owner/admin 可用（对标官方 3.8.9 批量导出按角色控权）
-  router.get('/accounts/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    if (!isAdminRole(await freshRole(req))) return res.status(403).json({ message: '无权限：仅管理员可导出账号' })
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: ownerScope(req) })
-    const map = new Map(profiles.map((p) => [p.id, p]))
-    const list = await repo.find({ where: { profileId: In(profiles.map((p) => p.id)) }, order: { id: 'ASC' } })
-    const text = list
-      .map((a) => {
-        const p = map.get(a.profileId)
-        const env = p ? `#${p.seq}|${p.name}` : ''
-        return [env, a.platform, a.username, a.password, a.remark].join(',')
-      })
-      .join('\n')
-    res.json({ text, count: list.length })
-  })
-
   // ===== Cookie 管理（按环境隔离，团队维度鉴权） =====
   // 路由实现已抽到 src/main/routes/cookies.ts，解析逻辑在 src/main/cookieText.ts（可离线单测）。
   registerCookieRoutes(router, {
@@ -2292,6 +2108,11 @@ function isoOf(d: Date | null | undefined): string | null {
   // 路由实现已抽到 src/main/routes/logs.ts（server.ts 过大，按域逐步拆分）。
   // getDs 传函数而非值：AppDataSource 是运行时赋值的 export let，按值捕获会拿到 undefined。
   registerLogRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
+
+  // 账号中心域（列表 / 增删改 / 批量关联环境 / 批量导入导出）见 routes/accounts.ts。
+  // 密码可见性口径（明文只给管理员、改密码也只给管理员）就写在该文件的注释里，
+  // 与路由实现放在一起，避免日后被「顺手优化」掉。
+  registerAccountRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog, freshRole })
 
   // 代理域（CRUD / 检测 / IP 池分配 / 智能批量分配 / 池统计 / 批量导入导出）见 routes/proxies.ts。
   // 业务逻辑在 proxyService 中，同样不依赖 AppDataSource —— 这样拆分后本文件只是装配层，
