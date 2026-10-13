@@ -34,6 +34,7 @@ pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
 pnpm test         # 一键跑完全量离线测试（14 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
+pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
 pnpm migrate:secrets --apply  # 真执行迁移
 pnpm clean:out    # 精确回收 out/ 里的陈旧构建产物（默认 dry-run，加 --apply 才真删）
