@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Card, Table, Input, Tag, Typography, Space, Switch, Dropdown, Button, message } from 'antd'
-import { SearchOutlined, DownloadOutlined } from '@ant-design/icons'
+import {
+  Card, Table, Input, Tag, Typography, Space, Switch, Dropdown, Button, message, Tabs, Alert,
+  Statistic, Row, Col, Popconfirm, Select, Checkbox
+} from 'antd'
+import type { ArchivedLogDTO, ArchiveStatsDTO, ArchiveOutcomeDTO } from '@shared/types'
+import { SearchOutlined, DownloadOutlined, ExperimentOutlined, RollbackOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { api, getToken, API_BASE } from '../api'
 import type { LogDTO } from '@shared/types'
@@ -99,6 +103,9 @@ export default function Logs() {
   const [keyword, setKeyword] = useState('')
   const [onlySensitive, setOnlySensitive] = useState(false)
   const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
+  // 归档概览：用于 Tab 标签上的条数与「近 N 天」文案
+  const [retentionDays, setRetentionDays] = useState(90)
+  const [archiveCount, setArchiveCount] = useState(0)
 
   // 导出当前筛选条件下的操作日志（CSV / JSON）。带 Bearer 头取回文件文本后本地下载，
   // 避免把令牌拼进 URL（防泄漏），文件名取自响应头的 Content-Disposition。
@@ -157,11 +164,27 @@ export default function Logs() {
     }
   }, [keyword])
 
+  // 归档概览单独取：与日志列表不同的接口，轮询频率可低得多
+  const loadStats = useCallback(async () => {
+    try {
+      const s = await api.get<ArchiveStatsDTO>('/api/logs/archive/stats')
+      setRetentionDays(s.retentionDays)
+      setArchiveCount(s.archiveCount)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
   useEffect(() => {
     load()
+    loadStats()
     const t = setInterval(load, 10000)
-    return () => clearInterval(t)
-  }, [load])
+    const t2 = setInterval(loadStats, 60000)
+    return () => {
+      clearInterval(t)
+      clearInterval(t2)
+    }
+  }, [load, loadStats])
 
   const columns: ColumnsType<LogDTO> = [
     {
@@ -202,26 +225,233 @@ export default function Logs() {
       <Typography.Paragraph type="secondary">
         团队空间内所有关键操作（创建 / 修改 / 删除 / 打开环境等）都会记录操作人身份与时间，便于多人共用工作区时的责任追溯与权限管理。
       </Typography.Paragraph>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Input
-          placeholder="搜索操作人 / 动作 / 详情"
-          prefix={<SearchOutlined />}
-          style={{ width: 280 }}
-          allowClear
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-        />
-        <Space size={6}>
-          <Switch checked={onlySensitive} onChange={setOnlySensitive} />
-          <Typography.Text>只看敏感操作</Typography.Text>
-        </Space>
-        <Dropdown menu={exportMenu} disabled={exporting !== null}>
-          <Button icon={<DownloadOutlined />} loading={exporting !== null}>
-            {t('logs.export')}
-          </Button>
-        </Dropdown>
-      </Space>
-      <Table rowKey="id" size="middle" columns={columns} dataSource={shown} pagination={{ pageSize: 15 }} />
+      <Tabs
+        defaultActiveKey="hot"
+        items={[
+          {
+            key: 'hot',
+            label: `近 ${retentionDays} 天（${list.length}）`,
+            children: (
+              <>
+                <Space style={{ marginBottom: 16 }} wrap>
+                  <Input
+                    placeholder="搜索操作人 / 动作 / 详情"
+                    prefix={<SearchOutlined />}
+                    style={{ width: 280 }}
+                    allowClear
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                  />
+                  <Space size={6}>
+                    <Switch checked={onlySensitive} onChange={setOnlySensitive} />
+                    <Typography.Text>只看敏感操作</Typography.Text>
+                  </Space>
+                  <Dropdown menu={exportMenu} disabled={exporting !== null}>
+                    <Button icon={<DownloadOutlined />} loading={exporting !== null}>
+                      {t('logs.export')}
+                    </Button>
+                  </Dropdown>
+                </Space>
+                <Table rowKey="id" size="middle" columns={columns} dataSource={shown} pagination={{ pageSize: 15 }} />
+              </>
+            )
+          },
+          { key: 'archive', label: `归档区（${archiveCount}）`, children: <ArchivePanel onReverted={load} /> }
+        ]}
+      />
     </Card>
+  )
+}
+
+/**
+ * 归档区面板：查看已归档的整月日志、手动触发归档、按批次撤销。
+ *
+ * 设计取向：**默认安全**。手动归档的按钮是「试运行」，要真执行必须二次确认并
+ * 明确勾选——归档虽非删除，但搬走数据会影响热区列表与导出，用户容易误点。
+ */
+function ArchivePanel({ onReverted }: { onReverted: () => void }) {
+  const [stats, setStats] = useState<ArchiveStatsDTO | null>(null)
+  const [rows, setRows] = useState<ArchivedLogDTO[]>([])
+  const [months, setMonths] = useState<string[]>([])
+  const [month, setMonth] = useState<string | undefined>()
+  const [batchId, setBatchId] = useState<string | undefined>()
+  const [running, setRunning] = useState(false)
+  const [confirmReal, setConfirmReal] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const qs = new URLSearchParams()
+      if (month) qs.set('month', month)
+      if (batchId) qs.set('batchId', batchId)
+      qs.set('limit', '500')
+      const [s, list] = await Promise.all([
+        api.get<ArchiveStatsDTO>('/api/logs/archive/stats'),
+        api.get<ArchivedLogDTO[]>(`/api/logs/archive?${qs.toString()}`)
+      ])
+      setStats(s)
+      setRows(list)
+      // 月份下拉来自实际返回的数据，避免给出无记录的月份选项
+      const seen = new Set<string>()
+      for (const r of list) if (r.month) seen.add(r.month)
+      setMonths([...seen].sort().reverse())
+      if (month && !seen.has(month)) setMonth(undefined)
+    } catch {
+      /* ignore */
+    }
+  }, [month, batchId])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  /** 执行归档：dryRun=true 先看范围，确认无误后再真跑 */
+  const runArchive = useCallback(
+    async (dryRun: boolean) => {
+      setRunning(true)
+      try {
+        const r = await api.post<ArchiveOutcomeDTO>('/api/logs/archive/run', { dryRun })
+        if (dryRun) {
+          message.info(r.reason)
+        } else if (r.moved > 0) {
+          message.success(r.reason)
+          setConfirmReal(false)
+        } else {
+          message.info(r.reason)
+        }
+        await load()
+      } catch (e) {
+        message.error(`归档失败：${(e as Error).message}`)
+      } finally {
+        setRunning(false)
+      }
+    },
+    [load]
+  )
+
+  const revert = useCallback(
+    async (bid: string) => {
+      try {
+        const r = await api.post<{ reverted: number }>('/api/logs/archive/revert', { batchId: bid })
+        message.success(`已退回 ${r.reverted} 条到热区`)
+        setBatchId(undefined)
+        await load()
+        onReverted()
+      } catch (e) {
+        message.error(`撤销失败：${(e as Error).message}`)
+      }
+    },
+    [load, onReverted]
+  )
+
+  const cols: ColumnsType<ArchivedLogDTO> = [
+    { title: '时间', dataIndex: 'createdAt', width: 170, render: (v: string) => v.replace('T', ' ').slice(0, 19) },
+    { title: '操作人', dataIndex: 'username', width: 110 },
+    {
+      title: '动作',
+      dataIndex: 'action',
+      width: 130,
+      render: (v: string) => <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
+    },
+    { title: '详情', dataIndex: 'detail', ellipsis: true },
+    {
+      title: '所属月份',
+      dataIndex: 'month',
+      width: 100,
+      render: (v: string) => <Typography.Text type="secondary">{v}</Typography.Text>
+    }
+  ]
+
+  const batches = useMemo(() => {
+    const seen = new Map<string, number>()
+    for (const r of rows) if (r.batchId) seen.set(r.batchId, (seen.get(r.batchId) || 0) + 1)
+    return [...seen.entries()].map(([bid, count]) => ({ bid, count }))
+  }, [rows])
+
+  return (
+    <div>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={
+          <>
+            超过保留期（当前 {stats?.retentionDays ?? 90} 天）的日志会按<b>自然月</b>整月搬入归档区，<b>不会删除</b>。
+            归档每天凌晨 3:10 自动执行，也可在此手动触发。
+          </>
+        }
+      />
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col span={6}>
+          <Statistic title="热区（近期）" value={stats?.hotCount ?? 0} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="归档区" value={stats?.archiveCount ?? 0} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="最老的热区记录" value={stats?.oldestHot ? stats.oldestHot.slice(0, 10) : '—'} valueStyle={{ fontSize: 18 }} />
+        </Col>
+        <Col span={6}>
+          <Statistic title="最老的归档记录" value={stats?.oldestArchive ? stats.oldestArchive.slice(0, 10) : '—'} valueStyle={{ fontSize: 18 }} />
+        </Col>
+      </Row>
+
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Button icon={<ExperimentOutlined />} loading={running} onClick={() => runArchive(true)}>
+          试运行（看归档范围）
+        </Button>
+        <Popconfirm
+          title="确认执行归档？"
+          description="会把过期的整月日志搬入归档区。数据不会删除，但会移出热区列表。"
+          okText="执行"
+          cancelText="取消"
+          onConfirm={() => runArchive(false)}
+          disabled={!confirmReal}
+        >
+          <Button danger type="primary" loading={running} disabled={!confirmReal}>
+            执行归档
+          </Button>
+        </Popconfirm>
+        <Checkbox checked={confirmReal} onChange={(e) => setConfirmReal(e.target.checked)}>
+          我已确认范围无误
+        </Checkbox>
+        <Select
+          allowClear
+          placeholder="按月份筛选"
+          style={{ width: 130 }}
+          value={month}
+          onChange={setMonth}
+          options={months.map((m) => ({ value: m, label: m }))}
+        />
+        <Select
+          allowClear
+          placeholder="按批次筛选"
+          style={{ width: 220 }}
+          value={batchId}
+          onChange={setBatchId}
+          options={batches.map((b) => ({ value: b.bid, label: `${b.bid}（${b.count} 条）` }))}
+        />
+        {batchId && (
+          <Popconfirm
+            title="撤销该批次归档？"
+            description="归档记录会被退回热区列表。"
+            okText="撤销"
+            cancelText="取消"
+            onConfirm={() => revert(batchId)}
+          >
+            <Button icon={<RollbackOutlined />}>撤销当前批次</Button>
+          </Popconfirm>
+        )}
+      </Space>
+
+      <Table
+        rowKey="id"
+        size="middle"
+        columns={cols}
+        dataSource={rows}
+        loading={false}
+        pagination={{ pageSize: 15 }}
+        locale={{ emptyText: '归档区暂无记录（超过保留期的日志会自动搬入这里）' }}
+      />
+    </div>
   )
 }

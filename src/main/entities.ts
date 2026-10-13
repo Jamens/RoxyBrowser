@@ -396,6 +396,9 @@ export class AccountEntity {
 
 @Entity('operation_logs')
 @Index(['teamId'])
+// 列表按 id 倒序取前 500 条本身走主键，但归档按时间扫描「哪些记录该搬」、
+// 保留期校验要取最老的一条，都走 createdAt——无索引时后者是全表扫描。
+@Index(['createdAt'])
 export class OperationLogEntity {
   @PrimaryGeneratedColumn()
   id: number
@@ -421,6 +424,51 @@ export class OperationLogEntity {
 
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
+}
+
+// ===== 操作日志归档区 =====
+// 热区（operation_logs）只保留最近 N 天，更早的按**自然月**整月搬到这里。
+// 不直接删除的理由：审计日志的全部价值在于「事后可查」，删掉等于毁掉证据——
+// 出了安全事故回头查「三个月前谁导出了 Cookie」，发现已被清理，是不可接受的。
+@Entity('operation_log_archives')
+// 归档查询几乎总是「按团队 + 按时间范围」，这两列组成复合索引覆盖列表与导出
+@Index(['teamId', 'createdAt'])
+// batchId 支撑「按批次回溯 / 撤销」与前端展示归档批次
+@Index(['batchId'])
+export class OperationLogArchiveEntity {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ type: 'int' })
+  teamId: number
+
+  @Column({ type: 'int' })
+  userId: number
+
+  @Column({ type: 'varchar', length: 64 })
+  username: string
+
+  @Column({ type: 'varchar', length: 64 })
+  action: string
+
+  @Column({ type: 'text' })
+  detail: string
+
+  @Column({ type: 'tinyint', default: 0 })
+  sensitive: boolean
+
+  // 原始发生时间（从热区原样搬来，不因归档而改变——否则时间线会对不上）
+  @Column({ type: 'datetime' })
+  createdAt: Date
+
+  // 归档批次号：同一次归档的所有记录共享，便于回溯与按批撤销
+  @Column({ type: 'varchar', length: 96 })
+  batchId: string
+
+  // 该记录所属自然月（'2026-07'）：归档单元的语义标识，
+  // 让「2026 年 7 月的全部日志」成为一个可交付的审计时间段
+  @Column({ type: 'varchar', length: 7 })
+  month: string
 }
 
 @Entity('api_tokens')

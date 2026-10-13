@@ -30,6 +30,7 @@ const COMPILES = [
   { name: 'proxyHeal', files: ['src/shared/proxyHeal.ts'], out: '.tmp_ph' },
   { name: 'sessionRevoke', files: ['src/shared/sessionRevoke.ts'], out: '.tmp_sr' },
   { name: 'rateLimit', files: ['src/shared/rateLimit.ts'], out: '.tmp_rl' },
+  { name: 'logArchive', files: ['src/shared/logArchive.ts'], out: '.tmp_la' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
@@ -50,6 +51,7 @@ const TESTS = [
   { name: 'proxyHeal', file: 'tests/proxyHeal.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
   { name: 'rateLimit', file: 'tests/rateLimit.test.cjs' },
+  { name: 'logArchive', file: 'tests/logArchive.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 

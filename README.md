@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（14 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（15 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -355,6 +355,28 @@ app.listen(4000)
 
 设置页 →「安全」分区可调三项：接口限流（0 = 关闭）、锁定阈值（0 = 不锁定）、锁定时长。
 
+### 操作日志归档（整月搬运，不删数据）
+
+审计日志只增不删，半年后单表百万行——列表变慢、备份膨胀。但**直接删会毁掉证据**：出了安全事故回头查「三个月前谁导出了 Cookie」，发现已被清理，是不可接受的。
+
+所以采用**两段式保留**：
+
+| 区域 | 表 | 内容 |
+| -- | -- | -- |
+| 热区 | `operation_logs` | 最近 N 天（设置项 `logRetentionDays`，默认 90 天），承载日常查询与导出 |
+| 归档区 | `operation_log_archives` | 更早的数据，**按自然月**整月打包，不进列表接口，只在「操作日志 → 归档区」按需检索 |
+
+- **按自然月而非固定天数切分**：让「2026 年 7 月的全部日志」成为一个可交付的审计时间段，而「第 87 天到第 102 天」不是。
+- **只归档*完整*月份**（最容易出错的一条）：今天是 7/15、保留 30 天时，6/1~6/14 仍在保留期内。若按时间点切割就等于提前销毁证据。判定逻辑在 `src/shared/logArchive.ts`，有 40+ 条离线单测锁着。
+- **只列*实际有记录*的月份**：朴素实现会从边界月一路回推到 1970 年、得到 600 个「可归档月份」，其中绝大多数是空的——若把它们写进批次号，会显示成 `1976-07~2026-06`，让用户误以为要归档 50 年数据。故先用 `DATE_FORMAT` 在库侧分桶查出真实存在的月份再取交集。
+- **归月必须用本地时区**：用 `toISOString()` 会把 1 月 1 日凌晨算成去年 12 月。
+- **每批可撤销**：归档不可逆，但没有撤销就等于「一个设置项能毁掉全部审计证据」。每批带 `batchId`，一键退回热区。
+- **不可逆操作有前置闸门**：`validateArchive` 会在「最老的日志竟仍在保留期内」（说明时间计算有误）或「单批超 50 万行」时直接拒绝执行。
+- **分批 + 事务内搬运**：一次 `DELETE ... WHERE createdAt < ?` 扫十万行会长时间锁表。改为分批读 → 事务内「插归档 + 删热区」→ 直到取空，每批原子生效。
+- **dry-run 默认开**：手动触发归档时接口默认 `dryRun=true`，只报告范围不动数据；真执行要在 UI 上勾选确认框。
+- **调度在凌晨 3:10 且刻意避开整点**：整点是各类定时任务扎堆时刻，错开可避免与代理巡检、RPA 调度同时抢磁盘 IO。用**递归 `setTimeout`** 而非 `setInterval`——后者间隔固定，跑一次后就偏离 3:10 越来越远。
+- 不在启动时立即执行，避免拖慢首屏；`PUT /settings` 改了保留期会重启调度器让新范围尽快生效。
+
 ### 凭据静态加密（AES-256-GCM）
 
 此前 `accounts.password`、`proxies.password`、`users.twoFactorSecret` 与 `app_settings.aiAgent.cloudApiKey` **全部明文入库**——全项目没有任何加解密实现。对一个以「多账号防关联」为卖点、且专门做了 `api_tokens` 敏感拦截的产品，一份 mysqldump 就等于全部店铺账号 + 2FA 长期接管权，是自相矛盾的硬伤。
@@ -483,6 +505,7 @@ src/
 │   ├── proxyHeal.ts          # 代理故障自愈：阈值闸门 / 合规替代代理挑选 / 跨环境出口 IP 去重（纯函数，可单测）
 │   ├── sessionRevoke.ts      # 会话撤销判定：tokenVersion 比对 / 类型校验（纯函数，可单测）
 │   ├── rateLimit.ts          # 接口限流与登录锁定：滑动窗口 / 失败计数 / 锁定到期（纯函数，可单测）
+│   ├── logArchive.ts        # 操作日志归档：整月切分 / 完整性校验 / 撤销判定（纯函数，可单测）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -515,7 +538,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 14 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 15 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
@@ -523,6 +546,7 @@ src/
 15. **新增 `jwt.sign` 会话令牌只能走 `signSessionToken()`**：手写 payload 漏掉 `ver`（会话版本号）不会有任何编译错误或测试报错，只会让该入口签发的令牌**永不被撤销**——撤销功能静默破防，且极难定位。判定逻辑见 `shared/sessionRevoke.ts`。同理，任何"要求客户端重新登录"的改动都必须同时确认 `api.ts` 的 401 分支能正确清理本地令牌并跳登录页。
 16. **往 `routes/` 拆路由必须经 deps 注入，且不得反向 import server**：`routes/* → server → routes` 会形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 `undefined`——表现为「一调用就报 undefined」，且只在启动后才暴露。故 `getDs` 一律传 `() => AppDataSource` 函数；跨模块只用 `import type`（编译期擦除）。连 `clientKeyOf` 这类纯工具也下沉到 `shared/`，避免 `routes → main` 的反向依赖。另注意**注册顺序**：`/logs/export` 这类静态路径必须先于 `/logs` 注册，否则被动态路由抢先匹配。
 17. **每请求前执行逻辑不要直接查库**：限流中间件在每个请求前跑，若每次 `await getSettings()` 就多一次 MySQL 查询，高频轮询下成瓶颈。用内存缓存 + 在写入口（`PUT /settings`）失效重取，兼顾「改设置立即生效」。同理，`BucketStore` 用定时 `sweep` 清理空桶，且定时器要 `unref()` 以免阻止应用退出。
+18. **`pnpm typecheck` 可能漏报，判别联合尤其危险**：`tsconfig.node.json` 开了 `composite: true`，`tsc` 会生成 `.tsbuildinfo` 增量缓存，**未变更的文件被跳过检查**。实测踩过：判别联合 `{ ok: true } | { ok: false; reason: string }` 的收窄问题，`pnpm typecheck` 报「零错误」，而 `tsc <单文件> --outDir ...`（无缓存）立刻报出 `Property 'reason' does not exist`。两种编译结果不一致本身就说明代码写法有风险。**规避：① 不依赖收窄，把字段摊平成独立变量；② 怀疑漏报时先 `rm -rf out-tsc *.tsbuildinfo` 再跑。**
 
 ## 打包分发
 

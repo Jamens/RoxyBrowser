@@ -602,9 +602,11 @@ export default function Settings() {
           name="logRetentionDays"
           label={t('settings.logRetention')}
           rules={[{ required: true }]}
+          extra={t('settings.logRetentionExtra')}
         >
           <InputNumber min={7} max={3650} addonAfter={t('common.days')} style={{ width: 160 }} />
         </Form.Item>
+        <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('settings.logRetentionNote')} />
 
         <Divider>{t('security.section')}</Divider>
         <Typography.Paragraph type="secondary">{t('security.desc')}</Typography.Paragraph>

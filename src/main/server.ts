@@ -47,6 +47,7 @@ import {
   AccountEntity,
   CookieEntity,
   OperationLogEntity,
+  OperationLogArchiveEntity,
   ApiTokenEntity,
   AppSettingsEntity,
   ExtensionEntity,
@@ -81,6 +82,7 @@ import type { Plan } from '../shared/assistantPlan'
 import { sendSmtpMail } from './smtp'
 import { renderAcceptInvitePage } from './acceptInvitePage'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
+import { runLogArchive } from './logArchiver'
 import { registerLogRoutes } from './routes/logs'
 import { registerCookieRoutes } from './routes/cookies'
 import { registerV1CookieRoutes } from './routes/v1Cookie'
@@ -940,6 +942,45 @@ async function startSnapshotBackupScheduler(): Promise<void> {
     runSnapshotBackupAll().catch((e) => console.error('[roxy] 快照定时备份异常:', e))
   }, intervalH * 3600 * 1000)
   console.log(`[roxy] 全空间快照定时备份已启动，间隔 ${intervalH} 小时，目录 ${dir}`)
+}
+
+let logArchiveTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 操作日志归档调度器。
+ *
+ * 每天凌晨 3:10 执行一次。选这个点有三个理由：
+ * - 凌晨业务空闲，搬移过程对用户无感；
+ * - **故意避开 3:00 整点**——整点是各类定时任务的扎堆时刻，错开可避免与
+ *   代理巡检、RPA 调度同时抢磁盘 IO；
+ * - 3:10 意味着前一天的日志已完整落库，跨天归档不会漏当天数据。
+ *
+ * 归档是**搬运而非删除**（见 logArchiver.ts），即使跑错也只是数据挪了位置，
+ * 且每批次都可撤销——但仍不做「启动时立刻执行」，避免拖慢应用首屏启动。
+ */
+async function startLogArchiveScheduler(): Promise<void> {
+  if (logArchiveTimer) {
+    clearTimeout(logArchiveTimer)
+    logArchiveTimer = null
+  }
+  const msUntilNextRun = () => {
+    const now = new Date()
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 3, 10, 0, 0)
+    if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1)
+    return next.getTime() - now.getTime()
+  }
+  const arm = () => {
+    const delay = msUntilNextRun()
+    logArchiveTimer = setTimeout(() => {
+      runLogArchive(AppDataSource)
+        .then((r) => console.log(`[roxy] 日志归档：${r.reason}`))
+        .catch((e) => console.error('[roxy] 日志归档异常:', e))
+        .finally(arm) // 递归重新武装：setInterval 的间隔是固定的，
+        // 跑一次后就偏离 3:10 越来越远；递归 setTimeout 才能每天都准点触发
+    }, delay)
+  }
+  arm()
+  console.log(`[roxy] 操作日志归档已启动（每日 3:10，首次 ${(msUntilNextRun() / 3600 / 1000).toFixed(1)} 小时后）`)
 }
 
 let rpaScheduleTimer: ReturnType<typeof setInterval> | null = null
@@ -2478,6 +2519,8 @@ function buildApiRouter(): express.Router {
       startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
       // 限流限额同步刷新：改设置后立即生效，不需重启应用
       void refreshRateLimitConfig()
+      // 保留期变了，归档范围随之改变——重启调度器让新的保留期尽快生效
+      void startLogArchiveScheduler()
     },
     defaultSettings: DEFAULT_SETTINGS,
     normalizeSearchEngine
@@ -3810,6 +3853,7 @@ export async function bootstrap(): Promise<string> {
       AccountEntity,
       CookieEntity,
       OperationLogEntity,
+      OperationLogArchiveEntity,
       ApiTokenEntity,
       AppSettingsEntity,
       ExtensionEntity,
@@ -3914,6 +3958,8 @@ export async function bootstrap(): Promise<string> {
   startRpaScheduleScheduler()
   // 7. 启动全空间快照定时自动备份调度（按间隔写入本地目录，目录为空/未启用则跳过）
   startSnapshotBackupScheduler().catch((e) => console.error('[roxy] 启动快照备份调度失败:', e))
+  // 8. 启动操作日志归档调度（把过期整月搬到归档区，不删除数据）
+  startLogArchiveScheduler().catch((e) => console.error('[roxy] 启动日志归档调度失败:', e))
 
   return apiBase
 }

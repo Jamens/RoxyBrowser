@@ -208,6 +208,33 @@ export interface LogDTO {
   createdAt: string
 }
 
+/** 归档后的日志：字段与热区一致，另有归档批次与所属月份 */
+export interface ArchivedLogDTO extends LogDTO {
+  batchId: string
+  month: string
+}
+
+/** 归档规模概览 */
+export interface ArchiveStatsDTO {
+  hotCount: number
+  archiveCount: number
+  oldestHot: string | null
+  oldestArchive: string | null
+  /** 当前生效的保留期（天） */
+  retentionDays: number
+}
+
+/** 归档执行结果 */
+export interface ArchiveOutcomeDTO {
+  batchId: string
+  months: string[]
+  moved: number
+  byMonth: Record<string, number>
+  skipped: number
+  dryRun: boolean
+  reason: string
+}
+
 export interface GroupDTO {
   id: number
   teamId: number

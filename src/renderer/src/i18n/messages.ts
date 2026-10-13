@@ -163,6 +163,9 @@ const zhCN = {
   'security.note': '登录失败按「用户名」计数而非 IP —— 本机请求都来自 127.0.0.1，按 IP 计数会导致所有人共用额度，攻击者猛打一个账号就能把其他人一起锁在门外。锁定事件会写入操作日志并推送 Webhook。',
 
   'settings.logRetention': '操作日志保留天数',
+  'settings.logRetentionExtra': '超过这个天数的日志会按自然月整月搬入「归档区」，数据不会删除，可在操作日志页查看与撤销',
+  'settings.logRetentionNote': '归档不是删除：过期日志会搬到 operation_log_archives 表，可按月份/批次检索，每批都能一键退回热区。默认每天凌晨 3:10 自动执行一次。',
+
   'settings.sectionNetwork': '网络',
   'settings.networkMode': '网络连接方式',
   'settings.smtpSection': '邮件 SMTP（邮箱邀请）',
@@ -640,6 +643,9 @@ const enUS: MessageDict = {
   'security.note': 'Login failures are counted per username, not per IP — all local requests come from 127.0.0.1, so per-IP counting would share one budget and let an attacker lock everyone out by hammering a single account. Lockout events are written to the operation log and pushed via Webhook.',
 
   'settings.logRetention': 'Activity log retention',
+  'settings.logRetentionExtra': 'Logs older than this are moved whole-month into the archive — nothing is deleted; view and undo them on the Logs page',
+  'settings.logRetentionNote': 'Archiving is not deletion: expired logs move to the operation_log_archives table and stay searchable by month/batch, with one-click restore per batch. Runs automatically at 3:10 AM daily.',
+
   'settings.sectionNetwork': 'Network',
   'settings.networkMode': 'Connection method',
   'settings.smtpSection': 'Mail SMTP (email invites)',
@@ -1113,6 +1119,9 @@ const jaJP: MessageDict = {
   'security.note': 'ログイン失敗は IP ではなく「ユーザー名」単位でカウントします。ローカルリクエストはすべて 127.0.0.1 からのため、IP 単位だと全ユーザーが同じ枠を共有し、攻撃者が 1 アカウントを叩くだけで他のユーザーもロックされてしまいます。ロックイベントは操作ログに記録され、Webhook で通知されます。',
 
   'settings.logRetention': '操作ログの保持日数',
+  'settings.logRetentionExtra': 'この日数を超えたログは自然月単位でアーカイブへ移動されます（削除はされません）。操作ログ画面で確認・取り消しできます',
+  'settings.logRetentionNote': 'アーカイブは削除ではありません：期限切れログは operation_log_archives テーブルへ移動され、月／バッチ単位で検索でき、批次ごとにワンクリックで戻せます。既定では毎日 3:10 に自動実行されます。',
+
   'settings.sectionNetwork': 'ネットワーク',
   'settings.networkMode': '接続方式',
   'settings.smtpSection': 'メール SMTP（メール招待）',
@@ -1585,6 +1594,9 @@ const deDE: MessageDict = {
   'security.note': 'Fehlgeschlagene Logins werden pro Benutzername gezählt, nicht pro IP – alle lokalen Anfragen kommen von 127.0.0.1, sonst teilten sich alle Benutzer ein Budget und Angreifer könnten durch Hämmern auf ein Konto alle anderen aussperren. Sperrereignisse werden im Aktivitätsprotokoll vermerkt und per Webhook gesendet.',
 
   'settings.logRetention': 'Aufbewahrung des Aktivitätsprotokolls',
+  'settings.logRetentionExtra': 'Logs älter als diese Zahl werden als Ganzer Monat ins Archiv verschoben – nichts wird gelöscht; auf der Log-Seite einsehbar und rückgängig machbar',
+  'settings.logRetentionNote': 'Archivieren ist nicht Löschen: abgelaufene Logs wandern in die Tabelle operation_log_archives, bleiben nach Monat/Batch durchsuchbar und lassen sich pro Batch mit einem Klick zurückspielen. Standardmäßig täglich um 3:10 Uhr.',
+
   'settings.sectionNetwork': 'Netzwerk',
   'settings.networkMode': 'Verbindungsart',
   'settings.smtpSection': 'E-Mail-SMTP (Einladungen)',

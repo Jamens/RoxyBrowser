@@ -12,7 +12,7 @@ import 'reflect-metadata'
 import { DataSource } from 'typeorm'
 import {
   UserEntity, TeamEntity, TeamMemberEntity, TeamInviteEntity, GroupEntity,
-  ProxyEntity, ProfileEntity, CookieEntity, AccountEntity, OperationLogEntity,
+  ProxyEntity, ProfileEntity, CookieEntity, AccountEntity, OperationLogEntity, OperationLogArchiveEntity,
   ApiTokenEntity, ExtensionEntity, RpaScriptEntity, AppSettingsEntity, AssistantSkillEntity
 } from '../src/main/entities'
 
@@ -27,7 +27,7 @@ async function main() {
     charset: 'utf8mb4',
     entities: [
       UserEntity, TeamEntity, TeamMemberEntity, TeamInviteEntity, GroupEntity,
-      ProxyEntity, ProfileEntity, CookieEntity, AccountEntity, OperationLogEntity,
+      ProxyEntity, ProfileEntity, CookieEntity, AccountEntity, OperationLogEntity, OperationLogArchiveEntity,
       ApiTokenEntity, ExtensionEntity, RpaScriptEntity, AppSettingsEntity, AssistantSkillEntity
     ],
     synchronize: true,
