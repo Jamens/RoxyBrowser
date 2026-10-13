@@ -200,28 +200,63 @@ export default function Dashboard() {
       <Spin spinning={loading}>
         <Row gutter={[16, 16]}>
           {metrics.map((m) => (
-            <Col xs={12} sm={8} md={6} lg={4} xl={3} key={m.title}>
-              <Card size="small" styles={{ body: { padding: 16 } }} style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            // 栅格：xs/sm 每行 2 个，md 及以上每行 4 个（8 个指标共两行）。
+            // 原先 xl={3} 想把 8 个指标塞进一行，实测在 1080px 屏上每卡仅 92px，
+            // 扣掉图标与内边距只剩 24px 给标题——放不下 4 个汉字，必然换行或被省略号
+            // 截断（截成「账号总…」同样不好看）。4 列时每卡约 200px，标题可完整显示。
+            <Col xs={12} sm={12} md={6} lg={6} xl={6} key={m.title}>
+              <Card
+                size="small"
+                styles={{ body: { padding: '12px 14px', height: '100%' } }}
+                style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.06)', height: '100%' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div
                     style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: 10,
+                      width: 36,
+                      height: 36,
+                      borderRadius: 9,
                       background: m.bg,
                       color: m.color,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: 20,
+                      fontSize: 18,
                       flex: '0 0 auto'
                     }}
                   >
                     {m.icon}
                   </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ color: token.colorTextSecondary, fontSize: 12, lineHeight: 1.2 }}>{m.title}</div>
-                    <div style={{ color: m.color, fontSize: 22, fontWeight: 700, lineHeight: 1.3 }}>{m.value}</div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    {/* 仍保留 nowrap + 省略号作为兜底：文案被翻译成德语 / 日语后
+                        词更长（如「代理总数」→ considerably longer），固定单行可保证
+                        所有卡片高度一致，不会因某一格折行而让整行参差。 */}
+                    <div
+                      title={m.title}
+                      style={{
+                        color: token.colorTextSecondary,
+                        fontSize: 12,
+                        lineHeight: 1.35,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {m.title}
+                    </div>
+                    <div
+                      style={{
+                        color: m.color,
+                        fontSize: 22,
+                        fontWeight: 700,
+                        lineHeight: 1.25,
+                        marginTop: 1,
+                        // 等宽数字：位数变化时不引起宽度抖动
+                        fontVariantNumeric: 'tabular-nums'
+                      }}
+                    >
+                      {m.value}
+                    </div>
                   </div>
                 </div>
               </Card>
