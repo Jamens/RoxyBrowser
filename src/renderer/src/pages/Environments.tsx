@@ -11,6 +11,8 @@ import {
   SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined, ClockCircleOutlined,
   StarOutlined, StarFilled, UserOutlined, ClearOutlined
 } from '@ant-design/icons'
+import { HEALTH_ITEM_LABELS } from '@shared/healthcheck'
+import type { BaselineDiff } from '@shared/healthBaseline'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
 import type { ColumnsType } from 'antd/es/table'
@@ -49,35 +51,8 @@ interface ScanResultItem {
   error?: string
 }
 
-const HEALTH_LABELS: Record<string, string> = {
-  userAgent: 'User Agent',
-  platform: '平台 Platform',
-  languages: '语言 Languages',
-  screen: '屏幕分辨率',
-  timezone: '时区 Timezone',
-  tzOffset: '时区偏移 UTC',
-  webgl: 'WebGL 显卡',
-  webglOsMatch: 'WebGL ↔ OS 一致性（显卡与系统匹配）',
-  uaData: 'UA-CH（userAgentData）',
-  hardwareConcurrency: 'CPU 核心数',
-  deviceMemory: '内存 deviceMemory',
-  doNotTrack: 'Do Not Track',
-  touch: '触摸能力',
-  canvasNoise: 'Canvas 噪声',
-  audioNoise: 'Audio 噪声',
-  webrtc: 'WebRTC',
-  fonts: '字体防泄漏',
-  webgpu: 'WebGPU 显卡',
-  webgpuSubgroup: 'WebGPU 子群尺寸（原生透传）',
-  audioProfile: '音频特征（采样率/延迟/声道）',
-  audioReduction: '音频压缩器 reduction',
-  audioCodecs: '音频编解码能力（IAMF/Opus/AAC，不注入）',
-  eme: 'EME / Widevine（DRM 模块）',
-  automation: '反自动化痕迹（webdriver / CDP）',
-  platformApis: '平台 API 一致性（Bluetooth/USB/Serial/HID/NFC）',
-  mediaPrefs: '媒体查询偏好（配色 / 减少动效）',
-  fontOsConsistency: '字体与 OS 一致性（字体列表符合声明系统）'
-}
+// 检查项显示名统一取自 shared（主进程拼告警文案时用的是同一份，避免两边漂移）
+const HEALTH_LABELS = HEALTH_ITEM_LABELS
 
 // 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）
 const CONSISTENCY_LABELS: Record<string, string> = {
@@ -113,6 +88,14 @@ interface BatchHealthResult {
   passThreshold: number
   itemStats: BatchHealthItemStat[]
   profiles: BatchHealthProfile[]
+  /** 与上次基线的对比结果 */
+  baseline?: {
+    /** 首次体检（尚无基线可比） */
+    firstRun: boolean
+    comparedAt: string | null
+    diffs: BaselineDiff[]
+    regressed: string[]
+  }
 }
 
 // ===== 智能代理分配：后端返回结构 =====
@@ -1637,6 +1620,57 @@ export default function Environments() {
               <Stat label="已探测 / 跳过" value={`${batchHealthData.probed} / ${batchHealthData.skipped}`} />
               <Stat label="选中总数" value={`${batchHealthData.total}`} />
             </div>
+
+            {batchHealthData.baseline && (
+              <Alert
+                style={{ marginBottom: 16 }}
+                type={batchHealthData.baseline.regressed.length ? 'error' : batchHealthData.baseline.firstRun ? 'info' : 'success'}
+                showIcon
+                message={
+                  batchHealthData.baseline.regressed.length
+                    ? `检测到 ${batchHealthData.baseline.regressed.length} 个检查项相对上次集体下滑 —— 若非有意改动注入逻辑，可能是注入代码被改坏了`
+                    : batchHealthData.baseline.firstRun
+                      ? `已建立首个体检基线（本次体检 ${batchHealthData.probed} 个环境），下次体检即可对比变化`
+                      : '各检查项与上次基线持平或改善'
+                }
+                description={
+                  batchHealthData.baseline.diffs.filter((d) => d.sample > 0).length ? (
+                    <div style={{ marginTop: 8 }}>
+                      {batchHealthData.baseline.diffs
+                        .filter((d) => d.sample > 0)
+                        .slice(0, 8)
+                        .map((d) => (
+                          <div
+                            key={d.key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: '3px 0',
+                              color: d.regressed ? '#cf1322' : '#666',
+                              fontWeight: d.regressed ? 600 : 400
+                            }}
+                          >
+                            <span style={{ width: 240 }}>{HEALTH_LABELS[d.key] || d.key}</span>
+                            <span style={{ width: 130 }}>
+                              {Math.round(d.prevPassRate * 100)}% → {Math.round(d.currPassRate * 100)}%
+                            </span>
+                            <span style={{ width: 70 }}>
+                              {d.delta === 0 ? '持平' : d.delta > 0 ? `+${Math.round(d.delta * 100)}pp` : `${Math.round(d.delta * 100)}pp`}
+                            </span>
+                            {d.regressed && <Tag color="red">回归</Tag>}
+                            {!d.regressed && d.skipReason && (
+                              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                                {d.skipReason}
+                              </Typography.Text>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  ) : null
+                }
+              />
+            )}
 
             {batchHealthData.itemStats.some((s) => s.failed > 0) && (
               <>

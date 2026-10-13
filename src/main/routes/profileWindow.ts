@@ -1,12 +1,13 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { DataSource } from 'typeorm'
 import { In } from 'typeorm'
-import { ProfileEntity, ProxyEntity, CookieEntity, AccountEntity, TeamMemberEntity, TeamEntity } from '../entities'
+import { ProfileEntity, ProxyEntity, CookieEntity, AccountEntity, TeamMemberEntity, TeamEntity, AppSettingsEntity } from '../entities'
 import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
 import { getEnvExpiresAt } from '../../shared/envExpiry'
-import { buildHealthReport, type HealthReport } from '../../shared/healthcheck'
+import { buildHealthReport, healthItemLabel, type HealthReport } from '../../shared/healthcheck'
+import { diffBaseline, regressedItems, regressedText, MIN_SAMPLES, type HealthBaseline } from '../../shared/healthBaseline'
 import { SCAN_SITES, getScanSite, type ScanResult } from '../fingerprintScan'
 import type { Fingerprint } from '../../shared/types'
 
@@ -189,6 +190,36 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       .map(([key, v]) => ({ key, ...v }))
       .sort((a, b) => b.failed - a.failed || b.passed - a.passed)
 
+    // ===== 体检基线对比（发现「注入改坏了」）=====
+    // 单次体检报告是即用即弃的，跑完就没了。而指纹注入代码一改，往往一次改坏
+    // 影响**全部**环境——这正是最该被立刻发现的信号，却最难靠用户主动复查发现。
+    // 故把本次聚合存为基线，下次体检时对比：有检查项的通过率集体下滑则告警。
+    //
+    // 基线存在 app_settings 单例的 settings.healthBaseline 里，**不新增数据库表**：
+    // 一是避免让已有用户升级就得跑 db:sync，二是注入逻辑本就是全局的，
+    // 全局基线在语义上比「每团队一份」更正确（改坏的是代码，不是某个团队的数据）。
+    const agg = Object.fromEntries(itemStatsArr.map((x) => [x.key, { passed: x.passed, failed: x.failed, na: x.na }]))
+    const baseline = (await loadHealthBaseline()) as HealthBaseline | null
+    const diffs = diffBaseline(baseline, agg)
+    const bad = regressedItems(diffs)
+
+    // 回归时先告警、再更新基线：顺序反了的话，一旦告警投递失败基线已被覆盖，
+    // 这条回归就永远丢了，下一轮会以为「一切正常」。
+    if (bad.length) {
+      const text = regressedText(diffs, healthItemLabel)
+      await writeLog(req, 'health_baseline_regressed', text)
+    }
+    // 只在有足够样本时才更新基线：拿 1~2 个环境的结果当基线，
+    // 下次拿 20 个来比就会得出「大幅回归」的错误结论。
+    if (probed >= MIN_SAMPLES) {
+      await saveHealthBaseline({
+        savedAt: new Date().toISOString(),
+        probed,
+        avgScore: probed ? Math.round(scoreSum / probed) : 0,
+        items: agg
+      })
+    }
+
     res.json({
       total: ordered.length,
       probed,
@@ -197,9 +228,29 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       passCount,
       passThreshold: PASS,
       itemStats: itemStatsArr,
-      profiles: results
+      profiles: results,
+      baseline: {
+        // 首次体检时 baseline 为 null，前端据此显示「已建立首个基线」而非「无变化」
+        firstRun: !baseline,
+        comparedAt: baseline?.savedAt ?? null,
+        diffs,
+        regressed: bad.map((d) => d.key)
+      }
     })
   })
+
+  // 读 / 写体检基线（存 app_settings 单例，非独立表）
+  async function loadHealthBaseline(): Promise<HealthBaseline | null> {
+    const row = await getDs().getRepository(AppSettingsEntity).findOne({ where: { key: 'global' } })
+    const v = (row?.settings as Record<string, unknown> | undefined)?.healthBaseline
+    return (v as HealthBaseline | undefined) ?? null
+  }
+  async function saveHealthBaseline(b: HealthBaseline): Promise<void> {
+    const repo = getDs().getRepository(AppSettingsEntity)
+    const row = await repo.findOne({ where: { key: 'global' } })
+    if (!row) return
+    await repo.save(repo.create({ ...row, settings: { ...(row.settings || {}), healthBaseline: b } }))
+  }
 
   // 环境截图：截取运行中环境窗口当前视口，返回 PNG（data URL）。
   // 用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕等；必须在环境运行时执行——

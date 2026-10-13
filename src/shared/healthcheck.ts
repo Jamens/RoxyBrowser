@@ -595,3 +595,48 @@ export function buildHealthReport(
     error: actual.error
   }
 }
+
+/**
+ * 检查项 key → 中文显示名的**唯一权威映射**。
+ *
+ * 为什么放 shared 而不是留在渲染进程：基线回归告警是在**主进程**拼的文案
+ * （写日志 + 推 webhook），而报表是在渲染进程显示的。两边各写一份必然漂移——
+ * 用户会看到「日志里叫『Canvas 噪声』、报表里叫 canvasNoise」这种割裂。
+ * 故放这里，主进程与渲染进程共用同一份。
+ *
+ * 新增检查项时**必须**在这里加一条，否则告警文案里会直接显示英文 key。
+ */
+export const HEALTH_ITEM_LABELS: Record<string, string> = {
+  userAgent: 'User Agent',
+  platform: '平台 Platform',
+  languages: '语言 Languages',
+  screen: '屏幕分辨率',
+  timezone: '时区 Timezone',
+  tzOffset: '时区偏移 UTC',
+  webgl: 'WebGL 显卡',
+  webglOsMatch: 'WebGL ↔ OS 一致性（显卡与系统匹配）',
+  uaData: 'UA-CH（userAgentData）',
+  hardwareConcurrency: 'CPU 核心数',
+  deviceMemory: '内存 deviceMemory',
+  doNotTrack: 'Do Not Track',
+  touch: '触摸能力',
+  canvasNoise: 'Canvas 噪声',
+  audioNoise: 'Audio 噪声',
+  webrtc: 'WebRTC',
+  fonts: '字体防泄漏',
+  webgpu: 'WebGPU 显卡',
+  webgpuSubgroup: 'WebGPU 子群尺寸（原生透传）',
+  audioProfile: '音频特征（采样率/延迟/声道）',
+  audioReduction: '音频压缩器 reduction',
+  audioCodecs: '音频编解码能力（IAMF/Opus/AAC，不注入）',
+  eme: 'EME / Widevine（DRM 模块）',
+  automation: '反自动化痕迹（webdriver / CDP）',
+  platformApis: '平台 API 一致性（Bluetooth/USB/Serial/HID/NFC）',
+  mediaPrefs: '媒体查询偏好（配色 / 减少动效）',
+  fontOsConsistency: '字体与 OS 一致性（字体列表符合声明系统）'
+}
+
+/** 取显示名；未登记的 key 原样返回（好过显示空白） */
+export function healthItemLabel(key: string): string {
+  return HEALTH_ITEM_LABELS[key] || key
+}
