@@ -446,7 +446,9 @@ export interface WebhookConfig {
 // Webhook 事件分组（设置页多选 UI 的预设；引擎只做字符串匹配，分组纯属展示用）。
 // 每个分组的 events 是「关键词」：事件名按 _ 分词后包含该关键词即命中——
 // 这样能自然适配「动词在前」的操作日志命名（create_profile / open_profile / batch_delete_profile 都含 profile 段）。
-export type WebhookGroupKey = 'profile' | 'proxy' | 'team' | 'account' | 'cookie' | 'rpa' | 'agent' | 'auth'
+export type WebhookGroupKey =
+  | 'profile' | 'proxy' | 'team' | 'account' | 'cookie' | 'rpa' | 'agent' | 'auth'
+  | 'expiry' | 'health'
 export const WEBHOOK_EVENT_GROUPS: { key: WebhookGroupKey; events: string[] }[] = [
   { key: 'profile', events: ['profile', 'template'] },
   { key: 'proxy', events: ['proxy'] },
@@ -455,7 +457,13 @@ export const WEBHOOK_EVENT_GROUPS: { key: WebhookGroupKey; events: string[] }[] 
   { key: 'cookie', events: ['cookie'] },
   { key: 'rpa', events: ['rpa'] },
   { key: 'agent', events: ['agent'] },
-  { key: 'auth', events: ['login', '2fa'] }
+  { key: 'auth', events: ['login', '2fa'] },
+  // 到期类（expiry_alert / batch_extend_expiry）与健康类（health_baseline_regressed /
+  // fix_consistency）。**分组不在这里就等于功能没上线**——设置页按分组渲染可选项，
+  // 事件名按 _ 分词后不命中任何关键词关键词的话，用户在 UI 上根本选不到，
+  // 只能手填或选「全部」。新增带新动词的 webhook 事件时，务必同步在此登记。
+  { key: 'expiry', events: ['expiry', 'alert'] },
+  { key: 'health', events: ['health', 'consistency', 'fix'] }
 ]
 
 // 全局设置（设置页持久化到 app_settings 表）
