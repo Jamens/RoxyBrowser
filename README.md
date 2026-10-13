@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（15 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（16 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -507,6 +507,7 @@ src/
 │   ├── sessionRevoke.ts      # 会话撤销判定：tokenVersion 比对 / 类型校验（纯函数，可单测）
 │   ├── rateLimit.ts          # 接口限流与登录锁定：滑动窗口 / 失败计数 / 锁定到期（纯函数，可单测）
 │   ├── logArchive.ts        # 操作日志归档：整月切分 / 完整性校验 / 撤销判定（纯函数，可单测）
+│   ├── crashReason.ts       # 渲染进程崩溃判定：哪些 reason 该纠状态（纯函数，可单测）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -539,7 +540,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 15 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 16 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
@@ -550,6 +551,8 @@ src/
 18. **`pnpm typecheck` 可能漏报，判别联合尤其危险**：`tsconfig.node.json` 开了 `composite: true`，`tsc` 会生成 `.tsbuildinfo` 增量缓存，**未变更的文件被跳过检查**。实测踩过：判别联合 `{ ok: true } | { ok: false; reason: string }` 的收窄问题，`pnpm typecheck` 报「零错误」，而 `tsc <单文件> --outDir ...`（无缓存）立刻报出 `Property 'reason' does not exist`。两种编译结果不一致本身就说明代码写法有风险。**规避：① 不依赖收窄，把字段摊平成独立变量；② 怀疑漏报时先 `rm -rf out-tsc *.tsbuildinfo` 再跑。**
 19. **JSX 短路渲染数字会漏出「0」**：MySQL `tinyint` 列经 TypeORM 取回是**数字** `0`/`1`，不是布尔值。于是 `{x.sensitive && <Tag>敏感</Tag>}` 在 `x.sensitive === 0` 时求值为**数字 `0` 本身**（不是 `false`），React 会把它当合法 child 渲染成文本「0」——界面上每个非敏感操作后面都多个 0。**规则：JSX 里凡是用来自后端的数字字段做条件判断，一律写 `!!x && ...`。** 相关的还有 `{x.count && ...}`、`{x.enabled && ...}`（若后端返 0/1）。另外把 DTO 的对应字段声明成 `number | boolean` 而非 `boolean`——声明成 boolean 只会骗过编译器，不会改变运行时行为。
 20. **启动不再自动同步表结构，改实体后必须显式执行**：为省掉每次启动 ~156ms 的 schema 比对（实测 163ms → 7ms），`bootstrap()` 现在只查 `SHOW TABLES LIKE 'users'` 判断「表在不在」——**全新安装仍自动建表**（实测重建库后建出 16 张表），但「表已存在却缺新列」（旧版本升级）会跳过，症状是 `ER_BAD_FIELD_ERROR` 且启动无提示。故：**改实体后一律走 `pnpm db:check` 看差异 → `pnpm db:sync` 执行**；临时应急可设 `ROXY_FORCE_SYNC=1` 强制本次启动同步。这是有意的取舍——synchronize 在发版时改实体可能静默丢列，把结构变更变成显式可审阅的动作更安全。
+21. **渲染进程崩溃后环境状态会卡在 `running`**：`win.on('closed')` 是**唯一**把 `status` 置 idle 的地方，但渲染进程崩溃（页面 OOM、GPU 挂掉、页面开几百个标签耗尽内存）时崩的是**渲染进程**而非窗口壳 —— `closed` 可能永远不触发。于是 `status` 停在 `running`，用户点「打开」被「窗口已在运行中」拦住，而界面上根本没有那个窗口，**只能重启应用恢复**。三个出口都要堵：① `attachCrashGuards()` 监听 `webContents.on('render-process-gone')`，对 `crashed`/`oom`/`launch-failed`/`integrity-failure`/`memory-eviction`/`abnormal-exit` 主动 destroy 窗口触发清理（`clean-exit`/`killed` 是正常路径，误报会把排查带偏）；② `openWindow()` 用 `windows.get()` + `isDestroyed()` 双重校验而非 `windows.has()`，并顺手清僵尸条目；③ `getRunningWindowIds()` 过滤已销毁窗口，否则 UI 会误报「运行中」。**注意 `render-process-gone` 在 `app` 与 `WebContents` 上各有一份，签名不同**（前者 3 参数、后者 2 参数），挂错对象事件永不触发——`getWindow()` / `getRunningWindows()` 已有 `isDestroyed()` 防护，只有 `getRunningWindowIds()` 曾漏掉。
+22. **`pnpm typecheck` 可能漏报，判别联合尤其危险**：`tsconfig.node.json` 开了 `composite: true`，`tsc` 会生成 `.tsbuildinfo` 增量缓存，**未变更的文件被跳过检查**。实测踩过：判别联合 `{ ok: true } | { ok: false; reason: string }` 的收窄问题，`pnpm typecheck` 报「零错误」，而 `tsc <单文件> --outDir ...`（无缓存）立刻报出 `Property 'reason' does not exist`。两种编译结果不一致本身就说明代码写法有风险。**规避：① 不依赖收窄，把字段摊平成独立变量；② 怀疑漏报时先 `rm -rf out-tsc *.tsbuildinfo` 再跑。**
 
 ## 打包分发
 

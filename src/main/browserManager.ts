@@ -7,6 +7,7 @@ import type { Fingerprint, RpaStep } from '../shared/types'
 import type { FingerprintProbe } from '../shared/healthcheck'
 import { isTrackerRequest } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
+import { isAbnormalExit, formatCrashLog } from '../shared/crashReason'
 import { getScanSite, runSiteScan, type ScanResult } from './fingerprintScan'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
@@ -125,7 +126,15 @@ export function setTrayDisplay(mode: 'icon' | 'name') {
   }
 }
 export function getRunningWindowIds(): number[] {
-  return [...windows.keys()]
+  // 过滤掉已销毁的僵尸条目：渲染进程崩溃时 closed 可能不触发，Map 里会留下
+  // 失效的窗口引用。若不过滤，UI 会误报「运行中」，而用户点「打开」反而被
+  // status='running' 拦住 —— 与崩溃本身一样变成解不开的死结。
+  const ids: number[] = []
+  for (const [id, w] of windows) {
+    if (w.isDestroyed()) continue
+    ids.push(id)
+  }
+  return ids
 }
 
 /** 按环境 id 取运行中的窗口实例（Agent 执行闭环用它直接操作目标窗口的 webContents） */
@@ -199,10 +208,70 @@ async function markClosed(profileId: number) {
   }
 }
 
+/**
+ * 渲染进程崩溃 / 窗口无响应时的兜底：把环境状态从 running 拉回 idle。
+ *
+ * ## 为什么需要（这是用户解不开的死锁）
+ * `win.on('closed')` 是窗口生命周期里**唯一**把 `status` 置 idle 的地方。
+ * 但渲染进程崩溃（页面 OOM、GPU 进程挂掉、用户在页面里开了几百个标签耗尽内存）
+ * 时，BrowserWindow 本身**不一定**被销毁 —— 崩溃的是它内部的渲染进程，
+ * 窗口壳还在。于是：
+ *   - `closed` 不触发 → `status` 永远停在 `running`
+ *   - 用户点「打开」→ 被 `status === 'running'` 拦下，提示「窗口已在运行中」
+ *   - 但界面上根本没有那个窗口 → 用户只能重启应用才能恢复
+ *
+ * 这与「MySQL 没启动导致建表失败」是同一类问题：**用户被卡住，且自己解不开**。
+ *
+ * ## 为什么不自动重开
+ * 自动重开有两个问题：① 崩溃往往源于该页面本身（内存泄漏的站点），
+ * 重开只会陷入「崩溃→重开→崩溃」循环，把内存耗得更干净；
+ * ② 崩溃现场（页面状态、未提交的表单）已丢，静默重开用户会困惑。
+ * 故只做「状态纠正 + 留痕」，把重开的决定权交回用户。
+ */
+function attachCrashGuards(win: BrowserWindow, profileId: number, envName: string): void {
+  // 渲染进程消失。reason 需甄别：
+  //   clean-exit / killed —— 用户主动关闭或我们主动销毁，属正常路径，不该报警
+  //   crashed / oom / launch-failed / integrity-failure / memory-eviction —— 异常
+  win.webContents.on('render-process-gone', (_e: unknown, details: Electron.RenderProcessGoneDetails) => {
+    if (!isAbnormalExit(details.reason)) return
+    console.error(formatCrashLog(envName, profileId, details.reason, details.exitCode))
+    // 窗口壳若仍在，销毁它以触发 closed → markClosed；
+    // 若已随崩溃一并消失，closed 不会来，这里补一次状态纠正。
+    if (!win.isDestroyed()) {
+      win.destroy()
+    } else {
+      void markClosed(profileId)
+    }
+  })
+
+  // 窗口失去响应：不算崩溃，但用户点任何操作都无反应，同样需要给出出口。
+  // 只纠状态、不自动销毁 —— 无响应常是一时的，杀掉会丢掉用户正在填的表单。
+  win.on('unresponsive', () => {
+    console.warn(`[roxy] 环境「${envName}」(#${profileId}) 无响应`)
+  })
+
+  // 无响应后又恢复：说明只是一时卡顿，记一笔便于回溯
+  win.on('responsive', () => {
+    console.log(`[roxy] 环境「${envName}」(#${profileId}) 已恢复响应`)
+  })
+}
+
 export async function openWindow(profileId: number): Promise<void> {
-  if (windows.has(profileId)) {
-    windows.get(profileId)!.focus()
+  // 已存在窗口则聚焦。**必须同时校验 isDestroyed()**：
+// 渲染进程崩溃时窗口壳可能仍留在 Map 里（closed 未触发），此时 focus()
+// 会对已销毁的窗口抛错，且永远无法恢复 —— 这是「状态卡在 running」的
+// 第二条路径。顺手把僵尸条目清掉，让后续走正常创建流程。
+  const existing = windows.get(profileId)
+  if (existing && !existing.isDestroyed()) {
+    existing.focus()
     return
+  }
+  if (existing) {
+    windows.delete(profileId)
+    windowTitles.delete(profileId)
+    // 窗口已消失但 status 可能仍是 running，一并纠正，
+    // 否则下面 openWindow 返回后用户点「打开」仍会被 running 拦下
+    await markClosed(profileId)
   }
   const repo = AppDataSource.getRepository(ProfileEntity)
   const profile = await repo.findOne({ where: { id: profileId } })
@@ -329,6 +398,10 @@ export async function openWindow(profileId: number): Promise<void> {
     markClosed(profileId)
   })
   win.once('ready-to-show', () => win.show())
+
+  // 崩溃兜底：渲染进程异常退出时把状态拉回 idle，否则用户会被
+  // 「窗口已在运行中」永久拦住（详见 attachCrashGuards 的注释）
+  attachCrashGuards(win, profileId, profile.name)
 
   // 任务栏显示窗口名称：页面 <title> 会覆盖窗口标题，开启时锁回环境名
   win.on('page-title-updated', (e) => {
