@@ -427,7 +427,7 @@ for (const ctx of browser.contexts()) {
 src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
-│   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1
+│   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1（已按域抽出 auth/settings/logs/cookies/v1Cookie，剩余待拆）
 │   ├── apiAudit.ts           # 自动化 API 审计：method+path → action / detail 推导（纯函数，可单测）
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
 │   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
@@ -445,6 +445,8 @@ src/
 │   ├── authScope.ts          # 账户隔离公共定义：AuthedRequest 类型 + isAdminRole / ownerScope / ownerAndWhere（server 与 routes 共用）
 │   ├── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
 │   ├── routes/               # 按域拆出的路由模块（依赖经 deps 注入，避免与 server.ts 形成运行时循环依赖）
+│   │   ├── auth.ts           #   认证域：注册 / 登录 / 登出 / 会话 / 团队切换 / 2FA（12 个端点）
+│   │   ├── settings.ts       #   设置域：API 令牌 / 全局设置 / CDP 调试端口 / Webhook 测试
 │   │   ├── logs.ts           #   操作日志：列表（take 500）+ CSV/JSON 导出
 │   │   ├── cookies.ts        #   Cookie 管理：增删改查 / 批量导入导出 / 立即注入已打开窗口
 │   │   └── v1Cookie.ts       #   Cookie 自动化接口（Bearer 令牌鉴权，按 teamId + profileId 过滤）
@@ -490,6 +492,7 @@ src/
 12. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
 13. **`src/shared/` 禁止 import Node 模块**：shared 是主进程 / 渲染进程共用层，只要 renderer 侧（`@shared/xxx`）引用到某个文件，该文件就会被 vite 打进浏览器包。引入 `net` / `fs` / `path` 等会直接构建失败，报 `Module "net" has been externalized for browser compatibility`。需要 Node 能力的实现拆成两个文件——纯逻辑留 `shared/`、Node 侧留 `main/`（如 `shared/cdp.ts` 只有端口规整与 endpoint 拼装，`probePort` 在 `main/cdpManager.ts`）。
 14. **新增 `jwt.sign` 会话令牌只能走 `signSessionToken()`**：手写 payload 漏掉 `ver`（会话版本号）不会有任何编译错误或测试报错，只会让该入口签发的令牌**永不被撤销**——撤销功能静默破防，且极难定位。判定逻辑见 `shared/sessionRevoke.ts`。同理，任何"要求客户端重新登录"的改动都必须同时确认 `api.ts` 的 401 分支能正确清理本地令牌并跳登录页。
+15. **往 `routes/` 拆路由必须经 deps 注入，且不得反向 import server**：`routes/* → server → routes` 会形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 `undefined`——表现为「一调用就报 undefined」，且只在启动后才暴露。故 `getDs` 一律传 `() => AppDataSource` 函数；跨模块只用 `import type`（编译期擦除）。另注意**注册顺序**：`/logs/export` 这类静态路径必须先于 `/logs` 注册，否则被动态路由抢先匹配。
 
 ## 打包分发
 

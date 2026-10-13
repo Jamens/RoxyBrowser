@@ -9,6 +9,33 @@
 
 ---
 
+## 2026-10-13 · 重构：server.ts 按域拆分第 4、5 片（认证域 + 设置域）
+
+### 重构
+
+- **认证域抽到 `src/main/routes/auth.ts`**（提交见下）：`/auth/*` 全部 12 个端点（register / login / logout / logout-all / session / me / teams / switch-team / 2FA setup·confirm·disable·verify）约 220 行移出 server.ts。
+  - 依赖经 `AuthRouteDeps` 注入，**不反向 import server**——否则 `routes → server → routes` 形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 undefined。
+  - `signSessionToken` **必须注入而非让路由各自实现**：手写 `jwt.sign` 极易漏 `ver`（会话版本号），漏掉不会有任何编译错误或测试报错，只会让该入口签发的令牌永不被撤销。这是本项目反复出现的失效模式（本日已第二次记录）。
+  - 顺带把 `freshRole` / `isSensitiveAction` / `revokeAllSessions` / `closeWindow` 统一改为 deps 传入。
+- **设置域抽到 `src/main/routes/settings.ts`**：API 令牌（GET/POST/DELETE）、全局设置（GET/PUT）、CDP 调试端口（GET/PUT）、Webhook 发送测试，共 8 个端点。**这几个域放一起是因为共享同一条约束**：都写 `app_settings` 单例行、都要走凭据加解密收口、都要触发「设置保存后重启调度器」的副作用——拆开反而让副作用散落。
+  - `PUT /settings` 里「刷新 webhook 缓存 + 重启巡检调度」两步收敛为 `restartSchedulers` 一个 deps，后续新增调度器只需改 server 一处。
+- **server.ts 4132 → 3851 行**，累计抽出 5 个路由模块（auth / settings / logs / cookies / v1Cookie，共 881 行）。
+
+### 清理
+
+- 移除拆分后失效的 import：`clampPort`、`readCdpConfig` / `writeCdpConfig` / `CdpConfig`、`testWebhook`、`normalizeCountry` / `normalizeLocale`、以及整个 `./totp` import（`generateTotpSecret` / `buildOtpAuthUrl` / `verifyTotp` / `totpQrDataUrl` 已全部移入 auth 域）。保留仍在使用的 `getCdpInfo` 与 `setCachedWebhooks`（后者被 `getSettings()` 内部使用）。
+
+### 验证
+
+- **路由清单静态比对**：用 `git stash` 对比拆分前后所有 `router.<method>('<path>'` 声明，本次两片涉及的 **20 个端点路径完全一致**，零增删——这是「纯搬家、不改行为」的硬证据（typecheck 通过并不能证明路由没漏注册）。
+- `pnpm test` 13/13 全绿、`pnpm typecheck` 零错误、`pnpm build` 零告警。
+
+### 后续
+
+- server.ts 剩余 3851 行，下一批候选：环境管理域（`/profiles/*` + 回收站 + 在线检测，约 430 行）、代理域（约 190 行）、账号中心（约 185 行）、v1 自动化 API（约 900 行）。
+
+---
+
 ## 2026-10-13 · 新增：会话可撤销（登出真正失效 + 退出所有设备 + 401 自动登出）
 
 ### 新增
