@@ -72,6 +72,27 @@ export class UserEntity {
   @Column({ type: 'int', default: 0 })
   tokenVersion: number
 
+  /**
+   * 设备级撤销列表（JSON 字符串），元素形如 `{ "dev": "<指纹>", "at": 1730000000000 }`。
+   *
+   * 为什么需要它：`tokenVersion` 是**用户级**粒度，普通「登出」递增它会连其他
+   * 设备一起踢下线——用户在 A 电脑退出登录，B 电脑毫无理由地被登出，
+   * 这是典型的「用户不解且自己解不开」的坑。
+   *
+   * 用设备指纹做粒度后：普通登出只吊销本设备（令牌带 `dev` 声明，
+   * 校验时比对是否在此列表）；「退出所有设备」与改密码仍走 `tokenVersion`，
+   * 保持 O(1) 无黑名单的特性。
+   *
+   * 存 JSON 字符串而非新建关联表：撤销列表天然是**有界**的——
+   * 只在令牌有效期内有意义，`pruneRevokedDevices` 按 TTL 回收，
+   * 另有 50 条硬上限。为它建表 + 迁移的收益远小于成本。
+   *
+   * 注意：该列是本功能新增的，而`synchronize` 已改为按需执行
+   * （仅首次建表时跑），**升级用户需手动执行 `pnpm db:sync`**（见 README）。
+   */
+  @Column({ type: 'text', nullable: true })
+  revokedDevices: string | null
+
   @CreateDateColumn({ type: 'datetime' })
   createdAt: Date
 }

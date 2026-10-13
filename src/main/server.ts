@@ -14,8 +14,12 @@ import {
   checkSession,
   nextSessionVersion,
   SESSION_TTL_DAYS,
+  addRevokedDevice,
+  pruneRevokedDevices,
+  deviceFingerprint,
   type SessionClaims,
-  type SessionVerdict
+  type SessionVerdict,
+  type RevokedDevice
 } from '../shared/sessionRevoke'
 import {
   bumpFailureCount,
@@ -200,6 +204,9 @@ async function authMiddleware(req: AuthedRequest, res: Response, next: NextFunct
   req.tid = claims.tid
   req.username = claims.username
   req.role = claims.role
+  // 透传令牌里的设备指纹（而非现算当前 UA）：登出要撤销的正是**这个令牌所属的设备**。
+  // 若改成现算，浏览器自动升级导致 UA 变化时就会吊销错设备。
+  req.dev = claims.dev || ''
   next()
 }
 
@@ -208,7 +215,34 @@ async function checkSessionAndRevoked(claims: SessionClaims): Promise<SessionVer
   // 用户不存在也按撤销处理：账号被删除后其令牌不应继续可用
   const user = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: claims.uid } })
   if (!user) return { valid: false, reason: '账号不存在，请重新登录', code: 'session_revoked' }
-  return checkSession(claims, user.tokenVersion)
+  return checkSession(claims, user.tokenVersion, parseRevokedDevices(user.revokedDevices))
+}
+
+/**
+ * 解析 `users.revokedDevices`（JSON 文本）。
+ *
+ * 故意**不抛错**：这是纯防御性解析——列内容损坏时退化为「无撤销记录」，
+ * 最坏结果是让已登出的设备多活 7 天（令牌本就会自然过期），
+ * 而抛错会导致**所有用户都无法登录**，两者代价完全不对等。
+ */
+function parseRevokedDevices(raw: string | null | undefined): RevokedDevice[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((d) => !!d && typeof d.dev === 'string' && d.dev.length > 0)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 设备指纹：用于「只让本设备失效」的设备级撤销。
+ * 实现集中在 shared/sessionRevoke.deviceFingerprint —— **签发侧与校验侧必须共用
+ * 同一份实现**，两处各写一遍哈希规则迟早写歪，届时表现为「登出后令牌仍有效」且无任何报错。
+ */
+function deviceFingerprintOf(req: Request): string {
+  return deviceFingerprint(req.headers['user-agent'])
 }
 
 /**
@@ -220,7 +254,7 @@ async function checkSessionAndRevoked(claims: SessionClaims): Promise<SessionVer
  * 漏写不会有任何编译错误或测试报错，只会悄悄地让安全机制失效。
  */
 function signSessionToken(
-  args: { uid: number; username: string; tokenVersion: number | null; tid: number; role: string },
+  args: { uid: number; username: string; tokenVersion: number | null; tid: number; role: string; dev?: string },
   ttl: `${number}d` = `${SESSION_TTL_DAYS}d`
 ): string {
   return jwt.sign(
@@ -229,16 +263,32 @@ function signSessionToken(
       tid: args.tid,
       username: args.username,
       role: args.role,
-      ver: args.tokenVersion ?? 0
+      ver: args.tokenVersion ?? 0,
+      // dev 声明设备指纹：普通「登出」靠它做到只吊销本设备。
+      // 缺失（旧签发路径漏传）时该令牌无法被设备级撤销，仍由 tokenVersion 兜底。
+      dev: args.dev || ''
     },
     JWT_SECRET,
     { expiresIn: ttl }
   )
 }
 
-/** 从实体取签发所需的字段（避免各调用点手工拼装对象） */
-function sessionOf(user: UserEntity, tid: number, role: string) {
-  return { uid: user.id, username: user.username, tokenVersion: user.tokenVersion, tid, role }
+/**
+ * 从请求与用户实体取出签发所需的字段。
+ *
+ * `dev` 必须在此集中获取：各签发点（注册 / 登录 / 2FA / 切换团队）都漏传的话，
+ * 那个入口签发的令牌永远无法被设备级撤销——**编译不报错、测试不报错，
+ * 只是悄悄少了一条撤销路径**。
+ */
+function sessionOf(user: UserEntity, tid: number, role: string, req?: Request) {
+  return {
+    uid: user.id,
+    username: user.username,
+    tokenVersion: user.tokenVersion,
+    tid,
+    role,
+    dev: req ? deviceFingerprintOf(req) : ''
+  }
 }
 
 /**
@@ -246,18 +296,62 @@ function sessionOf(user: UserEntity, tid: number, role: string) {
  *
  * 刻意**不给当前调用方返回新令牌**——撤销后当前设备也必须重新登录。
  * 若「退出所有设备」还让本机保持登录，用户会觉得按钮没生效，实际上是自欺欺人。
+ *
+ * 顺带**清空设备级撤销列表**：tokenVersion 已经让所有旧令牌失效，
+ * 列表里每条记录都已无对象可撤销，留着只会在下次登录时误杀同指纹设备。
  */
 async function revokeAllSessions(uid: number, tid: number, username: string, reason: string): Promise<void> {
   const userRepo = AppDataSource.getRepository(UserEntity)
   const user = await userRepo.findOne({ where: { id: uid } })
   if (!user) return
   user.tokenVersion = nextSessionVersion(user.tokenVersion ?? 0)
+  user.revokedDevices = '[]'
   await userRepo.save(user)
   await writeLog(
     { uid, tid, username, role: 'member' } as AuthedRequest,
     'logout',
     `${reason}：已吊销该用户全部会话（其他设备需重新登录）`
   )
+}
+
+/**
+ * 只吊销**当前设备**的会话（普通「退出登录」）。
+ *
+ * ## 为什么与 revokeAllSessions 分开
+ * 两者语义完全不同，此前被合并成一个是错的：
+ * 用户在 A 电脑点「退出登录」，B 电脑会毫无理由地被踢下线——
+ * 换台机器登录就掉线，用户既不解也无法自行恢复。
+ * 这与「反复退出登录」「点着点着就掉线」是同一类体验问题。
+ *
+ * 实现方式：把本设备指纹追加进 `users.revokedDevices`，
+ * 令牌里带 `dev` 声明，校验时比对是否命中（见 shared/sessionRevoke.ts）。
+ *
+ * **不递增 tokenVersion**：那是用户级的，一动就把其他设备全踢了。
+ *
+ * 顺带做过期回收：撤销记录只在令牌有效期内有意义，
+ * 每次追加时按 TTL 清一遍，避免这一列无界增长（黑名单的老毛病）。
+ */
+async function revokeCurrentDevice(
+  req: AuthedRequest,
+  dev: string,
+  reason: string
+): Promise<void> {
+  if (!dev) {
+    // 拿不到设备指纹（如经由某些代理剥离 UA 头）时**不能**静默成功：
+    // 否则用户点了退出登录、令牌却仍有效 7 天，正是这个功能要修的洞。
+    // 降级为全设备撤销——宁可多踢其他设备，也不能让令牌继续有效。
+    console.warn('[auth] 缺少 User-Agent，设备指纹为空，降级为退出所有设备')
+    await revokeAllSessions(req.uid!, req.tid!, req.username || '', reason)
+    return
+  }
+  const userRepo = AppDataSource.getRepository(UserEntity)
+  const user = await userRepo.findOne({ where: { id: req.uid } })
+  if (!user) return
+  const now = Date.now()
+  const pruned = pruneRevokedDevices(parseRevokedDevices(user.revokedDevices), now)
+  user.revokedDevices = JSON.stringify(addRevokedDevice(pruned, dev, now))
+  await userRepo.save(user)
+  await writeLog(req, 'logout', `${reason}：已吊销本设备会话（其他设备不受影响）`)
 }
 
 function tokenAuthMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -1200,6 +1294,7 @@ function buildApiRouter(): express.Router {
     freshRole,
     isSensitiveAction,
     revokeAllSessions,
+    revokeCurrentDevice,
     closeWindow,
     getRunningWindowIds,
     loginBuckets,

@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username`     VARCHAR(64)  NOT NULL,
   `passwordHash` VARCHAR(128) NOT NULL,
   `nickname`     VARCHAR(64)  NOT NULL DEFAULT '',
+  `tokenVersion`  INT          NOT NULL DEFAULT 0, -- 会话版本号，递增即吊销全部会话
+  -- 设备级撤销列表（JSON 数组，元素形如 {"dev":"<设备指纹>","at":1730000000000}）。
+  -- 普通「登出」只吊销本设备；「退出所有设备」与改密码仍走 tokenVersion。
+  -- 升级用户需手动执行 `pnpm db:sync` 补此列（synchronize 仅首次建表时运行）。
+  `revokedDevices` TEXT        NULL,
   `createdAt`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_users_username` (`username`)

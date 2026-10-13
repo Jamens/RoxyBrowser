@@ -131,7 +131,7 @@ export default function AppLayout() {
     }
     api.post('/api/auth/logout').then(done).catch(() => {
       // 服务端不可达时仍要完成本地登出（用户视角一致）；
-      // 只是「其他设备同步下线」这次没生效，下次登录会重新签发令牌。
+      // 只是「本设备会话失效」这次没生效，下次登录会重新签发令牌。
       done()
     })
   }

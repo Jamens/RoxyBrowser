@@ -20,6 +20,11 @@ export type AuthedRequest = Request & {
    * 否则令牌能建环境 / 删数据 / 导出 Cookie 却零留痕，形成审计盲区。
    */
   apiToken?: { id: number; name: string; ownerId: number }
+  /**
+   * 会话令牌里声明的设备指纹（`dev`）。
+   * 登出时据此**只吊销本设备**；缺失（旧令牌）时降级为全设备撤销。
+   */
+  dev?: string
 }
 
 // 账户级隔离：普通用户（member）只看到自己 ownerId 的数据；owner/admin 看全部（管理员视角）。

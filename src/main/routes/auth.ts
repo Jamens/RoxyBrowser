@@ -8,7 +8,7 @@ import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from '
 import { checkLoginLock, clientKeyOf, consumeRateLimit, registerLoginFailure, registerLoginSuccess } from '../../shared/rateLimit'
 // 仅类型导入：编译期擦除，不产生运行时循环依赖
 import type { BucketStore as LoginBucketStore } from '../../shared/rateLimit'
-import { SESSION_TTL_DAYS } from '../../shared/sessionRevoke'
+import { SESSION_TTL_DAYS, deviceFingerprint } from '../../shared/sessionRevoke'
 import type { AuthedRequest } from '../authScope'
 
 /** 注册接口限额（每客户端每小时） */
@@ -43,12 +43,18 @@ export interface AuthRouteDeps {
     tokenVersion: number | null
     tid: number
     role: string
+    dev?: string
   }) => string
   /** 取用户的实时角色（不走 JWT 里的旧角色，避免改了权限却不生效） */
   freshRole: (req: AuthedRequest) => Promise<string>
   isSensitiveAction: (action: string) => boolean
-  /** 递增 tokenVersion 吊销该用户全部会话（登出 / 退出所有设备） */
+  /** 递增 tokenVersion 吊销该用户全部会话（「退出所有设备」/ 改密码） */
   revokeAllSessions: (uid: number, tid: number, username: string, reason: string) => Promise<void>
+  /**
+   * 只吊销**本设备**的会话（普通「登出」）。
+   * 与 revokeAllSessions 分开是因为语义不同：普通登出不应把用户其他设备一起踢下线。
+   */
+  revokeCurrentDevice: (req: AuthedRequest, dev: string, reason: string) => Promise<void>
   /** 关闭某个环境窗口（切换团队前需关闭旧团队的运行中窗口） */
   closeWindow: (profileId: number) => Promise<void>
   /** 当前所有运行中的环境窗口 id */
@@ -65,13 +71,13 @@ export interface AuthRouteDeps {
   onLoginLocked: (username: string, reason: string) => void
 }
 
-/** 从实体取签发所需的字段 */
-function sessionOf(user: UserEntity, tid: number, role: string) {
-  return { uid: user.id, username: user.username, tokenVersion: user.tokenVersion, tid, role }
+/** 从实体取签发所需的字段；`dev` 为设备指纹，让普通「登出」能只吊销本设备 */
+function sessionOf(user: UserEntity, tid: number, role: string, dev: string) {
+  return { uid: user.id, username: user.username, tokenVersion: user.tokenVersion, tid, role, dev }
 }
 
 export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
-  const { getDs, authMiddleware, jwtSecret, signSessionToken, freshRole, isSensitiveAction, revokeAllSessions, closeWindow, getRunningWindowIds, loginBuckets, getLoginLockConfig, onLoginLocked } =
+  const { getDs, authMiddleware, jwtSecret, signSessionToken, freshRole, isSensitiveAction, revokeAllSessions, revokeCurrentDevice, closeWindow, getRunningWindowIds, loginBuckets, getLoginLockConfig, onLoginLocked } =
     deps
 
   /**
@@ -124,7 +130,7 @@ export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
     // 默认分组
     const groupRepo = ds.getRepository(GroupEntity)
     await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
-    const token = signSessionToken(sessionOf(user, team.id, 'owner'))
+    const token = signSessionToken(sessionOf(user, team.id, 'owner', deviceFingerprint(req.headers['user-agent'])))
     res.json({ token, user: { id: user.id, username, nickname: user.nickname, role: 'owner' } })
   })
 
@@ -180,16 +186,22 @@ export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
       )
       return res.json({ twoFactorRequired: true, challengeToken })
     }
-    const token = signSessionToken(sessionOf(user, teamId, member?.role || 'owner'))
+    const token = signSessionToken(sessionOf(user, teamId, member?.role || 'owner', deviceFingerprint(req.headers['user-agent'])))
     res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: member?.role || 'owner' } })
   })
 
   // ===== 会话撤销 =====
   // 此前「登出」只是前端清 localStorage，令牌在服务端依然有效满 7 天——
   // 令牌一旦被截获（XSS / 日志泄漏 / 备份文件），攻击者可在有效期内完整使用该账号。
-  // 递增 users.tokenVersion 即吊销该用户全部已签发令牌（O(1)，无需黑名单）。
+  //
+  // **两个接口语义不同，不可合并**（合并过一次，是错的）：
+  //   /auth/logout      普通退出登录 —— 只吊销**本设备**，其他设备不该被牵连。
+  //                       用户在 A 电脑退出，B 电脑被踢下线是「用户不解且无法自行恢复」的坑。
+  //   /auth/logout-all  退出所有设备 —— 递增 tokenVersion，吊销全部会话。
+  //
+  // 改密码同样走 tokenVersion（应当踢全设备：密码泄露时用户正是这个期望）。
   router.post('/auth/logout', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    await revokeAllSessions(req.uid!, req.tid!, req.username || '', '用户登出')
+    await revokeCurrentDevice(req, req.dev || '', '用户登出')
     res.json({ ok: true })
   })
 
@@ -271,7 +283,7 @@ export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
     // 于库里版本，下一次校验会被判为 session_revoked 而把用户踢下线
     const swUser = await ds.getRepository(UserEntity).findOne({ where: { id: req.uid } })
     if (!swUser) return res.status(401).json({ message: '账号不存在' })
-    const token = signSessionToken(sessionOf(swUser, teamId, member.role))
+    const token = signSessionToken(sessionOf(swUser, teamId, member.role, deviceFingerprint(req.headers['user-agent'])))
     await ds.getRepository(OperationLogEntity).save({
       teamId,
       userId: req.uid,
@@ -339,7 +351,7 @@ export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
     if (!user || !user.twoFactorEnabled || !user.twoFactorSecret)
       return res.status(401).json({ message: '2FA 状态异常，请重新登录' })
     if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
-    const token = signSessionToken(sessionOf(user, payload.tid, payload.role))
+    const token = signSessionToken(sessionOf(user, payload.tid, payload.role, deviceFingerprint(req.headers['user-agent'])))
     res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: payload.role } })
   })
 }
