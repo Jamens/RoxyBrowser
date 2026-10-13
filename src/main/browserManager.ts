@@ -9,6 +9,13 @@ import { isTrackerRequest } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
 import { isAbnormalExit, formatCrashLog } from '../shared/crashReason'
 import { canOpenWindow, DEFAULT_MAX_CONCURRENT_WINDOWS } from '../shared/windowLimit'
+import {
+  canClearPartition,
+  formatCleanupLog,
+  partitionName,
+  type CleanupTrigger
+} from '../shared/envPartition'
+import { rm } from 'fs/promises'
 import { getScanSite, runSiteScan, type ScanResult } from './fingerprintScan'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
@@ -313,7 +320,9 @@ export async function openWindow(profileId: number): Promise<void> {
   const isMobile = fp.os === 'android' || fp.os === 'ios'
 
   // 独立 session：每个环境独立 Cookie / 缓存 / 存储
-  const ses = session.fromPartition(`persist:env-${profileId}`)
+  // 分区名统一由 shared/envPartition 提供 —— 清理逻辑要按同一个名字定位落盘目录，
+  // 两处各写一遍字符串迟早会写歪。
+  const ses = session.fromPartition(partitionName(profileId))
   ses.setUserAgent(fp.userAgent)
 
   // ===== 追踪器屏蔽 =====
@@ -461,6 +470,65 @@ export async function openWindow(profileId: number): Promise<void> {
 export async function closeWindow(profileId: number): Promise<void> {
   const win = windows.get(profileId)
   if (win && !win.isDestroyed()) win.close()
+}
+
+// ===== 环境分区（persist:env-<id>）清理 =====
+
+/**
+ * 彻底清理某环境的持久化浏览器数据（Cookie / localStorage / IndexedDB / 缓存）。
+ *
+ * ## 为什么要两步（clearStorageData + 删目录）
+ * `ses.clearStorageData()` 清的是 Chromium 的**存储层**，
+ * 但分区目录里还留着 Service Worker 缓存、Code Cache、GPU cache 等一堆磁盘文件，
+ * 以及删不干净的残留。实测环境越多跑越久，这些只增不减，是内存/磁盘双高的来源之一。
+ * 所以先让 Chromium 自己清（它知道自己的索引结构），再把目录整个删掉兜底。
+ *
+ * ## 失败不阻断删除
+ * 清理失败（文件被占用、权限）**不能**让「彻底删除」整体失败：
+ * 数据库记录已经没了，此时把用户卡在报错里毫无意义。改为记日志 + 返回 false，
+ * 由调用方决定是否告知用户。
+ *
+ * @param inTrash 是否处于回收站（trigger='purge' 时必须为 true，否则拒绝清理）
+ * @returns 是否清理成功
+ */
+export async function clearProfilePartition(
+  profileId: number,
+  trigger: CleanupTrigger,
+  inTrash: boolean
+): Promise<boolean> {
+  // 以「Map 里的活窗口」为准，而不是数据库 status —— status 可能因崩溃而失真，
+  // 而这里误清的后果是用户在跑的页面突然掉登录态，必须从严。
+  const win = windows.get(profileId)
+  const verdict = canClearPartition({
+    profileId,
+    inTrash,
+    running: !!win && !win.isDestroyed(),
+    trigger
+  })
+  if (!verdict.ok) {
+    console.warn(formatCleanupLog(profileId, `env-${profileId}`, false, verdict.reason))
+    return false
+  }
+  const dirName = verdict.dirName
+  try {
+    const ses = session.fromPartition(partitionName(profileId))
+    await ses.clearStorageData()
+    await ses.clearCache()
+  } catch (e) {
+    // 继续尝试删目录：存储层清理失败不代表目录删不掉
+    console.warn(formatCleanupLog(profileId, dirName, false, `清理存储层出错: ${(e as Error).message}`))
+  }
+  try {
+    const dir = join(app.getPath('userData'), 'Partitions', dirName)
+    // force+recursive：Chromium 可能仍持有部分文件的句柄，
+    // maxRetries 给它一点自行退出的时间，仍失败则如实记日志。
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    console.log(formatCleanupLog(profileId, dirName, true))
+    return true
+  } catch (e) {
+    console.error(formatCleanupLog(profileId, dirName, false, (e as Error).message))
+    return false
+  }
 }
 
 // ===== 起始页导航 =====

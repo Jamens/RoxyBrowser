@@ -9,7 +9,7 @@ import {
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
   SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined,
-  StarOutlined, StarFilled, UserOutlined
+  StarOutlined, StarFilled, UserOutlined, ClearOutlined
 } from '@ant-design/icons'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
 import { downloadText, readTextFile, nowStamp, downloadDataUrl } from '../utils/download'
@@ -460,6 +460,20 @@ export default function Environments() {
       await api.post(`/api/profiles/${id}/close`)
       message.success('窗口已关闭')
       load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  /**
+   * 清理浏览器数据分区。
+   * 破坏性操作：清掉该环境的缓存 / localStorage / 未持久化的会话登录态
+   *（导入型 Cookie 会在下次开窗时由 seedCookies 重新注入，故不受影响）。
+   */
+  const clearPartition = async (id: number, name: string) => {
+    try {
+      await api.post(`/api/profiles/${id}/clear-partition`)
+      message.success(`已清理「${name}」的浏览器数据`)
     } catch (e) {
       message.error((e as Error).message)
     }
@@ -962,6 +976,15 @@ export default function Environments() {
           <Tooltip title="查看该环境关联的账号">
             <Button size="small" icon={<UserOutlined />} onClick={() => openAccountsDrawer(r)} />
           </Tooltip>
+          <Popconfirm
+            title={`清理「${r.name}」的浏览器数据？`}
+            description="清空缓存 / 本地存储 / 未持久化的登录态，用于回收磁盘空间。环境本身不会删除。"
+            onConfirm={() => clearPartition(r.id, r.name)}
+          >
+            <Tooltip title="清理浏览器数据分区（回收磁盘空间，不删环境）">
+              <Button size="small" icon={<ClearOutlined />} />
+            </Tooltip>
+          </Popconfirm>
           <Popconfirm title="删除后进入回收站，可随时恢复。确定删除该环境？" onConfirm={() => remove(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>

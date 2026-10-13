@@ -35,6 +35,7 @@ const COMPILES = [
   { name: 'pollBackoff', files: ['src/shared/pollBackoff.ts'], out: '.tmp_pb' },
   { name: 'windowLimit', files: ['src/shared/windowLimit.ts'], out: '.tmp_wl' },
   { name: 'trashBatch', files: ['src/shared/trashBatch.ts'], out: '.tmp_tb' },
+  { name: 'envPartition', files: ['src/shared/envPartition.ts'], out: '.tmp_ep' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
@@ -60,6 +61,7 @@ const TESTS = [
   { name: 'pollBackoff', file: 'tests/pollBackoff.test.cjs' },
   { name: 'windowLimit', file: 'tests/windowLimit.test.cjs' },
   { name: 'trashBatch', file: 'tests/trashBatch.test.cjs' },
+  { name: 'envPartition', file: 'tests/envPartition.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 

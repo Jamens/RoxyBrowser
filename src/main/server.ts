@@ -101,7 +101,8 @@ import {
   startRpaRecording,
   stopRpaRecording,
   isRpaRecording,
-  rpaRecordCount
+  rpaRecordCount,
+  clearProfilePartition
 } from './browserManager'
 
 // ---------- 配置 ----------
@@ -1470,8 +1471,47 @@ function buildApiRouter(): express.Router {
     await accRepo.delete({ profileId: p.id })
     const cookieRepo = AppDataSource.getRepository(CookieEntity)
     await cookieRepo.delete({ profileId: p.id })
-    await writeLog(req, 'purge_profile', `彻底删除环境「${p.name}」(#${p.id})（含账号与 Cookie）`)
-    res.json({ ok: true })
+    // 清理该环境的持久化分区（Cookie/localStorage/缓存）。
+    // 必须做：数据库里的 Cookie 记录删了，但 Chromium 自己写的 localStorage、
+    // IndexedDB、Service Worker 缓存还在分区目录里。id 被复用时新环境会继承旧环境的
+    // 登录态 —— 指纹浏览器最不能容忍的串号。清理失败不阻断删除（记录已没了，
+    // 此时把用户卡在报错里毫无意义），只把结果如实回报。
+    const partitionCleared = await clearProfilePartition(p.id, 'purge', true)
+    await writeLog(
+      req,
+      'purge_profile',
+      `彻底删除环境「${p.name}」(#${p.id})（含账号与 Cookie）` +
+        (partitionCleared ? '，已清理浏览器数据分区' : '，浏览器数据分区清理失败')
+    )
+    res.json({ ok: true, partitionCleared })
+  })
+
+  /**
+   * 手动清理某环境的浏览器数据分区（Cookie / localStorage / 缓存）。
+   *
+   * ## 为什么需要「不删环境也能清」
+   * 自动清理只在彻底删除时发生，但真实场景里磁盘压力往往来自**还在用**的环境：
+   * 跑了一周的账号环境缓存能到几百 MB，用户不会为了清缓存去删环境。
+   * 给一个显式入口，让用户在不丢环境的前提下回收空间。
+   *
+   * 注意这是**破坏性**操作：清完该环境的站点登录态会没（数据库里持久化的
+   * Cookie 会保留？——不会，Chromium 层清掉后 seedCookies 下次开窗会重新注入，
+   * 所以导入型 Cookie 仍在；仅本地存储/缓存/未持久化的会话丢失）。
+   */
+  router.post('/profiles/:id/clear-partition', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const id = Number(req.params.id)
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id, ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    const cleared = await clearProfilePartition(id, 'manual', !!p.deletedAt)
+    if (!cleared) {
+      const win = getRunningWindowIds().includes(id)
+      return res.status(400).json({
+        message: win ? '窗口正在运行，请先关闭该环境窗口再清理浏览器数据' : '清理失败，请查看主进程日志'
+      })
+    }
+    await writeLog(req, 'clear_partition', `清理环境「${p.name}」(#${id}) 的浏览器数据分区`)
+    res.json({ ok: true, partitionCleared: true })
   })
 
   /** Date | null → ISO 字符串 | null（批量判定只关心「是否为空」，统一成字符串好过类型） */
@@ -1531,6 +1571,7 @@ function isoOf(d: Date | null | undefined): string | null {
     const accRepo = AppDataSource.getRepository(AccountEntity)
     const cookieRepo = AppDataSource.getRepository(CookieEntity)
     let done = 0
+    let partitionCleared = 0
     for (const id of plan.okIds) {
       const p = profiles.find((x) => x.id === id)
       if (!p) continue
@@ -1539,15 +1580,22 @@ function isoOf(d: Date | null | undefined): string | null {
         await repo.remove(p)
         await accRepo.delete({ profileId: id })
         await cookieRepo.delete({ profileId: id })
+        // 分区清理与单条同路径；失败只计数，不影响 done（数据库已删，卡住用户没意义）
+        if (await clearProfilePartition(id, 'purge', true)) partitionCleared++
         done++
       } catch (e) {
         console.error(`[roxy] 批量彻底删除失败 #${id}:`, (e as Error).message)
       }
     }
     if (done > 0) {
-      await writeLog(req, 'purge_profile', `批量彻底删除 ${done} 个环境（含账号与 Cookie）${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`)
+      await writeLog(
+        req,
+        'purge_profile',
+        `批量彻底删除 ${done} 个环境（含账号与 Cookie，已清理 ${partitionCleared} 个浏览器数据分区）` +
+          `${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`
+      )
     }
-    res.json({ ok: true, purged: done, rejected: plan.rejected })
+    res.json({ ok: true, purged: done, partitionCleared, rejected: plan.rejected })
   })
 
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {

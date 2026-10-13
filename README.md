@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（19 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（20 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -410,6 +410,22 @@ app.listen(4000)
 - **登出请求必须先于清本地令牌发出**：`clearToken()` 之后请求就不再带 `Authorization` 头，服务端鉴权失败、撤销不执行——恰好是这个功能要修的那个洞。
 - **接口**：`POST /api/auth/logout`（当前用户全设备下线）、`POST /api/auth/logout-all`（同义，供 UI 表达「退出所有设备」）、`GET /api/auth/session`（会话状态 / 有效期）。撤销均写审计日志 `logout`。
 
+### 环境数据分区清理（`persist:env-<id>` 生命周期）
+
+每个环境用 `session.fromPartition('persist:env-<id>')` 拿独立的Cookie / localStorage / IndexedDB / 缓存。`persist:` 前缀意味着这些数据**落盘**到 `userData/Partitions/env-<id>/`——关窗口、退出应用都不会清。此前**没有任何清理逻辑**，属遗留问题。
+
+- **为什么必须清（两个真实后果）**：
+  1. **磁盘/内存无界增长**：环境越多跑越久，Cookie 与缓存只增不减。README「窗口并发上限」一节记录过实测三个窗口即进程内存冲到 1.4GB，Chromium 的缓存与IndexedDB 是其中一大块。
+  2. **串号（最严重）**：环境彻底删除后，MySQL 里的 Cookie 记录已删，但 Chromium 自己写的 localStorage / IndexedDB / Service Worker **还在磁盘上**。一旦 id 被复用（清库、测试、重装场景都不罕见），新环境会**直接继承上一个环境的登录态**——指纹浏览器最不能容忍的事故。
+- **为什么不自动清**：partition 里的数据是环境的一部分，关窗口就清等于「指纹掉线」——用户手动关掉窗口再打开 expecting还在登录，结果被踢下线。故只在**彻底删除**这一唯一确定、不可恢复的时机自动清理；平时用手动入口回收空间。
+- **两步清理**（`browserManager.clearProfilePartition`）：先 `ses.clearStorageData()` + `ses.clearCache()` 让 Chromium 按自己的索引结构清，再`rm -rf userData/Partitions/env-<id>` 兜底删掉Service Worker 缓存、Code Cache、GPU cache 等残留。只做前者会漏掉后者。
+- **运行中的环境一律硬拦**：`clearStorageData()` 会删掉Chromium 正在使用的存储，窗口里的页面会立刻出现「登录态丢失 / localStorage 读不到」而用户完全看不懂。判定以 **Map 里的活窗口**为准而非数据库 `status`——`status` 会因渲染进程崩溃而失真，而这里误清的后果是用户在跑的页面突然掉登录态，必须从严。
+- **清理失败不阻断删除**：数据库记录已没了，此时把用户卡在报错里毫无意义。改为 `console.error` 留痕+ 接口返回 `partitionCleared: false`，审计日志里也如实写明「浏览器数据分区清理失败」。**失败绝不静默吞掉**——否则就退回到「删了但残留还在」的原问题且无人知晓。
+- **判定逻辑抽成纯函数** `shared/envPartition.ts`（`canClearPartition`），零 Node 依赖可离线单测；`tests/envPartition.test.cjs` 专门锁死「运行中硬拦」「未彻底删除时拒绝 purge 清理」「非法 id 拒绝」三条高危分支。
+- **分区名收敛到 `partitionName(id)`**：原本 `browserManager` 拼字符串、清理逻辑也要按同一个名字定位落盘目录，两处各写一遍迟早写歪。
+- **手动入口**：`POST /api/profiles/:id/clear-partition` + 列表操作列的「清理浏览器数据」按钮（带 Popconfirm 说明破坏性）。允许清理**还在用**的环境——磁盘压力往往来自用了很久的环境，用户不会为了清缓存去删环境。注意导入型 Cookie 不受影响（下次开窗 `seedCookies` 会重新注入），丢的是本地存储/缓存/未持久化的会话。
+- **自动覆盖两条删除路径**：单条 `DELETE /profiles/:id/purge` 与批量 `POST /profiles/batch-purge` 走同一个清理函数，批量路径统计成功数并写进聚合审计日志。
+
 ### 代理故障自愈（巡检失效后自动换绑，避免环境裸奔）
 
 定时巡检原本只把 `proxies.status` 写成 `invalid` 就结束了——**没有任何后续动作**。对矩阵运营来说，一个环境的代理掉线等于该环境的出口 IP 变成了宿主真实 IP；多个环境同时掉线则可能挤到同一个 IP 上，这正是防关联最忌讳的情况。
@@ -543,7 +559,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 19 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 20 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
