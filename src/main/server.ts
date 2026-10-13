@@ -27,12 +27,10 @@ import {
   type ProfileLike,
   type ProxyLike
 } from '../shared/proxyHeal'
-import { getCdpInfo } from './cdpManager'
 import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
-import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
-import { DataSource, In, IsNull } from 'typeorm'
+import { DataSource, In } from 'typeorm'
 import type { AddressInfo } from 'net'
 import { app } from 'electron'
 
@@ -54,10 +52,10 @@ import {
   RpaScriptEntity,
   AssistantSkillEntity
 } from './entities'
-import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
+import { randomFingerprint, defaultFingerprint, listFingerprintPresets, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { getEnvExpiresAt } from '../shared/envExpiry'
 import { planBatch, canPurge, canRestore, type TrashItemLike } from '../shared/trashBatch'
-import { substituteSteps, normalizeVariables } from '../shared/rpa'
+import { substituteSteps } from '../shared/rpa'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
@@ -82,11 +80,11 @@ import { registerLogRoutes } from './routes/logs'
 import { registerProxyRoutes } from './routes/proxies'
 // 代理检测 / 分配的业务逻辑已抽到 proxyService（不依赖 AppDataSource，DataSource 由调用方传入），
 // 这样 routes/proxies 与本文件都能直接 import，不必反向引用形成循环依赖。
-import { allocateProxy, applyProxyCheckResult, checkProxy, computeProxyUsage, ApiError } from './proxyService'
+import { allocateProxy, checkProxy, ApiError } from './proxyService'
 import { registerCookieRoutes } from './routes/cookies'
 import { registerAccountRoutes } from './routes/accounts'
 import { registerTeamRoutes } from './routes/team'
-import { registerV1CookieRoutes } from './routes/v1Cookie'
+import { createV1Router } from './routes/v1'
 import { registerAuthRoutes } from './routes/auth'
 import { registerSettingsRoutes } from './routes/settings'
 import { isAdminRole, ownerScope, ownerAndWhere, type AuthedRequest } from './authScope'
@@ -125,16 +123,11 @@ export let AppDataSource: DataSource
 export let apiBase = ''
 
 // 浏览器窗口桥（由 main 注入）
-export interface BrowserBridge {
-  openWindow(profileId: number): Promise<void>
-  closeWindow(profileId: number): Promise<void>
-  /** 环境体检：在目标窗口内采集实际生效的指纹值，窗口未运行返回 null */
-  probeFingerprint(profileId: number): Promise<FingerprintProbe | null>
-  /** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer，窗口未运行抛错 */
-  captureScreenshot(profileId: number): Promise<Buffer>
-  /** 在线检测站实战验证：导航到第三方检测站并抓回文本与截图，窗口未运行抛错 */
-  scanSite(profileId: number, siteId: string): Promise<ScanResult>
-}
+// 接口定义在 browserBridge.ts：v1 自动化 API 拆出后需要引用该类型，
+// 留在 server.ts 会迫使 routes/v1 反向 import server，形成运行时循环依赖。
+// 这里保留 re-export，main 侧原有的 `import { BrowserBridge } from './server'` 不受影响。
+import type { BrowserBridge } from './browserBridge'
+export type { BrowserBridge }
 let browserBridge: BrowserBridge | null = null
 export function setBrowserBridge(b: BrowserBridge) {
   browserBridge = b
@@ -1812,367 +1805,17 @@ function isoOf(d: Date | null | undefined): string | null {
     freshRole
   })
 
-  // ===== 自动化 API (v1，令牌鉴权，供脚本调用) =====
-  const v1 = express.Router()
-  v1.use(tokenAuthMiddleware)
-
-  // ===== v1 审计：令牌调用统一留痕 =====
-  // 令牌能创建 / 删除环境、导出 Cookie、跑 RPA，若完全不落日志就无法追溯
-  // 「谁在何时用哪个令牌做了什么」——这是实打实的审计盲区。
-  // 用中间件统一兜底而不是逐个路由手写 writeLog：既省事，也杜绝以后新增 v1 接口漏记。
-  // 推导逻辑抽到 `apiAudit.ts` 纯函数模块（与 webhook.ts / logExport.ts 同构），可离线单测。
-  v1.use((req, res, next) => {
-    res.on('finish', () => {
-      if (!apiShouldAudit(req.method, req.path)) return
-      const action = apiActionName(req.method, req.path)
-      if (!action) return
-      void writeLog(req as AuthedRequest, action, apiAuditDetail(req.method, req.path, req.body))
-    })
-    next()
+  // 自动化 API v1（令牌鉴权，供脚本 / 调度器调用）见 routes/v1.ts。
+  // 单独成文件而非并入其它域：它的鉴权方式、返回约定、错误文案三处都与登录态 API 不同，
+  // 放在一起极易被后续改动「顺手统一」成登录态那套，破坏脚本兼容性。
+  const v1 = createV1Router({
+    getDs: () => AppDataSource,
+    getBridge: () => browserBridge,
+    tokenAuthMiddleware,
+    writeLog,
+    getSettings,
+    mapProfile
   })
-
-  // ===== CDP 调试端点（供 Playwright / Puppeteer 连接）=====
-  // 返回连接地址与「当前打开的环境 → targetId」映射。只读接口，不改任何数据，
-  // 故不进 apiShouldAudit 的写审计；但返回的 profileId 列表属于环境元信息，
-  // 令牌本身是按 teamId 鉴权的，跨团队拿不到别人的环境 id。
-  v1.get('/cdp', async (_req: Request, res: Response) => {
-    res.json({ code: 0, data: await getCdpInfo() })
-  })
-
-  v1.get('/profiles', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    // 排除回收站中的环境（软删除）：TypeORM 需显式用 IsNull() 表达 IS NULL
-    const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid, isTemplate: false, deletedAt: IsNull() } })
-    res.json({ code: 0, data: list.map((p) => ({ id: p.id, name: p.name, seq: p.seq, status: p.status })) })
-  })
-
-  v1.post('/profiles', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const tid = (req as AuthedRequest).tid!
-    const b = req.body || {}
-    let fingerprint = (b.fingerprint || randomFingerprint()) as Record<string, unknown>
-    let platform = b.platform || ''
-    let startUrl = b.startUrl || DEFAULT_START_URL
-    let remark = b.remark || ''
-    if (b.templateId) {
-      const tpl = await repo.findOne({ where: { id: Number(b.templateId), teamId: tid, isTemplate: true } })
-      if (!tpl) return res.status(404).json({ code: 404, message: 'template not found' })
-      fingerprint = tpl.fingerprint as Record<string, unknown>
-      platform = b.platform || tpl.platform || ''
-      startUrl = b.startUrl || tpl.startUrl || DEFAULT_START_URL
-      remark = b.remark || tpl.remark || ''
-    }
-    const max = await repo.createQueryBuilder('p').select('MAX(p.seq)', 'm').where('p.teamId = :tid', { tid }).getRawOne()
-    const seq = (max?.m || 1000) + 1
-    const p = await repo.save(
-      repo.create({
-        teamId: tid,
-        name: b.name || `API环境 ${seq}`,
-        seq,
-        platform,
-        startUrl,
-        remark,
-        fingerprint,
-        createdBy: 0
-      })
-    )
-    res.json({ code: 0, data: { id: p.id, name: p.name } })
-  })
-
-  v1.post('/profiles/:id/open', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
-    if (!browserBridge) return res.status(500).json({ code: 500, message: 'browser engine not ready' })
-    await browserBridge.openWindow(p.id)
-    p.status = 'running'
-    p.lastOpenedAt = new Date()
-    await repo.save(p)
-    res.json({ code: 0, data: { id: p.id, status: 'running' } })
-  })
-
-  v1.post('/profiles/:id/close', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
-    if (browserBridge) await browserBridge.closeWindow(p.id)
-    p.status = 'idle'
-    await repo.save(p)
-    res.json({ code: 0, data: { id: p.id, status: 'idle' } })
-  })
-
-  v1.get('/proxies', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: { teamId: (req as AuthedRequest).tid } })
-    res.json({ code: 0, data: list })
-  })
-
-  // ===== 自动化 API v1 写入类（供脚本调度） =====
-  // 约定：成功返回 { code: 0, data }；失败返回 { code, message }，并记录 HTTP 状态码
-
-  // --- 环境：查询单条 / 更新 / 删除 ---
-  v1.get('/profiles/:id', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
-    res.json({ code: 0, data: mapProfile(p) })
-  })
-
-  v1.put('/profiles/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
-    const b = req.body || {}
-    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId', 'extensions'] as const
-    for (const f of fields) {
-      if (f in b) (p as any)[f] = b[f] === '' && (f === 'groupId' || f === 'proxyId') ? null : b[f]
-    }
-    if (b.fingerprint) p.fingerprint = b.fingerprint
-    await repo.save(p)
-    res.json({ code: 0, data: { id: p.id, name: p.name } })
-  })
-
-  v1.delete('/profiles/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'profile not found' })
-    await repo.remove(p)
-    // 清理关联数据，避免孤儿记录
-    await AppDataSource.getRepository(AccountEntity).delete({ profileId: p.id })
-    await AppDataSource.getRepository(CookieEntity).delete({ profileId: p.id })
-    await AppDataSource.getRepository(ProfileEntity).update({ teamId: tid, proxyId: p.id }, { proxyId: null })
-    res.json({ code: 0, data: { id: p.id } })
-  })
-
-  // --- 代理：创建 / 查询单条 / 更新 / 删除 / 分配 / 检测 ---
-  v1.post('/proxies', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const b = req.body || {}
-    if (!b.host || !b.port) return res.status(400).json({ code: 400, message: 'host and port required' })
-    const p = await repo.save(
-      repo.create({
-        teamId: tid,
-        name: b.name || `${b.host}:${b.port}`,
-        type: b.type || 'http',
-        host: b.host,
-        port: Number(b.port),
-        username: b.username || '',
-        password: b.password || '',
-        remark: b.remark || ''
-      })
-    )
-    res.json({ code: 0, data: p })
-  })
-
-  v1.get('/proxies/:id', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
-    res.json({ code: 0, data: p })
-  })
-
-  v1.put('/proxies/:id', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
-    const b = req.body || {}
-    for (const f of ['name', 'type', 'host', 'username', 'password', 'remark', 'expiresAt'] as const) {
-      if (f in b) (p as any)[f] = b[f]
-    }
-    if (b.port) p.port = Number(b.port)
-    await repo.save(p)
-    res.json({ code: 0, data: p })
-  })
-
-  v1.delete('/proxies/:id', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), teamId: (req as AuthedRequest).tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
-    await repo.remove(p)
-    await AppDataSource.getRepository(ProfileEntity).update(
-      { teamId: (req as AuthedRequest).tid, proxyId: p.id },
-      { proxyId: null }
-    )
-    res.json({ code: 0, data: { id: p.id } })
-  })
-
-  v1.post('/proxies/allocate', async (req: Request, res: Response) => {
-    const b = req.body || {}
-    try {
-      const { proxy, profileId, reused, poolStatus } = await allocateProxy(AppDataSource, (req as AuthedRequest).tid!, {
-        profileId: b.profileId,
-        country: b.country,
-        region: b.region
-      })
-      const usage = await computeProxyUsage(AppDataSource, (req as AuthedRequest).tid!)
-      res.json({
-        code: 0,
-        data: { proxy: { ...proxy, usageCount: (usage.get(proxy.id) || 0) + (profileId ? 1 : 0), poolStatus }, profileId, reused }
-      })
-    } catch (e) {
-      if (e instanceof ApiError) return res.status(e.status).json({ code: e.status, message: e.message })
-      throw e
-    }
-  })
-
-  v1.post('/proxies/check', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const id = Number((req.body || {}).id)
-    const p = await repo.findOne({ where: { id, teamId: tid } })
-    if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
-    const settings = await getSettings()
-    const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
-    applyProxyCheckResult(p, result)
-    await repo.save(p)
-    res.json({ code: 0, data: p })
-  })
-
-  // --- 指纹：随机生成 ---
-  v1.post('/fingerprint/random', async (req: Request, res: Response) => {
-    const body = req.body || {}
-    const os = body.os
-    const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
-    const cv = typeof body.coreVersion === 'number' ? body.coreVersion : undefined
-    res.json({ code: 0, data: randomFingerprint(valid as OSKind | undefined, cv) })
-  })
-
-  // --- 账号：列表 / 创建 / 更新 / 删除 ---
-  v1.get('/accounts', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profiles = await profileRepo.find({ where: { teamId: tid, isTemplate: false } })
-    const profileIds = new Set(profiles.map((p) => p.id))
-    const nameMap = new Map(profiles.map((p) => [p.id, p.name]))
-    const all = await repo.find({ order: { id: 'DESC' } })
-    res.json({ code: 0, data: all.filter((a) => profileIds.has(a.profileId)).map((a) => ({ ...a, profileName: nameMap.get(a.profileId) || '' })) })
-  })
-
-  v1.post('/accounts', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: Number((req.body || {}).profileId), teamId: tid } })
-    if (!profile) return res.status(400).json({ code: 400, message: 'profile not found' })
-    const a = await repo.save(
-      repo.create({
-        profileId: profile.id,
-        platform: (req.body || {}).platform || '',
-        username: (req.body || {}).username || '',
-        password: (req.body || {}).password || '',
-        remark: (req.body || {}).remark || ''
-      })
-    )
-    res.json({ code: 0, data: a })
-  })
-
-  v1.put('/accounts/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const ids = new Set((await profileRepo.find({ where: { teamId: tid } })).map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
-    if (!a || !ids.has(a.profileId)) return res.status(404).json({ code: 404, message: 'account not found' })
-    for (const f of ['platform', 'username', 'password', 'remark'] as const) {
-      if (f in (req.body || {})) (a as any)[f] = (req.body as any)[f]
-    }
-    await repo.save(a)
-    res.json({ code: 0, data: a })
-  })
-
-  v1.delete('/accounts/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(AccountEntity)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const ids = new Set((await profileRepo.find({ where: { teamId: tid } })).map((p) => p.id))
-    const a = await repo.findOne({ where: { id: Number(req.params.id) } })
-    if (!a || !ids.has(a.profileId)) return res.status(404).json({ code: 404, message: 'account not found' })
-    await repo.remove(a)
-    res.json({ code: 0, data: { id: a.id } })
-  })
-
-  // ===== Cookie（v1 自动化读写，按环境隔离）=====
-  // 已抽到 src/main/routes/v1Cookie.ts；解析/映射复用 cookieText.ts，与内部接口同一套语义。
-  registerV1CookieRoutes(v1, { getDs: () => AppDataSource, applyCookies })
-
-  // ===== RPA 脚本（v1 自动化触发）=====
-  // 列出当前团队的脚本（用于外部自动化查找 id / 步数 / 是否含变量）
-  v1.get('/rpa', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(RpaScriptEntity)
-    const list = await repo.find({ where: { teamId: tid }, order: { id: 'DESC' } })
-    res.json({
-      code: 0,
-      data: list.map((s) => ({
-        id: s.id,
-        name: s.name,
-        steps: (s.steps as unknown as RpaStep[]).length,
-        hasVariables: !!(s.variables && Object.keys(s.variables).length)
-      }))
-    })
-  })
-
-  // 脚本详情（含完整步骤与变量，供外部自动化取用）
-  v1.get('/rpa/:id', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const repo = AppDataSource.getRepository(RpaScriptEntity)
-    const s = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!s) return res.status(404).json({ code: 404, message: 'script not found' })
-    res.json({
-      code: 0,
-      data: {
-        id: s.id,
-        name: s.name,
-        remark: s.remark,
-        steps: s.steps,
-        variables: s.variables || {},
-        scheduleEnabled: s.scheduleEnabled
-      }
-    })
-  })
-
-  // 触发回放（Bearer 鉴权，供外部自动化调用）。body: { profileId, variables? }
-  v1.post('/rpa/:id/run', async (req: Request, res: Response) => {
-    const tid = (req as AuthedRequest).tid!
-    const profileId = Number((req.body || {}).profileId)
-    if (!profileId) return res.status(400).json({ code: 400, message: 'profileId required' })
-    const repo = AppDataSource.getRepository(RpaScriptEntity)
-    const s = await repo.findOne({ where: { id: Number(req.params.id), teamId: tid } })
-    if (!s) return res.status(404).json({ code: 404, message: 'script not found' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
-    if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
-    const reqVars = (req.body || {}).variables
-    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
-      ? normalizeVariables(reqVars) || {}
-      : s.variables || {}
-    const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
-    const runningIds = getRunningWindowIds()
-    if (!runningIds.includes(profileId)) {
-      return res.status(400).json({ code: 400, message: 'profile not running' })
-    }
-    ;(async () => {
-      let executed = 0
-      let err = ''
-      try {
-        executed = await replayRpaScript(profileId, steps)
-      } catch (e) {
-        err = (e as Error).message
-      }
-      await writeLog(
-        req as AuthedRequest,
-        'rpa_run',
-        err
-          ? `v1 回放脚本「${s.name}」失败：${err}`
-          : `v1 回放脚本「${s.name}」完成（环境「${profile.name}」#${profileId}，执行 ${executed}/${steps.length} 步）`
-      )
-    })()
-    res.json({ code: 0, data: { started: true, steps: steps.length } })
-  })
-
   // ===== 批量能力：导入 / 导出 / 复制 / 批量随机指纹 =====
 
   // 导入环境（JSON）：兼容纯环境数组，也支持带分组 / 代理 / 账号的完整迁移文件
