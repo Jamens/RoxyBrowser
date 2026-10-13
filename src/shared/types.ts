@@ -204,7 +204,15 @@ export interface LogDTO {
   username: string
   action: string
   detail: string
-  sensitive?: boolean
+  /**
+   * 敏感操作标记。
+   *
+   * 对应 MySQL `tinyint`，TypeORM 取回的是**数字** 0 / 1 而非布尔值。
+   * 故声明为 `number | boolean`——前端判断必须写 `!!x &&`：
+   * `0 && <Tag/>` 的结果是数字 0 本身（不是 false），React 会把它当合法 child
+   * 渲染成文本「0」。声明成 boolean 只会骗过编译器，不会改变运行时行为。
+   */
+  sensitive?: number | boolean
   createdAt: string
 }
 

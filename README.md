@@ -547,6 +547,7 @@ src/
 16. **往 `routes/` 拆路由必须经 deps 注入，且不得反向 import server**：`routes/* → server → routes` 会形成运行时循环依赖，而 `AppDataSource` 是 `export let`（`initDb` 运行时才赋值），模块加载期按值捕获会拿到 `undefined`——表现为「一调用就报 undefined」，且只在启动后才暴露。故 `getDs` 一律传 `() => AppDataSource` 函数；跨模块只用 `import type`（编译期擦除）。连 `clientKeyOf` 这类纯工具也下沉到 `shared/`，避免 `routes → main` 的反向依赖。另注意**注册顺序**：`/logs/export` 这类静态路径必须先于 `/logs` 注册，否则被动态路由抢先匹配。
 17. **每请求前执行逻辑不要直接查库**：限流中间件在每个请求前跑，若每次 `await getSettings()` 就多一次 MySQL 查询，高频轮询下成瓶颈。用内存缓存 + 在写入口（`PUT /settings`）失效重取，兼顾「改设置立即生效」。同理，`BucketStore` 用定时 `sweep` 清理空桶，且定时器要 `unref()` 以免阻止应用退出。
 18. **`pnpm typecheck` 可能漏报，判别联合尤其危险**：`tsconfig.node.json` 开了 `composite: true`，`tsc` 会生成 `.tsbuildinfo` 增量缓存，**未变更的文件被跳过检查**。实测踩过：判别联合 `{ ok: true } | { ok: false; reason: string }` 的收窄问题，`pnpm typecheck` 报「零错误」，而 `tsc <单文件> --outDir ...`（无缓存）立刻报出 `Property 'reason' does not exist`。两种编译结果不一致本身就说明代码写法有风险。**规避：① 不依赖收窄，把字段摊平成独立变量；② 怀疑漏报时先 `rm -rf out-tsc *.tsbuildinfo` 再跑。**
+19. **JSX 短路渲染数字会漏出「0」**：MySQL `tinyint` 列经 TypeORM 取回是**数字** `0`/`1`，不是布尔值。于是 `{x.sensitive && <Tag>敏感</Tag>}` 在 `x.sensitive === 0` 时求值为**数字 `0` 本身**（不是 `false`），React 会把它当合法 child 渲染成文本「0」——界面上每个非敏感操作后面都多个 0。**规则：JSX 里凡是用来自后端的数字字段做条件判断，一律写 `!!x && ...`。** 相关的还有 `{x.count && ...}`、`{x.enabled && ...}`（若后端返 0/1）。另外把 DTO 的对应字段声明成 `number | boolean` 而非 `boolean`——声明成 boolean 只会骗过编译器，不会改变运行时行为。
 
 ## 打包分发
 

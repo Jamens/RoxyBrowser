@@ -213,7 +213,10 @@ export default function Logs() {
       render: (v, r) => (
         <Space size={4}>
           <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
-          {r.sensitive && <Tag color="red">敏感</Tag>}
+          {/* 必须用 !! 转成布尔再判断：`sensitive` 是 MySQL tinyint，取回是数字
+              0/1，而 `0 && <Tag/>` 的结果是数字 0 本身（不是 false）——React 会把它
+              当合法 child 渲染成文本「0」，于是每个非敏感操作的标签右边都多个 0。 */}
+          {!!r.sensitive && <Tag color="red">敏感</Tag>}
         </Space>
       )
     },
@@ -347,10 +350,16 @@ function ArchivePanel({ onReverted }: { onReverted: () => void }) {
     { title: '时间', dataIndex: 'createdAt', width: 170, render: (v: string) => v.replace('T', ' ').slice(0, 19) },
     { title: '操作人', dataIndex: 'username', width: 110 },
     {
-      title: '动作',
+      title: '操作',
       dataIndex: 'action',
       width: 130,
-      render: (v: string) => <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
+      // 与热区保持一致：sensitive 是 tinyint 数字，必须 !! 转布尔，否则渲染出「0」
+      render: (v: string, r: ArchivedLogDTO) => (
+        <Space size={4}>
+          <Tag color={ACTION_COLORS[v] || 'default'}>{ACTION_LABELS[v] || v}</Tag>
+          {!!r.sensitive && <Tag color="red">敏感</Tag>}
+        </Space>
+      )
     },
     { title: '详情', dataIndex: 'detail', ellipsis: true },
     {
