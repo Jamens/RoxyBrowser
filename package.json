@@ -14,6 +14,7 @@
     "test": "node scripts/run-tests.mjs",
     "clean:out": "node scripts/clean-out.mjs",
     "db:check": "node node_modules/typescript/bin/tsc scripts/db-schema-log.ts src/main/entities.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --experimentalDecorators --emitDecoratorMetadata --outDir .tmp_dbsl && node .tmp_dbsl/scripts/db-schema-log.js",
+    "db:sync": "node node_modules/typescript/bin/tsc scripts/sync-schema.ts scripts/seed-default.ts src/main/entities.ts src/main/secretKey.ts src/shared/secretCrypto.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --experimentalDecorators --emitDecoratorMetadata --outDir .tmp_dbsync && node .tmp_dbsync/scripts/sync-schema.js && node .tmp_dbsync/scripts/seed-default.js",
     "migrate:secrets": "node node_modules/typescript/bin/tsc scripts/migrate-secrets.ts src/shared/secretCrypto.ts src/main/secretKey.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --outDir .tmp_mg && node .tmp_mg/scripts/migrate-secrets.js",
     "icon": "node scripts/gen-tray-icon.mjs && node scripts/gen-app-icon.mjs",
     "dist:dir": "electron-vite build && electron-builder --win --dir",
