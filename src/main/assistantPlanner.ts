@@ -15,6 +15,7 @@ import { cloudChat } from './agent/cloud'
 import { openWindow, replayRpaScript, getRunningWindowIds, probeFingerprint } from './browserManager'
 import { randomFingerprint } from '../shared/fingerprint'
 import { buildHealthReport } from '../shared/healthcheck'
+import { getEnvExpiresAt, withEnvExpiresAt } from '../shared/envExpiry'
 import { importProfileItems } from './exporters'
 import {
   ASSISTANT_ENTITIES,
@@ -684,6 +685,86 @@ export async function executeAssistantAction(kind: string, params: Record<string
         ok: true,
         message: bulkMessage(targets.length, skipped || notFound ? `，跳过 ${skipped + notFound} 个（运行中/已删除/不存在）` : '') + `，代理：${proxyName}`,
         detail: { updated: targets.length, skipped: skipped + notFound, proxyId }
+      }
+    }
+    case 'batchExtendExpiry': {
+      const ids = idList(params.profileIds).slice(0, MAX_COLLECT_IDS)
+      if (!ids.length) return { ok: false, message: '未指定有效的环境（profileIds 为空或全是非法 id）' }
+      // 三种模式与 UI 的批量改到期时间一致：add 各自加 N 天 / set 统一设日期 / clear 转长期有效
+      const mode = String(params.mode || 'add')
+      if (!['add', 'set', 'clear'].includes(mode)) {
+        return { ok: false, message: `mode 只能是 add / set / clear，收到「${mode}」` }
+      }
+      if (mode === 'clear') {
+        const { targets } = await loadTargets(ctx, admin, ids, { skipRunning: false })
+        let cleared = 0
+        for (const p of targets) {
+          const fp = (p.fingerprint || {}) as Record<string, unknown>
+          if (!getEnvExpiresAt(fp)) continue
+          p.fingerprint = withEnvExpiresAt(fp, null) as never
+          await ctx.ds.getRepository(ProfileEntity).save(p)
+          cleared++
+        }
+        await audit(ctx, 'batch_clear_expiry', `（助手）清除 ${cleared} 个环境的到期时间（转为长期有效）`, true)
+        return { ok: true, message: `已清除 ${cleared} 个环境的到期时间（转为长期有效）` }
+      }
+      if (mode === 'set') {
+        const raw = params.expiresAt
+        const t = typeof raw === 'string' ? new Date(raw).getTime() : NaN
+        if (!Number.isFinite(t)) return { ok: false, message: 'expiresAt 不是合法日期' }
+        const { targets, skipped } = await loadTargets(ctx, admin, ids, { skipRunning: false })
+        if (!targets.length) return { ok: false, message: '未找到可操作的环境' }
+        for (const p of targets) {
+          const fp = (p.fingerprint || {}) as Record<string, unknown>
+          p.fingerprint = withEnvExpiresAt(fp, new Date(t).toISOString()) as never
+          await ctx.ds.getRepository(ProfileEntity).save(p)
+        }
+        await audit(
+          ctx,
+          'batch_extend_expiry',
+          `（助手）设置 ${targets.length} 个环境的到期时间为 ${new Date(t).toISOString().slice(0, 10)}`,
+          true
+        )
+        return {
+          ok: true,
+          message: `已把 ${targets.length} 个环境的到期时间统一设为 ${new Date(t).toISOString().slice(0, 10)}${skipped ? `，跳过 ${skipped} 个` : ''}`
+        }
+      }
+      // add
+      const days = Number(params.days)
+      if (!Number.isFinite(days)) return { ok: false, message: 'days 必须是数字' }
+      const abs = Math.abs(Math.round(days))
+      if (abs === 0 || abs > 3650) return { ok: false, message: '天数需在 1 ~ 3650 之间（或用 mode:"set" 直接指定日期）' }
+      const { targets, skipped } = await loadTargets(ctx, admin, ids, { skipRunning: false })
+      if (!targets.length) return { ok: false, message: '未找到可操作的环境' }
+      let updated = 0
+      let skippedNoExpiry = 0
+      let stillExpired = 0
+      for (const p of targets) {
+        const fp = (p.fingerprint || {}) as Record<string, unknown>
+        const cur = getEnvExpiresAt(fp)
+        // 原本长期有效的顺带加上天数，等于替用户做了一个他没要求的决定
+        if (!cur) { skippedNoExpiry++; continue }
+        const next = new Date(cur).getTime() + days * 86400000
+        // 延长后仍在过去：必须如实回报，否则用户以为「续上了」但环境照样打不开
+        if (next < Date.now()) stillExpired++
+        p.fingerprint = withEnvExpiresAt(fp, new Date(next).toISOString()) as never
+        await ctx.ds.getRepository(ProfileEntity).save(p)
+        updated++
+      }
+      await audit(
+        ctx,
+        'batch_extend_expiry',
+        `（助手）延长 ${updated} 个环境的到期时间 ${days > 0 ? '+' : ''}${days} 天${skippedNoExpiry ? `，跳过 ${skippedNoExpiry} 个长期有效的` : ''}`,
+        true
+      )
+      const notes: string[] = []
+      if (skippedNoExpiry) notes.push(`跳过 ${skippedNoExpiry} 个长期有效的`)
+      if (stillExpired) notes.push(`${stillExpired} 个延长后仍是过期状态`)
+      return {
+        ok: true,
+        message: `已延长 ${updated} 个环境 ${days > 0 ? '+' : ''}${days} 天${notes.length ? `（${notes.join('；')}）` : ''}`,
+        detail: { updated, skippedNoExpiry, stillExpired, skipped }
       }
     }
     case 'batchDeleteEnvs': {

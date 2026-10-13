@@ -292,6 +292,13 @@ export const ASSISTANT_ACTIONS: Record<string, AssistantActionDef> = {
   batchAssignProxy: { kind: 'batchAssignProxy', label: '批量绑定代理', danger: 'medium', params: ['profileIds', 'proxyId'], bulk: true },
   deleteEnv: { kind: 'deleteEnv', label: '删除环境', danger: 'destructive', params: ['profileId'] },
   batchDeleteEnvs: { kind: 'batchDeleteEnvs', label: '批量删除环境', danger: 'destructive', params: ['profileIds'], bulk: true },
+  batchExtendExpiry: {
+    kind: 'batchExtendExpiry',
+    label: '批量改到期时间',
+    danger: 'medium',
+    params: ['profileIds', 'days', 'mode'],
+    bulk: true
+  },
   deleteProxy: { kind: 'deleteProxy', label: '删除代理', danger: 'destructive', params: ['proxyId'] },
   removeMember: { kind: 'removeMember', label: '移除团队成员', danger: 'destructive', params: ['memberId'] },
   transferEnv: { kind: 'transferEnv', label: '转移环境到其他团队', danger: 'destructive', params: ['profileId', 'targetTeamId'] }
@@ -347,12 +354,12 @@ ${catalog}
 # 动作白名单（actions[].kind 仅限以下，危险分级决定前端确认强度）
 - openEnv(safe) / runRpa(safe) / healthcheckEnv(safe)
 - assignProxy(medium) / renameProfile(medium) / createEnv(medium) / importEnvs(medium)
-- randomizeFingerprints(medium, 批量) / batchAssignProxy(medium, 批量)
+- randomizeFingerprints(medium, 批量) / batchAssignProxy(medium, 批量) / batchExtendExpiry(medium, 批量)
 - deleteEnv(destructive) / batchDeleteEnvs(destructive, 批量) /
   deleteProxy(destructive) / removeMember(destructive) / transferEnv(destructive)
 
 # 批量动作：两种写法，必须分清
-批量动作（randomizeFingerprints / batchAssignProxy / batchDeleteEnvs）的参数
+批量动作（randomizeFingerprints / batchAssignProxy / batchDeleteEnvs / batchExtendExpiry）的参数
 profileIds 是**数组**。你有两种方式填它，**优先用 collect**：
 
 1) 已有查询结果可用时，用 collect 汇总成一条动作（推荐）：
@@ -381,6 +388,10 @@ profileIds 是**数组**。你有两种方式填它，**优先用 collect**：
 - 「给这些环境批量换代理」：先查 environments，再用 batchAssignProxy + collect 汇总。
 - 「体检一下环境 A」：healthcheckEnv（safe）。该动作需要环境处于运行中，
   若未运行会返回明确提示，你应在 reply 里说明「需要先打开环境」而不是反复重试。
+- 「给这些号续 30 天」：batchExtendExpiry，params 填 { "mode": "add", "days": 30 }，profileIds 用 collect 汇总。
+  · mode 三选一：add 各自加 N 天（可负数表示提前）/ set 统一设为指定日期（还需填 expiresAt）/ clear 转为长期有效。
+  · 原本就没有到期时间（长期有效）的环境，add 模式下会被跳过；要说清这一点，别让用户以为全部续上了。
+  · 延长后**仍在过去**的（过期很久的号 +30 天大概率还是过期）也会如实回报，照实转述给用户。
 - 批量动作中的运行中环境会被**自动跳过**（改指纹/绑代理/删除都不动正在跑的窗口），
   执行结果里的 skipped 数量要如实写进 reply，不要谎称全部完成。
 
