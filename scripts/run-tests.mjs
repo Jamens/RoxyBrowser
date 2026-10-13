@@ -18,7 +18,8 @@ const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 /** 编译清单：把 shared/main 模块编到对应临时目录（.tmp_* 已被 .gitignore 忽略） */
 const COMPILES = [
   { name: 'webglOsMatch', files: ['src/shared/webglOsMatch.ts'], out: '.tmp_hc' },
-  { name: 'healthcheck', files: ['src/shared/healthcheck.ts'], out: '.tmp_hc', extra: ['--lib', 'es2020,dom'] },
+  // countries / locales 是 healthcheck 的传递依赖，显式列出确保一并编进 .tmp_hc
+  { name: 'healthcheck', files: ['src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hc', extra: ['--lib', 'es2020,dom'] },
   { name: 'trackers', files: ['src/shared/trackers.ts'], out: '.tmp_tr' },
   { name: 'envExpiry', files: ['src/shared/envExpiry.ts', 'src/shared/fingerprint.ts'], out: '.tmp_env' },
   { name: 'candidate4', files: ['src/shared/webgpu.ts', 'src/shared/canvasNoise.ts'], out: '.tmp_c4' },
@@ -68,6 +69,7 @@ const TESTS = [
   { name: 'envPartition', file: 'tests/envPartition.test.cjs' },
   { name: 'assistantPlan', file: 'tests/assistantPlan.test.cjs' },
   { name: 'expiryAlert', file: 'tests/expiryAlert.test.cjs' },
+  { name: 'consistency', file: 'tests/consistency.test.cjs' },
   { name: 'healthBaseline', file: 'tests/healthBaseline.test.cjs' },
   { name: 'healthFix', file: 'tests/healthFix.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }

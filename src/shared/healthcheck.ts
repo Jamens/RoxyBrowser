@@ -538,48 +538,7 @@ export function buildHealthReport(
   }
 
   // ---- 一致性红绿灯：四件套是否自洽（不自洽是关联高危信号）----
-  const consistency: ConsistencyItem[] = []
-  const tzCountry = tzToCountry(s(e.timezone))
-
-  // 1) 时区国家 ↔ 代理出口国家
-  {
-    const pc = s(opts.proxyCountry)
-    if (!pc || !tzCountry) {
-      consistency.push({
-        key: 'tzVsProxy',
-        expected: tzCountry ? tzCountry.name : '—',
-        actual: pc || '—',
-        ok: true,
-        skipped: true
-      })
-    } else {
-      const ok = sameCountry(pc, tzCountry.nameEn) || sameCountry(pc, tzCountry.name) || sameCountry(pc, tzCountry.code)
-      consistency.push({ key: 'tzVsProxy', expected: tzCountry.name, actual: pc, ok })
-    }
-  }
-
-  // 2) 浏览器语言 ↔ 时区国家
-  {
-    const lang = (e.languages || actual.languages || [])[0] || ''
-    const region = langRegion(lang)
-    if (!region || !tzCountry) {
-      consistency.push({ key: 'langVsTz', expected: '—', actual: lang || '—', ok: true, skipped: true })
-    } else {
-      consistency.push({
-        key: 'langVsTz',
-        expected: `${tzCountry.name} (${tzCountry.code})`,
-        actual: `${lang} (${region})`,
-        ok: region === tzCountry.code
-      })
-    }
-  }
-
-  // 3) UA 平台 ↔ 设定操作系统
-  {
-    const fromUa = uaOs(actual.userAgent || s(e.userAgent))
-    const ok = fromUa === s(e.os)
-    consistency.push({ key: 'uaVsOs', expected: s(e.os) || '—', actual: fromUa, ok })
-  }
+  const consistency = checkConsistency(e, opts.proxyCountry, actual)
 
   // ---- 计分 ----
   const total = items.reduce((n, i) => n + i.weight, 0)
@@ -639,4 +598,78 @@ export const HEALTH_ITEM_LABELS: Record<string, string> = {
 /** 取显示名；未登记的 key 原样返回（好过显示空白） */
 export function healthItemLabel(key: string): string {
   return HEALTH_ITEM_LABELS[key] || key
+}
+
+
+/**
+ * 一致性三项的**唯一判定口径**。体检与助手动作共用，避免两边各判一套、
+ * 用户却看到互相矛盾的说法。
+ *
+ * ## 为什么要抽出来
+ * 这三项本质上只看「配置 + 代理国家」，**不需要窗口实测**——而助手要在
+ * **窗口关闭时**（修复的前提就是关窗口）算出该修哪些项，压根没有实测值可用。
+ * 若助手另写一套判定，两边的 `expected/actual` 措辞与跳过规则很容易漂移。
+ *
+ * ## 实测值的优先级
+ * `actual` 传入时仍按原口径「实测优先、配置兜底」：
+ * UA 用实测值（实测才是真正生效的那串），语言则配置优先（配置才是我们可控的那份）。
+ * `actual` 省略时（助手场景）全部回落到配置值，此时结果表示
+ * **「若开着窗口，理论上会是什么表现」**，而非实测——调用方需在文案里说清。
+ */
+export function checkConsistency(
+  fp: Partial<Fingerprint> | null | undefined,
+  proxyCountry: string | null | undefined,
+  actual?: Partial<FingerprintProbe> | null
+): ConsistencyItem[] {
+  const e = (fp || {}) as Record<string, unknown>
+  const a = (actual || {}) as Record<string, unknown>
+  const out: ConsistencyItem[] = []
+  const tzCountry = tzToCountry(s(e.timezone))
+
+  // 1) 时区国家 ↔ 代理出口国家
+  {
+    const pc = s(proxyCountry)
+    if (!pc || !tzCountry) {
+      out.push({
+        key: 'tzVsProxy',
+        expected: tzCountry ? tzCountry.name : '—',
+        actual: pc || '—',
+        ok: true,
+        skipped: true
+      })
+    } else {
+      const ok = sameCountry(pc, tzCountry.nameEn) || sameCountry(pc, tzCountry.name) || sameCountry(pc, tzCountry.code)
+      out.push({ key: 'tzVsProxy', expected: tzCountry.name, actual: pc, ok })
+    }
+  }
+
+  // 2) 浏览器语言 ↔ 时区国家（配置优先：语言是我们可控的那份）
+  {
+    const langList = (e.languages as string[] | undefined) || (a.languages as string[] | undefined) || []
+    const lang = langList[0] || ''
+    const region = langRegion(lang)
+    if (!region || !tzCountry) {
+      out.push({ key: 'langVsTz', expected: '—', actual: lang || '—', ok: true, skipped: true })
+    } else {
+      out.push({
+        key: 'langVsTz',
+        expected: `${tzCountry.name} (${tzCountry.code})`,
+        actual: `${lang} (${region})`,
+        ok: region === tzCountry.code
+      })
+    }
+  }
+
+  // 3) UA 平台 ↔ 设定操作系统（实测优先：实测才是真正生效的那串）
+  {
+    const fromUa = uaOs(s(a.userAgent) || s(e.userAgent))
+    out.push({ key: 'uaVsOs', expected: s(e.os) || '—', actual: fromUa, ok: fromUa === s(e.os) })
+  }
+
+  return out
+}
+
+/** 取未通过且未跳过的 key——助手与前端「可一键修复」清单都基于它 */
+export function inconsistentKeys(consistency: ConsistencyItem[]): string[] {
+  return consistency.filter((c) => !c.ok && !c.skipped).map((c) => c.key)
 }
