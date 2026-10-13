@@ -19,7 +19,8 @@
     "icon": "node scripts/gen-tray-icon.mjs && node scripts/gen-app-icon.mjs",
     "dist:dir": "electron-vite build && electron-builder --win --dir",
     "dist": "electron-vite build && electron-builder --win --x64",
-    "dist:fresh": "electron-vite build && electron-builder --win --x64 -c.directories.output=release-nsis"
+    "dist:fresh": "electron-vite build && electron-builder --win --x64 -c.directories.output=release-nsis",
+    "seed:test-logs": "node node_modules/typescript/bin/tsc scripts/seed-test-logs.ts src/main/entities.ts --module commonjs --target es2020 --moduleResolution node --esModuleInterop --skipLibCheck --experimentalDecorators --emitDecoratorMetadata --outDir .tmp_sl && node .tmp_sl/scripts/seed-test-logs.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
