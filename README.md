@@ -82,6 +82,7 @@ docker run -d --name roxy-mysql \
 | -- | -- | -- |
 | 地址 | `127.0.0.1` | `DB_HOST` |
 | 端口 | `3306` | `DB_PORT` |
+| 强制同步表结构 | 关闭 | `ROXY_FORCE_SYNC=1` |
 | 用户 | `root` | `DB_USER` |
 | 密码 | `1234560` | `DB_PASS` |
 | 库名 | `roxy_browser`（不存在会自动创建） | `DB_NAME` |
@@ -548,6 +549,7 @@ src/
 17. **每请求前执行逻辑不要直接查库**：限流中间件在每个请求前跑，若每次 `await getSettings()` 就多一次 MySQL 查询，高频轮询下成瓶颈。用内存缓存 + 在写入口（`PUT /settings`）失效重取，兼顾「改设置立即生效」。同理，`BucketStore` 用定时 `sweep` 清理空桶，且定时器要 `unref()` 以免阻止应用退出。
 18. **`pnpm typecheck` 可能漏报，判别联合尤其危险**：`tsconfig.node.json` 开了 `composite: true`，`tsc` 会生成 `.tsbuildinfo` 增量缓存，**未变更的文件被跳过检查**。实测踩过：判别联合 `{ ok: true } | { ok: false; reason: string }` 的收窄问题，`pnpm typecheck` 报「零错误」，而 `tsc <单文件> --outDir ...`（无缓存）立刻报出 `Property 'reason' does not exist`。两种编译结果不一致本身就说明代码写法有风险。**规避：① 不依赖收窄，把字段摊平成独立变量；② 怀疑漏报时先 `rm -rf out-tsc *.tsbuildinfo` 再跑。**
 19. **JSX 短路渲染数字会漏出「0」**：MySQL `tinyint` 列经 TypeORM 取回是**数字** `0`/`1`，不是布尔值。于是 `{x.sensitive && <Tag>敏感</Tag>}` 在 `x.sensitive === 0` 时求值为**数字 `0` 本身**（不是 `false`），React 会把它当合法 child 渲染成文本「0」——界面上每个非敏感操作后面都多个 0。**规则：JSX 里凡是用来自后端的数字字段做条件判断，一律写 `!!x && ...`。** 相关的还有 `{x.count && ...}`、`{x.enabled && ...}`（若后端返 0/1）。另外把 DTO 的对应字段声明成 `number | boolean` 而非 `boolean`——声明成 boolean 只会骗过编译器，不会改变运行时行为。
+20. **启动不再自动同步表结构，改实体后必须显式执行**：为省掉每次启动 ~156ms 的 schema 比对（实测 163ms → 7ms），`bootstrap()` 现在只查 `SHOW TABLES LIKE 'users'` 判断「表在不在」——**全新安装仍自动建表**（实测重建库后建出 16 张表），但「表已存在却缺新列」（旧版本升级）会跳过，症状是 `ER_BAD_FIELD_ERROR` 且启动无提示。故：**改实体后一律走 `pnpm db:check` 看差异 → `pnpm db:sync` 执行**；临时应急可设 `ROXY_FORCE_SYNC=1` 强制本次启动同步。这是有意的取舍——synchronize 在发版时改实体可能静默丢列，把结构变更变成显式可审阅的动作更安全。
 
 ## 打包分发
 

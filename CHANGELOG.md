@@ -9,6 +9,40 @@
 
 ---
 
+## 2026-10-13 · perf：启动性能优化（实测驱动，约省 240ms）
+
+**先测后改**，逐阶段实测耗时，不靠猜测：
+
+| 项 | 优化前 | 优化后 | 节省 |
+| -- | -- | -- | -- |
+| synchronize 表结构比对 | 163ms | 7ms | ~156ms |
+| electron-updater 同步 require | 103ms | 0（并行） | ~103ms |
+| profiles.status 查询 | 全表扫 | 走索引 | 数据量大时显著 |
+| **启动阶段合计** | ~202ms | ~67ms | **~135ms** |
+
+### 改动
+1. **synchronize 改按需**：只查 `SHOW TABLES LIKE 'users'` 判断表在不在（3~21ms），
+   全新库才同步。**实测全新安装仍自动建出 16 张表**。逃生口：`ROXY_FORCE_SYNC=1`。
+   代价：旧库升级（表存在但缺列）不自动补，需 `pnpm db:check` → `pnpm db:sync`。
+2. **electron-updater 改动态 import**：实测它是除 typeorm 外最重的依赖（require 103ms），
+   却在顶层被静态引入、且只在窗口创建后才用到。改 `void import()` 后与窗口创建并行，
+   构建产物验证已彻底脱离启动 chunk。
+3. **profiles.status 补索引**：启动自愈与「运行中」筛选都依赖它，原先无索引。
+4. **修正 manualChunks 两处误匹配**：`includes('antd')` 命中任意含该字的包，
+   `includes('react')` 把 react-router 等吸进 react-vendor（544KB→1.8KB→修回 544KB）。
+   顺带删掉项目根本没装的 echarts 分支。
+
+**诚实说明**：chunk 重切实测 gzip 总量仅降 1.3%（788.8KB → 778.9KB），
+收益在于并行解析与长期缓存。要真降体积需上 babel-plugin-import 做组件级按需引入。
+
+### 顺带清理
+`out/renderer/assets` 堆积 138 个陈旧 chunk，清理后 4.1MB → 3.8MB。
+
+### 验证
+test 15/15、typecheck 零错误、build 成功、db:check 无 drift、全新安装自动建表实测通过。
+
+---
+
 ## 2026-10-13 · 修复：操作日志「操作」列每个非敏感操作后多出一个「0」
 
 MySQL `tinyint` 列（`sensitive`）经 TypeORM 取回的是**数字** `0`/`1`，不是布尔值。而 `{r.sensitive && <Tag>敏感</Tag>}` 在值为 `0` 时求值为**数字 0 本身**（不是 `false`），React 会把它当合法 child 渲染成文本「0」。故非敏感操作（值 0）后面都多个 0，敏感操作（值 1）正常显红标。
