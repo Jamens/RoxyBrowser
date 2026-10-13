@@ -5,9 +5,14 @@ import { In } from 'typeorm'
 import type { DataSource } from 'typeorm'
 import { UserEntity, TeamEntity, TeamMemberEntity, GroupEntity, OperationLogEntity } from '../entities'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from '../totp'
+import { checkLoginLock, clientKeyOf, consumeRateLimit, registerLoginFailure, registerLoginSuccess } from '../../shared/rateLimit'
+// 仅类型导入：编译期擦除，不产生运行时循环依赖
+import type { BucketStore as LoginBucketStore } from '../../shared/rateLimit'
 import { SESSION_TTL_DAYS } from '../../shared/sessionRevoke'
-// 仅类型导入：编译期完全擦除，不会与 server.ts 形成运行时循环依赖
 import type { AuthedRequest } from '../authScope'
+
+/** 注册接口限额（每客户端每小时） */
+const REGISTER_LIMIT_PER_HOUR = 10
 
 /**
  * 认证域路由（注册 / 登录 / 登出 / 会话 / 团队切换 / 2FA）。
@@ -48,6 +53,16 @@ export interface AuthRouteDeps {
   closeWindow: (profileId: number) => Promise<void>
   /** 当前所有运行中的环境窗口 id */
   getRunningWindowIds: () => number[]
+  /**
+   * 登录失败 / 锁定判定所需的桶存储（与通用限流分开：登录按**用户名**计数，
+   * 而通用限流按 IP——本地全部来自 127.0.0.1，按 IP 计数等于所有人共用额度，
+   * 攻击者猛打任意账号就能把正常用户锁在门外）。
+   */
+  loginBuckets: LoginBucketStore
+  /** 实时读取登录锁定配置（阈值为 0 = 不锁定，仅记录失败次数） */
+  getLoginLockConfig: () => Promise<{ threshold: number; lockMs: number }>
+  /** 登录被锁定时记审计日志（供安全追溯） */
+  onLoginLocked: (username: string, reason: string) => void
 }
 
 /** 从实体取签发所需的字段 */
@@ -56,12 +71,44 @@ function sessionOf(user: UserEntity, tid: number, role: string) {
 }
 
 export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
-  const { getDs, authMiddleware, jwtSecret, signSessionToken, freshRole, isSensitiveAction, revokeAllSessions, closeWindow, getRunningWindowIds } =
+  const { getDs, authMiddleware, jwtSecret, signSessionToken, freshRole, isSensitiveAction, revokeAllSessions, closeWindow, getRunningWindowIds, loginBuckets, getLoginLockConfig, onLoginLocked } =
     deps
+
+  /**
+   * 登录保护：在查密码**之前**先查锁定。
+   *
+   * 顺序很关键——若先比对密码再查锁定，攻击者即便被锁住也能不断发送密码尝试
+   * （虽然拿不到会话，但等于保留了密码爆破的探测能力）。先查锁定可直接拒掉。
+   */
+  const guardLogin = async (username: string) => {
+    const cfg = await getLoginLockConfig()
+    const bucket = loginBuckets.get(`login:${username}`)
+    const lock = checkLoginLock(bucket, Date.now())
+    if (!lock.allowed) {
+      onLoginLocked(username, lock.reason)
+      return lock
+    }
+    return null
+  }
+
+  /** 登录失败处理：累加计数，达阈值则锁定 */
+  const noteLoginFailure = async (username: string) => {
+    const cfg = await getLoginLockConfig()
+    const result = registerLoginFailure(loginBuckets.get(`login:${username}`), Date.now(), cfg.threshold, cfg.lockMs)
+    if (!result.allowed) onLoginLocked(username, `连续登录失败达阈值，已锁定：${result.reason}`)
+    return result
+  }
 
   router.post('/auth/register', async (req: Request, res: Response) => {
     const { username, password, nickname, teamName } = req.body || {}
     if (!username || !password) return res.status(400).json({ message: '用户名和密码不能为空' })
+    // 注册同样限流：不限流的话，登录锁定可被「换个用户名重试」完全绕过
+    const regBucket = loginBuckets.get(`register:${clientKeyOf(req.headers as Record<string, unknown>, req.ip || 'unknown')}`)
+    const regLimit = consumeRateLimit(regBucket, Date.now(), REGISTER_LIMIT_PER_HOUR, 60 * 60 * 1000)
+    if (!regLimit.allowed) {
+      if (regLimit.retryAfterSec > 0) res.setHeader('Retry-After', String(regLimit.retryAfterSec))
+      return res.status(429).json({ message: '注册过于频繁，请稍后再试', code: 'rate_limited' })
+    }
     const ds = getDs()
     const userRepo = ds.getRepository(UserEntity)
     const exists = await userRepo.findOne({ where: { username } })
@@ -83,11 +130,27 @@ export function registerAuthRoutes(router: Router, deps: AuthRouteDeps): void {
 
   router.post('/auth/login', async (req: Request, res: Response) => {
     const { username, password } = req.body || {}
+    // 锁定检查必须在比对密码之前
+    const locked = await guardLogin(String(username || ''))
+    if (locked) {
+      if (locked.retryAfterSec > 0) res.setHeader('Retry-After', String(locked.retryAfterSec))
+      return res.status(locked.status).json({ message: locked.reason, code: 'account_locked' })
+    }
     const ds = getDs()
     const userRepo = ds.getRepository(UserEntity)
     const user = await userRepo.findOne({ where: { username } })
-    if (!user || !(await bcrypt.compare(password || '', user.passwordHash)))
-      return res.status(400).json({ message: '用户名或密码错误' })
+    if (!user || !(await bcrypt.compare(password || '', user.passwordHash))) {
+      // 失败计数按**用户名**而非 IP：本地全部来自 127.0.0.1，
+      // 按 IP 计数等于所有人共用额度，攻击者猛打任意账号就能锁死正常用户
+      const fail = await noteLoginFailure(String(username || ''))
+      const body: Record<string, unknown> = { message: '用户名或密码错误' }
+      // 仅在接近阈值时提示剩余次数（见 shared/rateLimit.ts 注释：避免帮爆破者定位阈值）
+      if (fail.reason) body.message = `用户名或密码错误。${fail.reason}`
+      if (fail.retryAfterSec > 0) res.setHeader('Retry-After', String(fail.retryAfterSec))
+      return res.status(fail.allowed ? 400 : fail.status).json(body)
+    }
+    // 登录成功：清空该账号的失败计数与锁定
+    registerLoginSuccess(loginBuckets.get(`login:${String(username)}`))
     const memberRepo = ds.getRepository(TeamMemberEntity)
     const member = await memberRepo.findOne({ where: { userId: user.id } })
     let teamId = member?.teamId

@@ -606,6 +606,31 @@ export default function Settings() {
           <InputNumber min={7} max={3650} addonAfter={t('common.days')} style={{ width: 160 }} />
         </Form.Item>
 
+        <Divider>{t('security.section')}</Divider>
+        <Typography.Paragraph type="secondary">{t('security.desc')}</Typography.Paragraph>
+        <Space size="large" style={{ display: 'flex' }}>
+          <Form.Item
+            name="rateLimitPerMin"
+            label={t('security.rateLimit')}
+            rules={[{ required: true }]}
+            extra={t('security.rateLimitExtra')}
+          >
+            <InputNumber min={0} max={10000} addonAfter={t('security.perMin')} style={{ width: 170 }} />
+          </Form.Item>
+          <Form.Item
+            name="loginLockoutThreshold"
+            label={t('security.lockThreshold')}
+            rules={[{ required: true }]}
+            extra={t('security.lockThresholdExtra')}
+          >
+            <InputNumber min={0} max={100} addonAfter={t('security.times')} style={{ width: 170 }} />
+          </Form.Item>
+          <Form.Item name="loginLockoutMinutes" label={t('security.lockMinutes')} rules={[{ required: true }]}>
+            <InputNumber min={1} max={1440} addonAfter={t('common.minutes')} style={{ width: 170 }} />
+          </Form.Item>
+        </Space>
+        <Alert type="info" showIcon message={t('security.note')} />
+
         <Divider>{t('settings.sectionNetwork')}</Divider>
         <Form.Item name="networkMode" label={t('settings.networkMode')} extra={t('settings.networkModeExtra')}>
           <Select

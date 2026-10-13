@@ -452,6 +452,12 @@ export interface AppSettings {
   proxyHealThreshold: number
   // 操作日志保留天数
   logRetentionDays: number
+  // 接口限流：窗口内每客户端最多请求数；0 = 关闭
+  rateLimitPerMin: number
+  // 登录失败锁定：连续失败多少次锁定该账号；0 = 不锁定（仍记录失败次数）
+  loginLockoutThreshold: number
+  // 登录锁定时长（分钟）
+  loginLockoutMinutes: number
   // 客户端网络连接方式：system = 跟随系统代理；custom = 使用下方自定义代理
   networkMode: 'system' | 'custom'
   // 自定义代理（networkMode === 'custom' 时生效）：协议 / 主机 / 端口 / 可选账号密码
@@ -511,6 +517,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   proxyHealEnabled: false,
   proxyHealThreshold: 2,
   logRetentionDays: 90,
+  rateLimitPerMin: 120,
+  loginLockoutThreshold: 5,
+  loginLockoutMinutes: 15,
   networkMode: 'system',
   customProxyType: 'http',
   customProxyHost: '',

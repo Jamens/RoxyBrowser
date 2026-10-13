@@ -25,6 +25,7 @@ import {
   type ProxyLike
 } from '../shared/proxyHeal'
 import { getCdpInfo } from './cdpManager'
+import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
@@ -586,6 +587,33 @@ export async function getSettings(): Promise<AppSettings> {
   return decrypted
 }
 
+// ---------- 接口限流配置缓存 ----------
+// 限流中间件在每个请求前执行，若每次都 await getSettings() 会多一次 MySQL
+// 查询，高频轮询下成为瓶颈。故缓存限额，仅在 PUT /settings 后失效重取。
+let rateLimitPerMinCache = DEFAULT_SETTINGS.rateLimitPerMin
+let rateLimitLoaded = false
+
+function cachedRateLimitPerMin(): number {
+  if (!rateLimitLoaded) {
+    // 同步兜底值；bootstrap 完成后 refreshRateLimitConfig() 会覆盖
+    rateLimitPerMinCache = DEFAULT_SETTINGS.rateLimitPerMin
+    rateLimitLoaded = true
+  }
+  return rateLimitPerMinCache
+}
+
+/** 从 DB 重取限流配置（启动后与 PUT /settings 后调用） */
+export async function refreshRateLimitConfig(): Promise<void> {
+  try {
+    const s = await getSettings()
+    const n = Number(s.rateLimitPerMin)
+    rateLimitPerMinCache = Number.isFinite(n) && n >= 0 ? Math.trunc(n) : DEFAULT_SETTINGS.rateLimitPerMin
+    rateLimitLoaded = true
+  } catch (e) {
+    console.warn('[roxy] 读取限流配置失败，沿用默认值:', (e as Error).message)
+  }
+}
+
 // 代理定时巡检调度器
 let proxyCheckTimer: ReturnType<typeof setInterval> | null = null
 /** 连续失败计数（代理 id → 连续失败轮数）。进程内维护即可：重启后从 0 开始，
@@ -1124,7 +1152,24 @@ function buildApiRouter(): express.Router {
     isSensitiveAction,
     revokeAllSessions,
     closeWindow,
-    getRunningWindowIds
+    getRunningWindowIds,
+    loginBuckets,
+    getLoginLockConfig: async () => {
+      const s = await getSettings()
+      return {
+        threshold: Number(s.loginLockoutThreshold) || 0,
+        lockMs: (Number(s.loginLockoutMinutes) || 15) * 60 * 1000
+      }
+    },
+    onLoginLocked: (username: string, reason: string) => {
+      // 锁定属安全事件：写日志 + 推 webhook，便于用户及时察觉账号正被爆破。
+      // 此刻可能尚未登录（甚至在爆破一个不存在的用户名），拿不到登录态的 tid，
+      // 故用系统日志入口并记 tid=0 —— 「谁被攻击」比「记在哪个团队下」更重要。
+      const detail = `账号「${username}」触发登录锁定：${reason}`
+      console.warn(`[roxy] ${detail}`)
+      // writeSystemLog 内部已 dispatch webhook，此处不重复发
+      void writeSystemLog(0, 'login_locked', detail)
+    }
   })
 
   // ===== 窗口同步开关 =====
@@ -2428,6 +2473,8 @@ function buildApiRouter(): express.Router {
     restartSchedulers: () => {
       // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
       startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
+      // 限流限额同步刷新：改设置后立即生效，不需重启应用
+      void refreshRateLimitConfig()
     },
     defaultSettings: DEFAULT_SETTINGS,
     normalizeSearchEngine
@@ -3796,8 +3843,24 @@ export async function bootstrap(): Promise<string> {
   const app: Express = express()
   app.use(cors())
   app.use(express.json({ limit: '2mb' }))
+  /**
+   * 通用接口限流（滑动窗口，按客户端 IP）。
+   *
+   * 挂在 /api 之前，覆盖业务 API 与 v1 自动化接口。`/healthz` 在其外——
+   * 健康检查不该被限流（外部调度器可能高频探测，超限会导致误判服务已死）。
+   *
+   * **限额走内存缓存而非每次查库**：限流在每个请求前执行，若每次都 await
+   * getSettings() 就多一次 MySQL 查询，在高频轮询下会成瓶颈。缓存在
+   * PUT /settings 时由 refreshRateLimitConfig() 失效重取，兼顾「改设置立即生效」。
+   *
+   * **注意本桶防不住登录爆破**——本地请求全部来自 127.0.0.1，按 IP 计数等于
+   * 所有人共用额度；登录防护见 routes/auth.ts 的「按用户名锁定」。
+   */
+  app.use('/api', rateLimit('api', () => cachedRateLimitPerMin()))
   app.use('/api', buildApiRouter())
   app.get('/healthz', (_req, res) => res.json({ ok: true }))
+  // 定期清理空桶，避免长期运行时 Map 无限增长
+  startRateLimitSweeper()
   // 接受邀请页：纯 HTML，由 Express 直接返回，无需渲染进程参与（详见 acceptInvitePage.ts）
   app.get('/accept-invite', (_req, res) => {
     res.type('html').send(renderAcceptInvitePage())
@@ -3842,6 +3905,8 @@ export async function bootstrap(): Promise<string> {
 
   // 5. 启动代理定时巡检调度（间隔由设置决定，0 表示关闭）
   startProxyCheckScheduler().catch((e) => console.error('[roxy] 启动巡检调度失败:', e))
+  // 5.5 加载限流配置（此前中间件只能读到默认值）
+  await refreshRateLimitConfig()
   // 6. 启动 RPA 定时执行调度器（每 30s 扫描到点脚本；环境未运行则跳过并写日志）
   startRpaScheduleScheduler()
   // 7. 启动全空间快照定时自动备份调度（按间隔写入本地目录，目录为空/未启用则跳过）
