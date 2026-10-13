@@ -34,9 +34,6 @@ import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
-import { HttpProxyAgent } from 'http-proxy-agent'
-import { HttpsProxyAgent } from 'https-proxy-agent'
-import { SocksProxyAgent } from 'socks-proxy-agent'
 import type { AddressInfo } from 'net'
 import { app } from 'electron'
 
@@ -66,7 +63,6 @@ import { MARKET_SCRIPTS } from './rpaMarket'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig, SmtpSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
-import { allocateProxies } from '../shared/proxyAllocator'
 import {
   exportProfileFull,
   importProfileItems,
@@ -89,6 +85,10 @@ import { renderAcceptInvitePage } from './acceptInvitePage'
 import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 import { runLogArchive } from './logArchiver'
 import { registerLogRoutes } from './routes/logs'
+import { registerProxyRoutes } from './routes/proxies'
+// 代理检测 / 分配的业务逻辑已抽到 proxyService（不依赖 AppDataSource，DataSource 由调用方传入），
+// 这样 routes/proxies 与本文件都能直接 import，不必反向引用形成循环依赖。
+import { allocateProxy, applyProxyCheckResult, checkProxy, computeProxyUsage, ApiError } from './proxyService'
 import { registerCookieRoutes } from './routes/cookies'
 import { registerV1CookieRoutes } from './routes/v1Cookie'
 import { registerAuthRoutes } from './routes/auth'
@@ -535,106 +535,6 @@ function mapProfile(p: ProfileEntity, groupName?: string | null, proxy?: ProxyEn
     createdBy: p.createdBy,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt
-  }
-}
-
-// ---------- 代理检测 ----------
-function httpGetViaProxy(
-  url: string,
-  proxy: { type: string; host: string; port: number; username?: string; password?: string },
-  timeoutMs = 12000
-): Promise<{ body: string; ms: number }> {
-  const auth =
-    proxy.username && proxy.password ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}` : ''
-  const at = auth ? `${auth}@` : ''
-  let agent: http.Agent
-  if (proxy.type === 'socks5') agent = new SocksProxyAgent(`socks5://${at}${proxy.host}:${proxy.port}`)
-  else if (proxy.type === 'https') agent = new HttpsProxyAgent(`http://${at}${proxy.host}:${proxy.port}`)
-  else agent = new HttpProxyAgent(`http://${at}${proxy.host}:${proxy.port}`)
-
-  return new Promise((resolve, reject) => {
-    const start = Date.now()
-    const req = http.request(
-      url,
-      { agent, timeout: timeoutMs, headers: { 'User-Agent': 'Mozilla/5.0' } } as http.RequestOptions,
-      (res) => {
-        let body = ''
-        res.on('data', (c) => (body += c))
-        res.on('end', () => resolve({ body, ms: Date.now() - start }))
-      }
-    )
-    req.on('timeout', () => req.destroy(new Error('timeout')))
-    req.on('error', reject)
-    req.end()
-  })
-}
-
-/**
- * 匿名度判定：请求一个会回显请求头的服务，看代理有没有把客户端真实 IP / 代理标识透传出去。
- * - 出现 X-Forwarded-For / X-Real-IP 等 → transparent（泄露真实 IP）
- * - 仅出现 Via / Proxy-Connection 等 → anonymous（看得出用了代理，但未泄露 IP）
- * - 都没有 → elite（高匿）
- * 该服务不可达时返回 unknown，不影响主检测结果（尽力而为）。
- */
-async function detectAnonymity(proxy: ProxyEntity, timeoutMs?: number): Promise<string> {
-  try {
-    const { body } = await httpGetViaProxy(
-      'http://httpbin.org/headers',
-      {
-        type: proxy.type,
-        host: proxy.host,
-        port: proxy.port,
-        username: proxy.username,
-        password: proxy.password
-      },
-      timeoutMs
-    )
-    const data = JSON.parse(body)
-    const keys = Object.keys(data.headers || {}).map((k) => k.toLowerCase())
-    if (keys.some((k) => ['x-forwarded-for', 'x-real-ip', 'x-client-ip', 'client-ip', 'forwarded'].includes(k))) {
-      return 'transparent'
-    }
-    if (keys.some((k) => ['via', 'proxy-connection', 'proxy-agent'].includes(k))) {
-      return 'anonymous'
-    }
-    return 'elite'
-  } catch {
-    return 'unknown'
-  }
-}
-
-async function checkProxy(
-  proxy: ProxyEntity,
-  timeoutMs?: number
-): Promise<{ ok: boolean; country: string; region: string; city: string; isp: string; exitIp: string; latency: number; anonymity: string }> {
-  try {
-    const { body, ms } = await httpGetViaProxy(
-      'http://ip-api.com/json/?fields=status,country,regionName,city,isp,query',
-      {
-        type: proxy.type,
-        host: proxy.host,
-        port: proxy.port,
-        username: proxy.username,
-        password: proxy.password
-      },
-      timeoutMs
-    )
-    const data = JSON.parse(body)
-    if (data.status !== 'success')
-      return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: ms, anonymity: 'unknown' }
-    const anonymity = await detectAnonymity(proxy, timeoutMs)
-    return {
-      ok: true,
-      country: data.country || '',
-      region: data.regionName || '',
-      city: data.city || '',
-      isp: data.isp || '',
-      exitIp: data.query || '',
-      latency: ms,
-      anonymity
-    }
-  } catch {
-    return { ok: false, country: '', region: '', city: '', isp: '', exitIp: '', latency: 0, anonymity: 'unknown' }
   }
 }
 
@@ -1090,155 +990,6 @@ function startRpaScheduleScheduler(): void {
   }, RPA_SCAN_MS)
   rpaScheduleTimer.unref?.()
   console.log(`[roxy] RPA 定时执行调度器已启动（每 ${RPA_SCAN_MS / 1000}s 扫描一次）`)
-}
-
-// 统计每个代理被多少个环境绑定（proxyId 计数）
-async function computeProxyUsage(teamId: number): Promise<Map<number, number>> {
-  const profileRepo = AppDataSource.getRepository(ProfileEntity)
-  const rows = await profileRepo
-    .createQueryBuilder('p')
-    .select('p.proxyId', 'proxyId')
-    .addSelect('COUNT(p.id)', 'cnt')
-    .where('p.teamId = :tid', { tid: teamId })
-    .andWhere('p.proxyId IS NOT NULL')
-    .groupBy('p.proxyId')
-    .getRawMany()
-  const map = new Map<number, number>()
-  for (const r of rows) map.set(Number(r.proxyId), Number(r.cnt))
-  return map
-}
-
-// 根据检测状态 / 到期时间 / 被占用情况计算 IP 池视角下的状态
-function proxyPoolStatus(
-  p: ProxyEntity,
-  usageCount: number,
-  now: number
-): 'available' | 'in-use' | 'expired' | 'invalid' | 'unknown' {
-  if (p.status === 'invalid') return 'invalid'
-  if (p.expiresAt && new Date(p.expiresAt).getTime() < now) return 'expired'
-  if (usageCount > 0) return 'in-use'
-  return 'available'
-}
-
-// 带 HTTP 状态码的业务错误，便于在 handler 中统一转为响应
-class ApiError extends Error {
-  status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
-
-// 从 IP 池分配代理（供 /api/proxies/allocate 与 v1 共用，保证分配口径唯一）
-// excludeProxyId：切换线路场景排除当前绑定的代理，保证换到的是「另一条线路」
-async function allocateProxy(
-  teamId: number,
-  opts: { profileId?: number | null; country?: string; region?: string; excludeProxyId?: number | null }
-): Promise<{ proxy: ProxyEntity; profileId: number | null; reused: boolean; poolStatus: 'available' | 'in-use' }> {
-  const repo = AppDataSource.getRepository(ProxyEntity)
-  const now = Date.now()
-  const usage = await computeProxyUsage(teamId)
-  const all = await repo.find({ where: { teamId } })
-  // 候选 = 未失效且未过期的代理（active 或 unknown 均可分配，与 proxyPoolStatus 的「available」定义一致）
-  let candidates = all.filter((p) => p.status !== 'invalid' && (!p.expiresAt || new Date(p.expiresAt).getTime() > now))
-  if (opts.excludeProxyId) {
-    candidates = candidates.filter((p) => p.id !== opts.excludeProxyId)
-  }
-  if (opts.country) {
-    const c = String(opts.country).toLowerCase()
-    candidates = candidates.filter((p) => p.country && p.country.toLowerCase().includes(c))
-  }
-  if (opts.region) {
-    const r = String(opts.region).toLowerCase()
-    candidates = candidates.filter((p) => p.region && p.region.toLowerCase().includes(r))
-  }
-  if (!candidates.length)
-    throw new ApiError(
-      409,
-      (opts.excludeProxyId ? 'IP 池中没有可切换的其他线路' : 'IP 池中无可用代理') + (opts.country ? `（地区：${opts.country}）` : '')
-    )
-  // 优先分配未被任何环境占用的代理
-  const free = candidates.filter((p) => (usage.get(p.id) || 0) === 0)
-  const reused = free.length === 0
-  const chosen = (free.length ? free : candidates)[0]
-  let profileId: number | null = null
-  let poolStatus: 'available' | 'in-use' = 'available'
-  if (opts.profileId) {
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const profile = await profileRepo.findOne({ where: { id: Number(opts.profileId), teamId } })
-    if (!profile) throw new ApiError(404, '环境不存在')
-    profile.proxyId = chosen.id
-    await profileRepo.save(profile)
-    profileId = profile.id
-    poolStatus = 'in-use'
-  }
-  return { proxy: chosen, profileId, reused, poolStatus }
-}
-
-/**
- * 解析一行代理配置，支持：
- *   socks5://user:pass@1.2.3.4:1080
- *   http://1.2.3.4:8080
- *   1.2.3.4:8080:user:pass
- *   1.2.3.4:8080
- *   1.2.3.4,8080,user,pass        (CSV)
- *   1.2.3.4,8080,user,pass,socks5 (CSV 带协议)
- */
-function parseProxyLine(line: string): { type: string; host: string; port: number; username: string; password: string } | null {
-  const raw = line.trim()
-  if (!raw) return null
-
-  // http://user:pass@host:port
-  if (/^[a-z]+:\/\//i.test(raw)) {
-    try {
-      const u = new URL(raw)
-      const type = (u.protocol.replace(':', '') || 'http').toLowerCase()
-      return {
-        type: type === 'socks' ? 'socks5' : type === 'http' ? 'http' : type === 'https' ? 'https' : 'http',
-        host: u.hostname,
-        port: Number(u.port) || (type === 'https' ? 443 : type === 'socks5' ? 1080 : 80),
-        username: decodeURIComponent(u.username || ''),
-        password: decodeURIComponent(u.password || '')
-      }
-    } catch {
-      return null
-    }
-  }
-
-  // CSV：host,port,user,pass[,type]
-  if (raw.includes(',')) {
-    const parts = raw.split(',').map((s) => s.trim())
-    const [host, port, username = '', password = '', type = 'http'] = parts
-    if (!host || !Number(port)) return null
-    return { type: type.toLowerCase() === 'socks5' ? 'socks5' : type.toLowerCase() === 'https' ? 'https' : 'http', host, port: Number(port), username, password }
-  }
-
-  const parts = raw.split(':').map((s) => s.trim())
-
-  // 与 /proxies/export 对应的格式：type:host:port:username:password
-  const KNOWN_TYPES = ['http', 'https', 'socks5', 'socks4', 'socks']
-  if (parts.length >= 3 && KNOWN_TYPES.includes(parts[0].toLowerCase()) && Number(parts[2])) {
-    const t = parts[0].toLowerCase()
-    return {
-      type: t === 'socks' || t === 'socks4' ? 'socks5' : t,
-      host: parts[1],
-      port: Number(parts[2]),
-      username: parts[3] || '',
-      password: parts[4] || ''
-    }
-  }
-
-  // 冒号分隔：host:port[:user[:pass]]
-  if (parts.length >= 2 && parts[0] && Number(parts[1])) {
-    return {
-      type: 'http',
-      host: parts[0],
-      port: Number(parts[1]),
-      username: parts[2] || '',
-      password: parts[3] || ''
-    }
-  }
-  return null
 }
 
 // ---------- 扩展（浏览器插件）存储辅助 ----------
@@ -1766,7 +1517,7 @@ function isoOf(d: Date | null | undefined): string | null {
     const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
     if (!p) return res.status(404).json({ message: '环境不存在' })
     try {
-      const { proxy, reused } = await allocateProxy(req.tid!, {
+      const { proxy, reused } = await allocateProxy(AppDataSource, req.tid!, {
         excludeProxyId: p.proxyId,
         country: (req.body || {}).country,
         region: (req.body || {}).region
@@ -2074,198 +1825,6 @@ function isoOf(d: Date | null | undefined): string | null {
   // 指纹预设库（内置验证过的指纹组合）
   router.get('/fingerprint/presets', authMiddleware, (_req: Request, res: Response) => {
     res.json(listFingerprintPresets())
-  })
-
-  // ===== 代理 =====
-  router.get('/proxies', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: ownerScope(req), order: { id: 'DESC' } })
-    const usage = await computeProxyUsage(req.tid!)
-    const now = Date.now()
-    res.json(
-      list.map((p) => {
-        const cnt = usage.get(p.id) || 0
-        return { ...p, usageCount: cnt, poolStatus: proxyPoolStatus(p, cnt, now) }
-      })
-    )
-  })
-
-  router.post('/proxies', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const b = req.body || {}
-    if (!b.host || !b.port) return res.status(400).json({ message: '主机和端口不能为空' })
-    const p = await repo.save(
-      repo.create({
-        teamId: req.tid!,
-        ownerId: req.uid!,
-        name: b.name || `${b.host}:${b.port}`,
-        type: b.type || 'http',
-        host: b.host,
-        port: Number(b.port),
-        username: b.username || '',
-        password: b.password || '',
-        remark: b.remark || ''
-      })
-    )
-    await writeLog(req, 'create_proxy', `添加代理「${p.name}」(#${p.id})`)
-    res.json(p)
-  })
-
-  router.put('/proxies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '代理不存在' })
-    const b = req.body || {}
-    for (const f of ['name', 'type', 'host', 'username', 'password', 'remark', 'expiresAt'] as const) {
-      if (f in b) (p as any)[f] = b[f]
-    }
-    if (b.port) p.port = Number(b.port)
-    await repo.save(p)
-    await writeLog(req, 'update_proxy', `修改代理「${p.name}」(#${p.id})`)
-    res.json(p)
-  })
-
-  router.delete('/proxies/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '代理不存在' })
-    await repo.remove(p)
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    await profileRepo.update({ ...ownerScope(req), proxyId: p.id }, { proxyId: null })
-    await writeLog(req, 'delete_proxy', `删除代理「${p.name}」(#${p.id})`)
-    res.json({ ok: true })
-  })
-
-  router.post('/proxies/:id/check', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '代理不存在' })
-    const settings = await getSettings()
-    const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
-    p.status = result.ok ? 'active' : 'invalid'
-    p.latency = result.ok ? result.latency : null
-    p.country = result.country
-    p.region = result.region
-    p.city = result.city
-    p.isp = result.isp
-    p.exitIp = result.exitIp
-    p.anonymity = result.anonymity
-    p.lastCheckAt = new Date()
-    await repo.save(p)
-    res.json(p)
-  })
-
-  // 从 IP 池一键分配：优先空闲代理，可按地区筛选，可选绑定到指定环境
-  router.post('/proxies/allocate', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const b = req.body || {}
-    try {
-      const { proxy, profileId, reused, poolStatus } = await allocateProxy(req.tid!, {
-        profileId: b.profileId,
-        country: b.country,
-        region: b.region
-      })
-      const usage = await computeProxyUsage(req.tid!)
-      if (profileId) {
-        const profile = await AppDataSource.getRepository(ProfileEntity).findOne({ where: { id: profileId, ...ownerScope(req) } })
-        await writeLog(req, 'allocate_proxy', `为环境「${profile?.name}」从 IP 池分配代理「${proxy.name}」(#${proxy.id})`)
-      } else {
-        await writeLog(
-          req,
-          'allocate_proxy',
-          `从 IP 池分配代理「${proxy.name}」(#${proxy.id})` + (reused ? '（池中无空闲代理，复用已占用代理）' : '')
-        )
-      }
-      res.json({
-        proxy: { ...proxy, usageCount: (usage.get(proxy.id) || 0) + (profileId ? 1 : 0), poolStatus },
-        profileId,
-        reused
-      })
-    } catch (e) {
-      if (e instanceof ApiError) return res.status(e.status).json({ message: e.message })
-      throw e
-    }
-  })
-
-  // 智能代理分配（负载均衡 + 避免同代理复用）：
-  // 对选中的 N 个环境，从「空闲可用代理池」逐一分配**互不相同**的代理，杜绝两个环境共用同一出口 IP（防关联）。
-  // 核心分配逻辑抽到纯函数 allocateProxies（src/shared/proxyAllocator.ts），便于离线单测；此处只负责取数、落库、写日志。
-  router.post('/profiles/batch-allocate-proxy', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const ids = Array.isArray(req.body?.ids)
-      ? (req.body.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n))
-      : []
-    if (!ids.length) return res.status(400).json({ message: '请选择至少一个环境' })
-    const country = typeof req.body?.country === 'string' ? req.body.country.trim() : ''
-    const type = typeof req.body?.type === 'string' ? req.body.type.trim() : ''
-
-    const profileRepo = AppDataSource.getRepository(ProfileEntity)
-    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const profiles = await profileRepo.find({ where: { id: In(ids), ...ownerScope(req) } })
-    const byId = new Map(profiles.map((p) => [p.id, p]))
-    const ordered = ids.map((id) => byId.get(id)).filter((p): p is ProfileEntity => !!p)
-
-    const usage = await computeProxyUsage(req.tid!)
-    const allProxies = await proxyRepo.find({ where: { teamId: req.tid! } })
-
-    const result = allocateProxies(
-      ordered.map((p) => ({ id: p.id, name: p.name, status: p.status, proxyId: p.proxyId })),
-      allProxies.map((p) => ({ id: p.id, status: p.status, country: p.country, type: p.type, expiresAt: p.expiresAt })),
-      usage,
-      { country, type }
-    )
-
-    if (result.updates.length) {
-      const saveMap = new Map(result.updates.map((u) => [u.id, u.proxyId]))
-      const toSave = ordered.filter((p) => saveMap.has(p.id))
-      for (const p of toSave) p.proxyId = saveMap.get(p.id) ?? null
-      await profileRepo.save(toSave)
-      await writeLog(
-        req,
-        'batch_allocate_proxy',
-        `智能分配代理：分配 ${result.assigned} 个、保留 ${result.kept} 个、跳过 ${result.skippedRunning + result.skippedNoProxy} 个`
-      )
-    }
-
-    res.json(result)
-  })
-
-  // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布
-  router.get('/proxies/pool-stats', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: ownerScope(req) })
-    const usage = await computeProxyUsage(req.tid!)
-    const now = Date.now()
-    let available = 0
-    let inUse = 0
-    let expired = 0
-    let invalid = 0
-    let unknown = 0
-    let active = 0
-    const byCountry = new Map<string, { country: string; total: number; available: number }>()
-    for (const p of list) {
-      const ps = proxyPoolStatus(p, usage.get(p.id) || 0, now)
-      if (ps === 'available') available++
-      else if (ps === 'in-use') inUse++
-      else if (ps === 'expired') expired++
-      else if (ps === 'invalid') invalid++
-      else unknown++
-      if (p.status === 'active') active++
-      if (p.country) {
-        const c = byCountry.get(p.country) || { country: p.country, total: 0, available: 0 }
-        c.total++
-        if (ps === 'available') c.available++
-        byCountry.set(p.country, c)
-      }
-    }
-    res.json({
-      total: list.length,
-      active,
-      available,
-      inUse,
-      expired,
-      invalid,
-      unknown,
-      byCountry: [...byCountry.values()].sort((a, b) => b.total - a.total)
-    })
   })
 
   // ===== 账号中心 =====
@@ -2733,6 +2292,13 @@ function isoOf(d: Date | null | undefined): string | null {
   // 路由实现已抽到 src/main/routes/logs.ts（server.ts 过大，按域逐步拆分）。
   // getDs 传函数而非值：AppDataSource 是运行时赋值的 export let，按值捕获会拿到 undefined。
   registerLogRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
+
+  // 代理域（CRUD / 检测 / IP 池分配 / 智能批量分配 / 池统计 / 批量导入导出）见 routes/proxies.ts。
+  // 业务逻辑在 proxyService 中，同样不依赖 AppDataSource —— 这样拆分后本文件只是装配层，
+  // 不再是所有模块的隐性依赖中心。
+  // 注：/profiles/batch-allocate-proxy 也归在这一路由文件里（它操作的是代理分配语义，
+  // 而非环境 CRUD），保持「一处分配逻辑」不被拆到两个文件里各自演化。
+  registerProxyRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog, getSettings })
 
   // 设置域（API 令牌 / 全局设置 / CDP 调试端口 / Webhook 测试）见 routes/settings.ts。
   registerSettingsRoutes(router, {
@@ -3212,12 +2778,12 @@ function isoOf(d: Date | null | undefined): string | null {
   v1.post('/proxies/allocate', async (req: Request, res: Response) => {
     const b = req.body || {}
     try {
-      const { proxy, profileId, reused, poolStatus } = await allocateProxy((req as AuthedRequest).tid!, {
+      const { proxy, profileId, reused, poolStatus } = await allocateProxy(AppDataSource, (req as AuthedRequest).tid!, {
         profileId: b.profileId,
         country: b.country,
         region: b.region
       })
-      const usage = await computeProxyUsage((req as AuthedRequest).tid!)
+      const usage = await computeProxyUsage(AppDataSource, (req as AuthedRequest).tid!)
       res.json({
         code: 0,
         data: { proxy: { ...proxy, usageCount: (usage.get(proxy.id) || 0) + (profileId ? 1 : 0), poolStatus }, profileId, reused }
@@ -3236,15 +2802,7 @@ function isoOf(d: Date | null | undefined): string | null {
     if (!p) return res.status(404).json({ code: 404, message: 'proxy not found' })
     const settings = await getSettings()
     const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
-    p.status = result.ok ? 'active' : 'invalid'
-    p.latency = result.ok ? result.latency : null
-    p.country = result.country
-    p.region = result.region
-    p.city = result.city
-    p.isp = result.isp
-    p.exitIp = result.exitIp
-    p.anonymity = result.anonymity
-    p.lastCheckAt = new Date()
+    applyProxyCheckResult(p, result)
     await repo.save(p)
     res.json({ code: 0, data: p })
   })
@@ -3677,41 +3235,6 @@ function isoOf(d: Date | null | undefined): string | null {
     }
 
     return res.status(400).json({ message: '未知批量操作' })
-  })
-
-  // 代理批量导入：支持 host:port:user:pass / url 形式 / CSV
-  router.post('/proxies/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const text: string = req.body?.text || ''
-    const lines = text
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean)
-    if (lines.length === 0) return res.status(400).json({ message: '没有可导入的数据' })
-
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    let ok = 0
-    const failed: string[] = []
-    for (const line of lines) {
-      const parsed = parseProxyLine(line)
-      if (!parsed) {
-        failed.push(line)
-        continue
-      }
-      await repo.save(repo.create({ teamId: req.tid!, ownerId: req.uid!, name: `${parsed.host}:${parsed.port}`, ...parsed }))
-      ok += 1
-    }
-    await writeLog(req, 'import_proxies', `批量导入代理 ${ok} 条${failed.length ? `，失败 ${failed.length} 条` : ''}`)
-    res.json({ imported: ok, failed })
-  })
-
-  // 代理导出（文本，便于备份与迁移）
-  router.get('/proxies/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProxyEntity)
-    const list = await repo.find({ where: ownerScope(req), order: { id: 'ASC' } })
-    const text = list
-      .map((p) => [p.type, p.host, p.port, p.username, p.password].join(':'))
-      .join('\n')
-    res.json({ text, count: list.length })
   })
 
   // ---------- 扩展管理（浏览器插件） ----------
