@@ -445,6 +445,11 @@ export interface AppSettings {
   proxyCheckTimeout: number
   // 代理定时巡检间隔（分钟），0 表示关闭
   proxyCheckInterval: number
+  // 代理故障自愈：巡检发现代理失效后自动把绑定的环境换绑到其他可用代理
+  proxyHealEnabled: boolean
+  // 触发自愈所需的连续失败轮数（阈值太低会因网络抖动导致环境 IP 反复跳变，
+  // 那本身就是一个极强的自动化信号且会触发平台风控，故默认要求连续 2 轮）
+  proxyHealThreshold: number
   // 操作日志保留天数
   logRetentionDays: number
   // 客户端网络连接方式：system = 跟随系统代理；custom = 使用下方自定义代理
@@ -503,6 +508,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchEngine: 'bing',
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
+  proxyHealEnabled: false,
+  proxyHealThreshold: 2,
   logRetentionDays: 90,
   networkMode: 'system',
   customProxyType: 'http',

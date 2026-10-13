@@ -569,6 +569,34 @@ export default function Settings() {
           </Form.Item>
         </Space>
 
+        {/* 代理故障自愈：与巡检配套。默认关闭——自动改环境 IP 属于「用户不可见的
+            重大变更」，必须由用户显式选择加入，而非默认替他做决定。 */}
+        <Form.Item
+          name="proxyHealEnabled"
+          label={t('proxyHeal.enable')}
+          valuePropName="checked"
+          extra={t('proxyHeal.enableExtra')}
+        >
+          <Switch />
+        </Form.Item>
+        {Form.useWatch('proxyHealEnabled', form) && (
+          <Form.Item
+            name="proxyHealThreshold"
+            label={t('proxyHeal.threshold')}
+            rules={[{ required: true }]}
+            extra={t('proxyHeal.thresholdExtra')}
+          >
+            <InputNumber min={1} max={10} addonAfter={t('proxyHeal.times')} style={{ width: 160 }} />
+          </Form.Item>
+        )}
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={t('proxyHeal.rulesTitle')}
+          description={t('proxyHeal.rules')}
+        />
+
         <Divider>{t('settings.sectionLog')}</Divider>
         <Form.Item
           name="logRetentionDays"

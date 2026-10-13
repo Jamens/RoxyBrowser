@@ -12,6 +12,13 @@ import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from '
 import { getJwtSecret } from './jwtSecret'
 import { lazySecretCrypto } from './secretKey'
 import { clampPort } from '../shared/cdp'
+import {
+  bumpFailureCount,
+  planProxyHealing,
+  type FailureCounts,
+  type ProfileLike,
+  type ProxyLike
+} from '../shared/proxyHeal'
 import { getCdpInfo, readCdpConfig, writeCdpConfig, type CdpConfig } from './cdpManager'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
@@ -504,15 +511,109 @@ export async function getSettings(): Promise<AppSettings> {
 
 // 代理定时巡检调度器
 let proxyCheckTimer: ReturnType<typeof setInterval> | null = null
+/** 连续失败计数（代理 id → 连续失败轮数）。进程内维护即可：重启后从 0 开始，
+ *  意味着重启不会误触发自愈（宁可晚一点动手，也不要刚启动就批量换 IP）。 */
+const proxyFailureCounts: FailureCounts = new Map()
+
+/**
+ * 系统级操作日志（定时任务触发，无登录态）。
+ * `writeLog` 需要完整的 AuthedRequest，而自愈是调度器主动执行的、没有请求上下文，
+ * 因此单独走这个入口，操作人固定记为 `system`。
+ */
+async function writeSystemLog(teamId: number, action: string, detail: string): Promise<void> {
+  const repo = AppDataSource.getRepository(OperationLogEntity)
+  await repo.save(
+    repo.create({
+      teamId,
+      userId: 0,
+      username: 'system',
+      action,
+      detail,
+      sensitive: isSensitiveAction(action)
+    })
+  )
+  dispatchWebhook(action, { teamId, actor: null, detail })
+}
+
+/** 把实体转成纯函数判定用的最小结构 */
+function toProxyLike(p: ProxyEntity): ProxyLike {
+  return {
+    id: p.id,
+    teamId: p.teamId,
+    type: p.type,
+    host: p.host,
+    port: p.port,
+    country: p.country,
+    region: p.region,
+    status: p.status,
+    exitIp: p.exitIp,
+    expiresAt: p.expiresAt ?? null
+  }
+}
+
+function toProfileLike(p: ProfileEntity): ProfileLike {
+  return { id: p.id, teamId: p.teamId, name: p.name, proxyId: p.proxyId, status: p.status }
+}
+
+/**
+ * 代理故障自愈：巡检发现代理失效后，把绑定的环境换绑到其他可用代理。
+ *
+ * 判定逻辑全在 `shared/proxyHeal.ts` 纯函数里（可离线单测），此处只负责
+ * 查库、落库、告警。三条安全约束（不共用出口 IP / 不换到同 IP / 连续失败
+ * 阈值）都在纯函数侧强制，实现细节见该文件注释。
+ */
+async function healProxies(failedProxies: ProxyEntity[], settings: AppSettings): Promise<void> {
+  if (!settings.proxyHealEnabled) return
+  if (failedProxies.length === 0) return
+  const threshold = Math.max(1, Number(settings.proxyHealThreshold) || 2)
+
+  const proxyRepo = AppDataSource.getRepository(ProxyEntity)
+  const profileRepo = AppDataSource.getRepository(ProfileEntity)
+  const allProxies = (await proxyRepo.find()).map(toProxyLike)
+  const allProfiles = (await profileRepo.find({ where: { isTemplate: false } })).map(toProfileLike)
+
+  const decisions = planProxyHealing(
+    failedProxies.map(toProxyLike),
+    allProfiles,
+    allProxies,
+    proxyFailureCounts,
+    { threshold }
+  )
+  if (decisions.length === 0) return
+
+  for (const d of decisions) {
+    // webhook 由 writeSystemLog 内部统一触发，此处不再重复 dispatch
+    const badProxy = failedProxies.find((p) => p.id === d.fromProxyId)
+    if (d.toProxyId === null) {
+      // 找不到合规替代：只告警不换绑。这里的 reason 会明确写出「池中 IP 已被占用」，
+      // 用户据此判断是补代理还是手动指定
+      const detail = `代理「${d.fromProxyName}」失效影响环境「${d.profileName}」，未能自动换绑：${d.reason}`
+      console.warn(`[roxy] ${detail}`)
+      await writeSystemLog(badProxy?.teamId ?? 0, 'proxy_heal_failed', detail)
+      continue
+    }
+
+    const target = await profileRepo.findOne({ where: { id: d.profileId } })
+    if (!target) continue
+    target.proxyId = d.toProxyId
+    await profileRepo.save(target)
+    const detail = `代理「${d.fromProxyName}」失效，环境「${d.profileName}」已自动换绑到「${d.toProxyName}」（${d.reason}）`
+    console.log(`[roxy] ${detail}`)
+    await writeSystemLog(target.teamId, 'proxy_heal', detail)
+  }
+}
+
 async function runProxyCheckAll(): Promise<void> {
   const repo = AppDataSource.getRepository(ProxyEntity)
   const list = await repo.find()
   if (list.length === 0) return
   const settings = await getSettings()
   const timeout = (settings.proxyCheckTimeout as number) * 1000
+  const failed: ProxyEntity[] = []
   for (const p of list) {
     try {
       const result = await checkProxy(p, timeout)
+      bumpFailureCount(proxyFailureCounts, p.id, result.ok)
       p.status = result.ok ? 'active' : 'invalid'
       p.latency = result.ok ? result.latency : null
       p.country = result.country
@@ -523,11 +624,22 @@ async function runProxyCheckAll(): Promise<void> {
       p.anonymity = result.anonymity
       p.lastCheckAt = new Date()
       await repo.save(p)
+      if (!result.ok) failed.push(p)
     } catch (e) {
       console.error(`[roxy] 巡检代理 #${p.id} 失败:`, (e as Error).message)
+      // 检测本身抛错（超时 / 解析失败）也算一轮失败，否则网络异常会导致自愈永不触发
+      bumpFailureCount(proxyFailureCounts, p.id, false)
+      failed.push(p)
     }
   }
-  console.log(`[roxy] 定时巡检完成，共检测 ${list.length} 个代理`)
+  console.log(`[roxy] 定时巡检完成，共检测 ${list.length} 个代理，失效 ${failed.length} 个`)
+
+  try {
+    await healProxies(failed, settings)
+  } catch (e) {
+    // 自愈失败绝不能让巡检整体中断：巡检本身已把 status 落库了
+    console.error('[roxy] 代理故障自愈异常:', (e as Error).message)
+  }
 }
 
 async function startProxyCheckScheduler(): Promise<void> {
