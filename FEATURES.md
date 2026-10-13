@@ -72,37 +72,6 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 
 > 与 `POST /api/profiles/:id/duplicate`（单个复制、**指纹原样**）的区别就在微抖动：批量开号用本接口，单环境资料迁移用前者。
 
-### 1.2.1 环境数据分区清理（彻底删除 + 不删环境也能清）
-
-指纹浏览器的环境不是「一条数据库记录」——每个环境还有一个 Chromium 持久化分区
-`userData/Partitions/env-<id>/`，里面装着 localStorage、IndexedDB、Service Worker 缓存。
-
-**为什么这是必须处理的（根因不是磁盘增长，是串号）**：删掉环境后，数据库记录没了，
-但 Chromium 自己写的本地存储还在盘上。数据库 id 是自增复用的，**新环境拿到这个 id 时，
-会直接继承上一个环境的站点登录态**——表现是「明明是新开的号，却已经登着某个站点」。
-这是指纹浏览器最不能容忍的一类串号。
-
-- **随彻底删除自动执行**：两步清理——`session.clearStorageData()` + `clearCache()`，
-  再删分区目录（`rm -rf` 带 `maxRetries: 3` 重试，应对 Windows 上文件被占）。
-- **手动入口**：`POST /api/profiles/:id/clear-partition`，环境列表操作列「清理浏览器数据」按钮。
-  真实磁盘压力往往来自**还在用**的环境（跑一周的账号环境缓存能到几百 MB），
-  用户不会为了清缓存去删环境，所以必须有不丢环境的回收手段。
-- **清理失败不阻断删除**：记录已经没了，此时把用户卡在报错里毫无意义。
-  但结果如实写进审计日志与响应字段 `partitionCleared`，绝不静默吞掉。
-- **运行中的环境硬拦**：窗口正在跑时清分区会让正在使用的页面状态错乱，直接拒绝。
-- 判定逻辑抽到 `shared/envPartition.ts`（纯函数、零 Node 依赖、可离线单测）。
-
-### 1.2.2 回收站批量操作（勾选恢复 / 彻底删除）
-
-环境列表的回收站支持勾选后批量恢复或批量彻底删除。
-
-- **接口**：`POST /api/profiles/batch-restore`、`POST /api/profiles/batch-purge`，
-  body `{ ids: number[] }` → `{ ok, restored|purged, partitionCleared, rejected: [{ id, name, reason }] }`。
-- **逐条独立判定**（`shared/trashBatch.ts` 纯函数）：一条失败不影响其余，
-  但**拒绝原因必须如实回报**——否则用户以为全删了，实际有几个还在。
-- 上限 200 个/次（一次删太多会长时间持锁，且多半是误操作）。
-- 归属校验走 `ownerScope`：批量是批量越权的高发路径，绝不能只信前端传来的 id。
-
 ### 1.3 全空间快照（团队整体打包 / 迁移）
 
 把整个团队空间打包成单个 JSON 一键备份 / 迁移，解决「换机器 / 重装 / 整机迁移」时逐模块导出的繁琐与易漏。
@@ -135,6 +104,37 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 ```
 
 > 扩展实际文件（`.crx` / 目录）不进快照（无法序列化），仅记录名称用于还原时按名重映射；如有同名扩展则自动挂回，否则忽略该引用。
+
+### 1.5 环境数据分区清理（彻底删除 + 不删环境也能清）
+
+指纹浏览器的环境不是「一条数据库记录」——每个环境还有一个 Chromium 持久化分区
+`userData/Partitions/env-<id>/`，里面装着 localStorage、IndexedDB、Service Worker 缓存。
+
+**为什么这是必须处理的（根因不是磁盘增长，是串号）**：删掉环境后，数据库记录没了，
+但 Chromium 自己写的本地存储还在盘上。数据库 id 是自增复用的，**新环境拿到这个 id 时，
+会直接继承上一个环境的站点登录态**——表现是「明明是新开的号，却已经登着某个站点」。
+这是指纹浏览器最不能容忍的一类串号。
+
+- **随彻底删除自动执行**：两步清理——`session.clearStorageData()` + `clearCache()`，
+  再删分区目录（`rm -rf` 带 `maxRetries: 3` 重试，应对 Windows 上文件被占）。
+- **手动入口**：`POST /api/profiles/:id/clear-partition`，环境列表操作列「清理浏览器数据」按钮。
+  真实磁盘压力往往来自**还在用**的环境（跑一周的账号环境缓存能到几百 MB），
+  用户不会为了清缓存去删环境，所以必须有不丢环境的回收手段。
+- **清理失败不阻断删除**：记录已经没了，此时把用户卡在报错里毫无意义。
+  但结果如实写进审计日志与响应字段 `partitionCleared`，绝不静默吞掉。
+- **运行中的环境硬拦**：窗口正在跑时清分区会让正在使用的页面状态错乱，直接拒绝。
+- 判定逻辑抽到 `shared/envPartition.ts`（纯函数、零 Node 依赖、可离线单测）。
+
+### 1.6 回收站批量操作（勾选恢复 / 彻底删除）
+
+环境列表的回收站支持勾选后批量恢复或批量彻底删除。
+
+- **接口**：`POST /api/profiles/batch-restore`、`POST /api/profiles/batch-purge`，
+  body `{ ids: number[] }` → `{ ok, restored|purged, partitionCleared, rejected: [{ id, name, reason }] }`。
+- **逐条独立判定**（`shared/trashBatch.ts` 纯函数）：一条失败不影响其余，
+  但**拒绝原因必须如实回报**——否则用户以为全删了，实际有几个还在。
+- 上限 200 个/次（一次删太多会长时间持锁，且多半是误操作）。
+- 归属校验走 `ownerScope`：批量是批量越权的高发路径，绝不能只信前端传来的 id。
 
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
@@ -981,7 +981,7 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 | `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* | 确认条 |
 | `destructive` | `deleteEnv` / `batchDeleteEnvs`* / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
 
-`*` = 批量动作，参数是 `profileIds: number[]` 而非单个 id。详见 [§14.2](#142-批量动作collect-编排)。
+`*` = 批量动作，参数是 `profileIds: number[]` 而非单个 id。详见 [§14.1 多步编排](#141-多步编排与技能库planner-进阶) 的「批量动作（collect fan-in）」小节。
 
 **分级的判据不是「看起来严不严重」，而是出错后的可恢复性**：可逆的（改名、绑代理、创建，软删除可回收）
 一律 medium；没有逐条撤销路径的（批量写、改归属）才 destructive。
