@@ -136,9 +136,16 @@ export function expiryAlertText(kind: '代理' | '环境', alerts: ExpiryAlert[]
     parts.push(`已过期 ${expired.length} 个（${expired.map((a) => a.name).join('、')}）`)
   }
   if (expiring.length) {
-    const names = expiring.slice(0, 5).map((a) => a.name)
+    // 天数取「本批里最短的剩余天数」而不是条数——条数该用「个」，
+    // 写成 `${expiring.length} 天内` 会让「1 个代理」显示成「1 天内将到期 1 个」，
+    // 读起来像只剩 1 天，与它实际还剩 3 天 / 5 天完全不符。
+    const soonest = Math.min(...expiring.map((a) => a.daysLeft))
+    const dayText = soonest <= 0 ? '今天' : `${soonest} 天`
+    // 前缀已经写了「N 天内」，每项再重复天数就成了「临期3天（3 天）」这种废话；
+    // 但**最短的那条**值得单独标注——用户需要知道具体是谁最紧急。
+    const names = expiring.slice(0, 5).map((a) => (a.daysLeft === soonest ? `${a.name}（最紧急）` : a.name))
     const more = expiring.length > 5 ? ` 等 ${expiring.length} 个` : ''
-    parts.push(`${expiring.length} 天内将到期 ${expiring.length} 个（${names.join('、')}${more}）`)
+    parts.push(`${dayText}内将到期 ${expiring.length} 个（${names.join('、')}${more}）`)
   }
   return `${kind}到期预警：${parts.join('；')}`
 }

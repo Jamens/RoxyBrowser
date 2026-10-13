@@ -481,6 +481,12 @@ export interface AppSettings {
   proxyCheckTimeout: number
   // 代理定时巡检间隔（分钟），0 表示关闭
   proxyCheckInterval: number
+  // 到期预警扫描间隔（小时），0 表示关闭。
+  // 与 proxyCheckInterval 分开：巡检关心「能不能用」，预警关心「还能用多久」，
+  // 两者的时间尺度与关注点都不同，绑在一起会导致用户没法只调其中一个。
+  expiryAlertIntervalH: number
+  // 到期预警提前天数：剩余天数 ≤ 该值即进本期预警
+  expiryAlertDays: number
   // 代理故障自愈：巡检发现代理失效后自动把绑定的环境换绑到其他可用代理
   proxyHealEnabled: boolean
   // 触发自愈所需的连续失败轮数（阈值太低会因网络抖动导致环境 IP 反复跳变，
@@ -555,6 +561,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   searchEngine: 'bing',
   proxyCheckTimeout: 10,
   proxyCheckInterval: 30,
+  // 24 小时扫一次是刻意选的：到期是「按天」语义的用户心智，
+  // 扫太频繁只会让同一条预警反复触发；配合 warned 去重表，同一条最多报一次。
+  expiryAlertIntervalH: 24,
+  expiryAlertDays: 7,
   proxyHealEnabled: false,
   proxyHealThreshold: 2,
   logRetentionDays: 90,

@@ -30,7 +30,7 @@ import {
 import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import mysql from 'mysql2/promise'
-import { DataSource } from 'typeorm'
+import { DataSource, IsNull } from 'typeorm'
 import type { AddressInfo } from 'net'
 import { app } from 'electron'
 
@@ -53,6 +53,7 @@ import {
   AssistantSkillEntity
 } from './entities'
 import { getEnvExpiresAt } from '../shared/envExpiry'
+import { scanExpiring, expiryAlertText, expiryWarnKey } from '../shared/expiryAlert'
 import { substituteSteps } from '../shared/rpa'
 import type { AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
 import { DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
@@ -733,6 +734,103 @@ async function startProxyCheckScheduler(): Promise<void> {
   console.log(`[roxy] 代理定时巡检已启动，间隔 ${interval} 分钟`)
 }
 
+// ===== 到期预警调度器（代理 + 环境，从「用户主动问」变成「系统主动告知」）=====
+// 现状：助手能查出「3 天内到期」，列表页也有到期提示，但都要求用户**自己想起来去问**。
+// 接入定时扫描后，代理 / 环境临期或过期会主动写日志 + 推 webhook。
+//
+// 判定逻辑全在 shared/expiryAlert.ts（纯函数、已离线单测 22 项），本文件只负责取数与投递。
+//
+// **去重表只在内存里**：应用重启后清空，同一条预警在重启后会再报一次。这是刻意的取舍——
+// 落库要新增字段或复用 revokedDevices 那类结构，为「别重复报一次」把持久化搞复杂不划算。
+// 真要严格去重，正确做法是让 scanExpiring 支持传入历史表（它已经支持可选的 warned 参数）。
+let expiryWarned = new Map<string, string>()
+let expiryAlertTimer: NodeJS.Timeout | null = null
+
+/** 跑一轮到期扫描，返回本轮产出的告警条数（供启动时打日志 / 测试用） */
+async function runExpiryAlertScan(): Promise<number> {
+  const settings = await getSettings()
+  const threshold = Number(settings.expiryAlertDays) || 7
+  const now = new Date()
+
+  // 代理：expiresAt 是真实数据库列，直接查即可
+  const proxies = await AppDataSource.getRepository(ProxyEntity).find()
+  const proxyAlerts = scanExpiring({
+    items: proxies.map((p) => ({
+      id: p.id,
+      teamId: p.teamId,
+      name: p.name,
+      expiresAt: p.expiresAt ?? null
+    })),
+    thresholdDays: threshold,
+    now,
+    warned: expiryWarned
+  })
+
+  // 环境：到期时间藏在 fingerprint.expiresAt（项目规则 #24 不新增数据库列），
+  // 无法用 where 直接筛，必须全量取回在内存里判——环境数量在本地场景下可控（数百个）。
+  const profiles = await AppDataSource.getRepository(ProfileEntity).find({
+    where: { isTemplate: false, deletedAt: IsNull() }
+  })
+  const envAlerts = scanExpiring({
+    items: profiles.map((p) => ({
+      id: p.id,
+      teamId: p.teamId,
+      name: p.name,
+      expiresAt: getEnvExpiresAt(p.fingerprint)
+    })),
+    thresholdDays: threshold,
+    now,
+    warned: expiryWarned
+  })
+
+  let count = 0
+  // 按 teamId 分组投递：同一团队只推一条消息，而不是每条代理推一次把用户的机器人刷爆
+  for (const [kind, list] of [
+    ['代理', proxyAlerts],
+    ['环境', envAlerts]
+  ] as Array<['代理' | '环境', typeof proxyAlerts]>) {
+    if (!list.length) continue
+    const byTeam = new Map<number, typeof list>()
+    for (const a of list) {
+      const arr = byTeam.get(a.teamId) || []
+      arr.push(a)
+      byTeam.set(a.teamId, arr)
+    }
+    for (const [teamId, items] of byTeam) {
+      const text = expiryAlertText(kind, items)
+      // writeSystemLog 内部已 dispatch webhook，此处不重复发
+      await writeSystemLog(teamId, 'expiry_alert', text)
+      count += items.length
+      // 投递完才记入去重表：投递失败时下一轮还会再报，避免漏报
+      for (const a of items) expiryWarned.set(expiryWarnKey(a.id, a.expiresAt), a.expiresAt)
+    }
+  }
+  if (count > 0) {
+    console.log(`[roxy] 到期预警：代理 ${proxyAlerts.length} 条、环境 ${envAlerts.length} 条（阈值 ${threshold} 天）`)
+  }
+  return count
+}
+
+async function startExpiryAlertScheduler(): Promise<void> {
+  if (expiryAlertTimer) {
+    clearInterval(expiryAlertTimer)
+    expiryAlertTimer = null
+  }
+  const settings = await getSettings()
+  const intervalH = settings.expiryAlertIntervalH as number
+  if (!intervalH || intervalH <= 0) {
+    console.log('[roxy] 到期预警未启用（间隔为 0）')
+    return
+  }
+  expiryAlertTimer = setInterval(() => {
+    runExpiryAlertScan().catch((e) => console.error('[roxy] 到期预警扫描异常:', e))
+  }, intervalH * 3600 * 1000)
+  expiryAlertTimer.unref?.()
+  console.log(`[roxy] 到期预警已启动，间隔 ${intervalH} 小时，阈值 ${settings.expiryAlertDays} 天`)
+  // 启动时先扫一次：用户重启应用就该看到当前状态，而不是等一个完整间隔后才看到
+  runExpiryAlertScan().catch((e) => console.error('[roxy] 启动时到期预警扫描失败:', e))
+}
+
 // ===== RPA 定时执行调度器（对标「定时任务到点自动开工」）=====
 // 每 30s 扫一次开启了定时的脚本；到点且目标环境处于运行态才执行。
 // 环境未运行 → 跳过本轮（写日志），绝不自动开窗——自动拉起窗口会绕过
@@ -1062,6 +1160,8 @@ function buildApiRouter(): express.Router {
       void refreshRateLimitConfig()
       // 保留期变了，归档范围随之改变——重启调度器让新的保留期尽快生效
       void startLogArchiveScheduler()
+      // 预警间隔 / 阈值变了同样要重启，否则用户改了设置要等旧间隔跑完才生效
+      void startExpiryAlertScheduler()
     },
     defaultSettings: DEFAULT_SETTINGS,
     normalizeSearchEngine
@@ -1307,6 +1407,7 @@ export async function bootstrap(): Promise<string> {
   startSnapshotBackupScheduler().catch((e) => console.error('[roxy] 启动快照备份调度失败:', e))
   // 8. 启动操作日志归档调度（把过期整月搬到归档区，不删除数据）
   startLogArchiveScheduler().catch((e) => console.error('[roxy] 启动日志归档调度失败:', e))
+  startExpiryAlertScheduler().catch((e) => console.error('[roxy] 启动到期预警调度失败:', e))
 
   return apiBase
 }

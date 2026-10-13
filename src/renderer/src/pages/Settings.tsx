@@ -597,6 +597,35 @@ export default function Settings() {
           description={t('proxyHeal.rules')}
         />
 
+        <Divider>{t('expiryAlert.section')}</Divider>
+
+        {/* 到期预警：与巡检配套。默认开启（每天一次 / 提前 7 天）——
+            代理与环境到期是「用户看不见但会突然失效」的事，属于典型的应该主动告知，
+            与「自动改环境 IP」这类用户不可见的重大变更性质不同，故不默认关闭。 */}
+        <Form.Item
+          name="expiryAlertIntervalH"
+          label={t('expiryAlert.interval')}
+          rules={[{ required: true }]}
+          extra={t('expiryAlert.intervalExtra')}
+        >
+          <InputNumber min={0} max={720} addonAfter={t('expiryAlert.hours')} style={{ width: 160 }} />
+        </Form.Item>
+        <Form.Item
+          name="expiryAlertDays"
+          label={t('expiryAlert.days')}
+          rules={[{ required: true }]}
+          extra={t('expiryAlert.daysExtra')}
+        >
+          <InputNumber min={1} max={90} addonAfter={t('expiryAlert.daysUnit')} style={{ width: 160 }} />
+        </Form.Item>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={t('expiryAlert.rulesTitle')}
+          description={t('expiryAlert.rules')}
+        />
+
         <Divider>{t('settings.sectionLog')}</Divider>
         <Form.Item
           name="logRetentionDays"

@@ -170,6 +170,29 @@ t('expiryAlertText：空列表返回空串（不产生「代理到期预警：�
   assert.strictEqual(expiryAlertText('代理', []), '')
 })
 
+t('expiryAlertText：天数写的是真实剩余天数，不是条数', () => {
+  // 回归用例：曾把 ${expiring.length} 误用作「天数」，导致
+  // 「1 个代理还剩 3 天」被写成「1 天内将到期 1 个」，读起来像只剩 1 天
+  const r = scanExpiring({ items: [item(1, 3)], thresholdDays: 7, now: NOW })
+  const txt = expiryAlertText('代理', r)
+  assert.ok(txt.includes('3 天'), `应含「3 天」：${txt}`)
+  assert.ok(!txt.includes('1 天内'), `不该把条数当天数：${txt}`)
+})
+
+t('expiryAlertText：多个临期时天数取最短的那条', () => {
+  const r = scanExpiring({ items: [item(1, 5), item(2, 2)], thresholdDays: 7, now: NOW })
+  const txt = expiryAlertText('代理', r)
+  assert.ok(txt.includes('2 天'), `应含最短的 2 天：${txt}`)
+  assert.ok(txt.includes('X2（最紧急）'), txt)  // 最短的那条标注为最紧急
+})
+
+t('expiryAlertText：当天到期的写「今天」而不是「0 天」', () => {
+  const r = scanExpiring({ items: [item(1, 0)], thresholdDays: 7, now: NOW })
+  const txt = expiryAlertText('代理', r)
+  assert.ok(txt.includes('今天'), txt)
+  assert.ok(!txt.includes('0 天'), txt)
+})
+
 t('expiryAlertText：超过 5 个时截断名称并给总数（避免日志刷屏）', () => {
   const items = Array.from({ length: 9 }, (_, i) => item(i + 1, 2))
   const r = scanExpiring({ items, thresholdDays: 7, now: NOW })
