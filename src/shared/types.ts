@@ -1,5 +1,6 @@
 // 共享类型定义（主进程 / 渲染进程共用）
 import type { LocaleCode } from './locales'
+import { DEFAULT_MAX_CONCURRENT_WINDOWS } from './windowLimit'
 
 export type OSKind = 'windows' | 'mac' | 'android' | 'ios'
 export type WebRTCMode = 'disable' | 'real' | 'proxy'
@@ -489,6 +490,11 @@ export interface AppSettings {
   logRetentionDays: number
   // 接口限流：窗口内每客户端最多请求数；0 = 关闭
   rateLimitPerMin: number
+  /**
+   * 同时打开的环境窗口数上限；<= 0 表示不限制。
+   * 存在的原因：实测开到第 3 个环境窗口时有概率整个应用退出（崩的是主进程）。
+   */
+  maxConcurrentWindows: number
   // 登录失败锁定：连续失败多少次锁定该账号；0 = 不锁定（仍记录失败次数）
   loginLockoutThreshold: number
   // 登录锁定时长（分钟）
@@ -559,6 +565,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 360 留足余量；本项目跑在本地、只有回环流量，这个量级不会削弱限流的防护意义
   // （登录爆破另有按用户名计数的锁定，见 routes/auth.ts）。
   rateLimitPerMin: 360,
+  // 同时打开的环境窗口数上限。实测开到第 3 个时有概率整个应用退出
+  // （崩的是主进程——主进程常驻 390MB、单窗口渲染/GPU 另占 180~400MB）。
+  // 取 3 是「宁可稍早提醒，也不等系统崩掉」；设为 0 表示不限制。
+  maxConcurrentWindows: DEFAULT_MAX_CONCURRENT_WINDOWS,
   loginLockoutThreshold: 5,
   loginLockoutMinutes: 15,
   networkMode: 'system',

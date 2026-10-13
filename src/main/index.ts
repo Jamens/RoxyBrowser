@@ -280,6 +280,48 @@ if (!gotLock) {
     console.log('[roxy] 主窗口已关闭，程序驻留托盘，本地 API 继续提供服务')
   })
 
+  // ===== 崩溃兜底 =====
+  // 观察到的现象：开到第 3 个环境窗口时**有概率整个应用退出**（不只是那个窗口消失）。
+  // 说明崩的是主进程本身。Node 层未捕获异常 / V8 fatal error 若不接住，
+  // Electron 默认直接结束进程——用户表现为「应用莫名闪退，所有窗口一起没了」，
+  // 且现场无任何提示，排查时只能靠猜。
+  //
+  // 这里不试图「恢复」（崩溃后进程状态不可信，继续跑可能写坏数据），
+  // 但至少做到三件事，让问题**可诊断**：
+  //   1. 把崩溃原因落到日志/通知，用户下次能报出具体信息而不是「闪退了」
+  //   2. 记下崩溃前的窗口数，便于判断是否与资源累积相关
+  //   3. 明确告知这是崩溃而非正常退出，避免误以为是自己的操作导致
+  const crashInfo = (kind: string, detail: string) => {
+    let windowCount = 0
+    try {
+      windowCount = BrowserWindow.getAllWindows().length
+    } catch {
+      /* ignore */
+    }
+    console.error(`[roxy] 主进程${kind}！窗口数=${windowCount} 原因=${detail}`)
+    try {
+      const { dialog } = require('electron') as typeof import('electron')
+      if (!app.isReady()) return
+      dialog.showErrorBox(
+        `RoxyBrowser Clone ${kind}`,
+        `主进程${kind}，应用将退出。\n\n崩溃时的窗口数：${windowCount}\n原因：${detail}\n\n` +
+          `若经常在打开多个环境窗口时发生，可能是资源不足——` +
+          `可尝试减少同时打开的环境数，或重启应用。`
+      )
+    } catch {
+      /* ignore */
+    }
+  }
+
+  process.on('uncaughtException', (err: Error) => {
+    crashInfo('发生未捕获异常', err.message)
+    isQuiting = true
+    app.quit()
+  })
+  process.on('unhandledRejection', (reason: unknown) => {
+    crashInfo('发生未处理的 Promise 拒绝', String(reason))
+  })
+
   app.on('before-quit', () => {
     isQuiting = true
   })

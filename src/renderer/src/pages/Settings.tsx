@@ -608,6 +608,15 @@ export default function Settings() {
         </Form.Item>
         <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('settings.logRetentionNote')} />
 
+        <Form.Item
+          name="maxConcurrentWindows"
+          label={t('settings.maxConcurrentWindows')}
+          rules={[{ required: true }]}
+          extra={t('settings.maxConcurrentWindowsExtra')}
+        >
+          <InputNumber min={0} max={50} addonAfter={t('settings.windowUnit')} style={{ width: 170 }} />
+        </Form.Item>
+
         <Divider>{t('security.section')}</Divider>
         <Typography.Paragraph type="secondary">{t('security.desc')}</Typography.Paragraph>
         <Space size="large" style={{ display: 'flex' }}>

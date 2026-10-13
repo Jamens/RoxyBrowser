@@ -166,6 +166,9 @@ const zhCN = {
   'settings.logRetention': '操作日志保留天数',
   'settings.logRetentionExtra': '超过这个天数的日志会按自然月整月搬入「归档区」，数据不会删除，可在操作日志页查看与撤销',
   'settings.logRetentionNote': '归档不是删除：过期日志会搬到 operation_log_archives 表，可按月份/批次检索，每批都能一键退回热区。默认每天凌晨 3:10 自动执行一次。',
+  'settings.maxConcurrentWindows': '同时打开环境数上限',
+  'settings.maxConcurrentWindowsExtra': '每个环境窗口独立占用一份内存（实测单窗口 200~400MB），开太多会导致应用崩溃。填 0 表示不限制。',
+  'settings.windowUnit': '个',
 
   'settings.sectionNetwork': '网络',
   'settings.networkMode': '网络连接方式',
@@ -647,6 +650,9 @@ const enUS: MessageDict = {
   'settings.logRetention': 'Activity log retention',
   'settings.logRetentionExtra': 'Logs older than this are moved whole-month into the archive — nothing is deleted; view and undo them on the Logs page',
   'settings.logRetentionNote': 'Archiving is not deletion: expired logs move to the operation_log_archives table and stay searchable by month/batch, with one-click restore per batch. Runs automatically at 3:10 AM daily.',
+  'settings.maxConcurrentWindows': 'Max simultaneous environments',
+  'settings.maxConcurrentWindowsExtra': 'Each environment window uses its own memory (measured 200–400 MB each); opening too many crashes the app. Set 0 for no limit.',
+  'settings.windowUnit': 'windows',
 
   'settings.sectionNetwork': 'Network',
   'settings.networkMode': 'Connection method',
@@ -1124,6 +1130,9 @@ const jaJP: MessageDict = {
   'settings.logRetention': '操作ログの保持日数',
   'settings.logRetentionExtra': 'この日数を超えたログは自然月単位でアーカイブへ移動されます（削除はされません）。操作ログ画面で確認・取り消しできます',
   'settings.logRetentionNote': 'アーカイブは削除ではありません：期限切れログは operation_log_archives テーブルへ移動され、月／バッチ単位で検索でき、批次ごとにワンクリックで戻せます。既定では毎日 3:10 に自動実行されます。',
+  'settings.maxConcurrentWindows': '同時に開く環境数の上限',
+  'settings.maxConcurrentWindowsExtra': '各環境ウィンドウはそれぞれメモリを消費します（実測 1 つあたり 200〜400MB）。開きすぎるとアプリが強制終了します。0 で上限なし。',
+  'settings.windowUnit': '個',
 
   'settings.sectionNetwork': 'ネットワーク',
   'settings.networkMode': '接続方式',
@@ -1600,6 +1609,9 @@ const deDE: MessageDict = {
   'settings.logRetention': 'Aufbewahrung des Aktivitätsprotokolls',
   'settings.logRetentionExtra': 'Logs älter als diese Zahl werden als Ganzer Monat ins Archiv verschoben – nichts wird gelöscht; auf der Log-Seite einsehbar und rückgängig machbar',
   'settings.logRetentionNote': 'Archivieren ist nicht Löschen: abgelaufene Logs wandern in die Tabelle operation_log_archives, bleiben nach Monat/Batch durchsuchbar und lassen sich pro Batch mit einem Klick zurückspielen. Standardmäßig täglich um 3:10 Uhr.',
+  'settings.maxConcurrentWindows': 'Max. gleichzeitige Umgebungen',
+  'settings.maxConcurrentWindowsExtra': 'Jedes Umgebungsfenster benötigt eigenen Speicher (gemessen 200–400 MB); zu viele führen zum Absturz der App. 0 = unbegrenzt.',
+  'settings.windowUnit': 'Fenster',
 
   'settings.sectionNetwork': 'Netzwerk',
   'settings.networkMode': 'Verbindungsart',

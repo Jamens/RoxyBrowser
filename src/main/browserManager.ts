@@ -8,6 +8,7 @@ import type { FingerprintProbe } from '../shared/healthcheck'
 import { isTrackerRequest } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
 import { isAbnormalExit, formatCrashLog } from '../shared/crashReason'
+import { canOpenWindow, DEFAULT_MAX_CONCURRENT_WINDOWS } from '../shared/windowLimit'
 import { getScanSite, runSiteScan, type ScanResult } from './fingerprintScan'
 
 // 把持久化的 Cookie 写入某个 session（环境打开时调用，或「立即应用」时调用）
@@ -256,6 +257,24 @@ function attachCrashGuards(win: BrowserWindow, profileId: number, envName: strin
   })
 }
 
+export /**
+ * 读取「同时打开环境数上限」；读不到时用默认 3。
+ *
+ * 实测 3 个即有崩溃风险，故默认取 3 而不是更大——上限的意义是提前拦住，
+ * 放得太宽等于没设。用户可到设置里调整，调到 0 表示不限制。
+ */
+async function resolveMaxWindows(): Promise<number> {
+  try {
+    const { getSettings } = await import('./server')
+    const settings = await getSettings()
+    const v = (settings as { maxConcurrentWindows?: number }).maxConcurrentWindows
+    return typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_MAX_CONCURRENT_WINDOWS
+  } catch (e) {
+    console.warn('[roxy] 读取环境窗口上限失败，回落默认值:', (e as Error).message)
+    return DEFAULT_MAX_CONCURRENT_WINDOWS
+  }
+}
+
 export async function openWindow(profileId: number): Promise<void> {
   // 已存在窗口则聚焦。**必须同时校验 isDestroyed()**：
 // 渲染进程崩溃时窗口壳可能仍留在 Map 里（closed 未触发），此时 focus()
@@ -273,6 +292,17 @@ export async function openWindow(profileId: number): Promise<void> {
     // 否则下面 openWindow 返回后用户点「打开」仍会被 running 拦下
     await markClosed(profileId)
   }
+
+  // 并发上限：实测开到第 3 个环境窗口时**有概率整个应用退出**（崩的是主进程）。
+  // 主进程常驻 390MB、单环境窗口的渲染/GPU 进程 180~400MB，资源累积到临界点就崩。
+  // 与其等系统崩掉（用户什么都做不了），不如提前拦住并说清怎么��。
+  const limit = await resolveMaxWindows()
+  const gate = canOpenWindow(getRunningWindowIds().length, limit)
+  if (!gate.ok) {
+    console.warn(`[roxy] 拒绝打开环境「${existing?.id ?? profileId}」：${gate.reason.split('\n')[0]}`)
+    throw new Error(gate.reason)
+  }
+
   const repo = AppDataSource.getRepository(ProfileEntity)
   const profile = await repo.findOne({ where: { id: profileId } })
   if (!profile) throw new Error('环境不存在')
