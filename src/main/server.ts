@@ -8,10 +8,8 @@ import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, sta
 import { join, sep } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import { getJwtSecret } from './jwtSecret'
 import { lazySecretCrypto } from './secretKey'
-import { clampPort } from '../shared/cdp'
 import {
   checkSession,
   nextSessionVersion,
@@ -26,8 +24,8 @@ import {
   type ProfileLike,
   type ProxyLike
 } from '../shared/proxyHeal'
-import { getCdpInfo, readCdpConfig, writeCdpConfig, type CdpConfig } from './cdpManager'
-import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
+import { getCdpInfo } from './cdpManager'
+import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
 import { DataSource, In, IsNull } from 'typeorm'
@@ -58,8 +56,6 @@ import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normaliz
 import { getEnvExpiresAt } from '../shared/envExpiry'
 import { substituteSteps } from '../shared/rpa'
 import { MARKET_SCRIPTS } from './rpaMarket'
-import { normalizeCountry } from '../shared/countries'
-import { normalizeLocale } from '../shared/locales'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig, SmtpSettings } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
@@ -87,6 +83,8 @@ import { SCAN_SITES, getScanSite, type ScanResult } from './fingerprintScan'
 import { registerLogRoutes } from './routes/logs'
 import { registerCookieRoutes } from './routes/cookies'
 import { registerV1CookieRoutes } from './routes/v1Cookie'
+import { registerAuthRoutes } from './routes/auth'
+import { registerSettingsRoutes } from './routes/settings'
 import { isAdminRole, ownerScope, ownerAndWhere, type AuthedRequest } from './authScope'
 // browserManager 与 server 存在循环依赖（browserManager 静态引用 server 的 AppDataSource）。
 // 经核查：AppDataSource 为 `export let` 运行时赋值，且 browserManager 仅在函数体内使用，
@@ -1115,222 +1113,18 @@ function aiAgentDispatch(question: string): 'chat' | 'support' {
 function buildApiRouter(): express.Router {
   const router = express.Router()
 
-  // ===== 认证 =====
-  router.post('/auth/register', async (req: Request, res: Response) => {
-    const { username, password, nickname, teamName } = req.body || {}
-    if (!username || !password) return res.status(400).json({ message: '用户名和密码不能为空' })
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const exists = await userRepo.findOne({ where: { username } })
-    if (exists) return res.status(400).json({ message: '用户名已存在' })
-    const user = await userRepo.save(
-      userRepo.create({ username, passwordHash: await bcrypt.hash(password, 10), nickname: nickname || username })
-    )
-    // 每个注册用户创建自己的团队空间
-    const teamRepo = AppDataSource.getRepository(TeamEntity)
-    const team = await teamRepo.save(teamRepo.create({ name: teamName || `${username} 的团队` }))
-    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
-    await memberRepo.save(memberRepo.create({ teamId: team.id, userId: user.id, role: 'owner' }))
-    // 默认分组
-    const groupRepo = AppDataSource.getRepository(GroupEntity)
-    await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
-    const token = signSessionToken(sessionOf(user, team.id, 'owner'))
-    res.json({ token, user: { id: user.id, username, nickname: user.nickname, role: 'owner' } })
-  })
-
-  router.post('/auth/login', async (req: Request, res: Response) => {
-    const { username, password } = req.body || {}
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { username } })
-    if (!user || !(await bcrypt.compare(password || '', user.passwordHash)))
-      return res.status(400).json({ message: '用户名或密码错误' })
-    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
-    const member = await memberRepo.findOne({ where: { userId: user.id } })
-    let teamId = member?.teamId
-    if (!teamId) {
-      const teamRepo = AppDataSource.getRepository(TeamEntity)
-      const team = await teamRepo.save(teamRepo.create({ name: `${user.username} 的团队` }))
-      await memberRepo.save(memberRepo.create({ teamId: team.id, userId: user.id, role: 'owner' }))
-      const groupRepo = AppDataSource.getRepository(GroupEntity)
-      await groupRepo.save(groupRepo.create({ teamId: team.id, name: 'Default', sort: 0 }))
-      teamId = team.id
-    }
-    // 登录二次验证（TOTP）：已启用则只发短期挑战令牌，需再用动态码换取正式令牌。
-    // 挑战令牌同样带上 ver —— 否则用户改密码后，5 分钟内已发出的挑战令牌
-    // 仍能换成正式令牌，撤销机制被绕过。
-    if (user.twoFactorEnabled && user.twoFactorSecret) {
-      const challengeToken = jwt.sign(
-        {
-          uid: user.id,
-          tid: teamId,
-          username: user.username,
-          role: member?.role || 'owner',
-          purpose: '2fa',
-          ver: user.tokenVersion ?? 0
-        },
-        JWT_SECRET,
-        { expiresIn: '5m' }
-      )
-      return res.json({ twoFactorRequired: true, challengeToken })
-    }
-    const token = signSessionToken(sessionOf(user, teamId, member?.role || 'owner'))
-    res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: member?.role || 'owner' } })
-  })
-
-  // ===== 会话撤销 =====
-// 此前「登出」只是前端清 localStorage，令牌在服务端依然有效满 7 天——
-// 令牌一旦被截获（XSS / 日志泄漏 / 备份文件），攻击者可在有效期内完整使用该账号。
-// 递增 users.tokenVersion 即吊销该用户全部已签发令牌（O(1)，无需黑名单）。
-router.post('/auth/logout', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    await revokeAllSessions(req.uid!, req.tid!, req.username || '', '用户登出')
-    res.json({ ok: true })
-  })
-
-  router.post('/auth/logout-all', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    await revokeAllSessions(req.uid!, req.tid!, req.username || '', '退出所有设备')
-    res.json({ ok: true })
-  })
-
-  // 当前会话状态：供设置页展示「登录有效期」「会话是否仍有效」
-  router.get('/auth/session', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const user = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: req.uid } })
-    res.json({
-      ok: true,
-      ttlDays: SESSION_TTL_DAYS,
-      twoFactorEnabled: !!user?.twoFactorEnabled,
-      username: req.username,
-      teamId: req.tid
-    })
-  })
-
-  router.get('/auth/me', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { id: req.uid } })
-    if (!user) return res.status(401).json({ message: '用户不存在' })
-    res.json({
-      id: user.id,
-      username: user.username,
-      nickname: user.nickname,
-      role: await freshRole(req),
-      twoFactorEnabled: !!user.twoFactorEnabled
-    })
-  })
-
-  // 列出当前登录用户所属的全部团队（成员关系），并标注哪个是当前团队。
-  // 当前团队上下文来自登录时下发的 JWT（req.tid），切换团队需走 /auth/switch-team 重发令牌。
-  router.get('/auth/teams', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
-    const members = await memberRepo.find({ where: { userId: req.uid } })
-    const teamRepo = AppDataSource.getRepository(TeamEntity)
-    const teams = await teamRepo.find({ where: { id: In(members.map((m) => m.teamId)) } })
-    const nameById = new Map(teams.map((t) => [t.id, t.name]))
-    res.json(
-      members.map((m) => ({
-        id: m.teamId,
-        name: nameById.get(m.teamId) || `团队 ${m.teamId}`,
-        role: m.role,
-        isCurrent: m.teamId === req.tid
-      }))
-    )
-  })
-
-  // 切换当前工作团队：校验用户确为该团队成员，用其在该团队的实时角色重发会话令牌（tid 变更）。
-  // 切换前关闭所有运行中的环境窗口（它们属于旧团队，若不关，切换后其请求会因 teamId 不匹配而报错），
-  // 并写一条审计日志（switch_team）记在新团队下。前端拿到新令牌后整页 reload，所有数据自然重新归属新团队。
-  router.post('/auth/switch-team', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const teamId = Number((req.body || {}).teamId)
-    if (!teamId) return res.status(400).json({ message: '缺少 teamId' })
-    const memberRepo = AppDataSource.getRepository(TeamMemberEntity)
-    const member = await memberRepo.findOne({ where: { userId: req.uid, teamId } })
-    if (!member) return res.status(403).json({ message: '你不是该团队成员，无法切换' })
-    const teamRepo = AppDataSource.getRepository(TeamEntity)
-    const team = await teamRepo.findOne({ where: { id: teamId } })
-    // 关闭旧团队运行中的环境窗口。browserManager 已在启动期经 index.ts 静态导入就绪；
-    // 其与 server 的循环依赖（引用 AppDataSource）为良性，无需动态 import。
-    try {
-      for (const id of getRunningWindowIds()) {
-        try {
-          await closeWindow(id)
-        } catch {
-          /* 忽略单个窗口关闭失败 */
-        }
-      }
-    } catch {
-      /* 窗口关闭异常时跳过 */
-    }
-    // 重发令牌必须带上当前 tokenVersion：否则切换团队签出的新令牌会「领先」
-    // 于库里版本，下一次校验会被判为 session_revoked 而把用户踢下线
-    const swUser = await AppDataSource.getRepository(UserEntity).findOne({ where: { id: req.uid } })
-    if (!swUser) return res.status(401).json({ message: '账号不存在' })
-    const token = signSessionToken(sessionOf(swUser, teamId, member.role))
-    await AppDataSource.getRepository(OperationLogEntity).save({
-      teamId,
-      userId: req.uid,
-      username: req.username || 'api',
-      action: 'switch_team',
-      detail: `切换到团队「${team?.name || teamId}」`,
-      sensitive: isSensitiveAction('switch_team')
-    })
-    res.json({ token, user: { id: req.uid, username: req.username, nickname: req.username, role: member.role } })
-  })
-
-  // ===== 登录二次验证（TOTP）=====
-  // 生成密钥 + 二维码（pending：写入 secret 但暂不启用，待 confirm 通过再置 enabled）
-  router.post('/auth/2fa/setup', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { id: req.uid } })
-    if (!user) return res.status(401).json({ message: '用户不存在' })
-    const secret = generateTotpSecret()
-    user.twoFactorSecret = secret
-    user.twoFactorEnabled = false
-    await userRepo.save(user)
-    const otpauth = buildOtpAuthUrl('RoxyBrowserClone', user.username, secret)
-    const qrCodeDataUrl = await totpQrDataUrl(otpauth)
-    res.json({ secret, otpauthUrl: otpauth, qrCodeDataUrl })
-  })
-
-  // 用首个动态码确认启用（防止用户没扫上就误开）
-  router.post('/auth/2fa/confirm', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const { code } = req.body || {}
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { id: req.uid } })
-    if (!user || !user.twoFactorSecret) return res.status(400).json({ message: '请先发起 2FA 设置' })
-    if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
-    user.twoFactorEnabled = true
-    await userRepo.save(user)
-    res.json({ ok: true, twoFactorEnabled: true })
-  })
-
-  // 关闭 2FA（需提供当前动态码）
-  router.post('/auth/2fa/disable', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const { code } = req.body || {}
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { id: req.uid } })
-    if (!user || !user.twoFactorEnabled) return res.status(400).json({ message: '未启用 2FA' })
-    if (!verifyTotp(user.twoFactorSecret || '', code)) return res.status(400).json({ message: '动态码不正确' })
-    user.twoFactorEnabled = false
-    user.twoFactorSecret = null
-    await userRepo.save(user)
-    res.json({ ok: true, twoFactorEnabled: false })
-  })
-
-  // 登录第二步：用挑战令牌 + 动态码换取正式令牌
-  router.post('/auth/2fa/verify', async (req: Request, res: Response) => {
-    const { challengeToken, code } = req.body || {}
-    if (!challengeToken) return res.status(400).json({ message: '缺少挑战令牌' })
-    let payload: { uid: number; tid: number; username: string; role: string; purpose?: string }
-    try {
-      payload = jwt.verify(challengeToken, JWT_SECRET) as typeof payload
-    } catch {
-      return res.status(401).json({ message: '挑战已过期，请重新登录' })
-    }
-    if (payload.purpose !== '2fa') return res.status(401).json({ message: '无效挑战' })
-    const userRepo = AppDataSource.getRepository(UserEntity)
-    const user = await userRepo.findOne({ where: { id: payload.uid } })
-    if (!user || !user.twoFactorEnabled || !user.twoFactorSecret)
-      return res.status(401).json({ message: '2FA 状态异常，请重新登录' })
-    if (!verifyTotp(user.twoFactorSecret, code)) return res.status(400).json({ message: '动态码不正确' })
-    const token = signSessionToken(sessionOf(user, payload.tid, payload.role))
-    res.json({ token, user: { id: user.id, username: user.username, nickname: user.nickname, role: payload.role } })
+  // 认证域（注册 / 登录 / 登出 / 会话 / 团队切换 / 2FA）见 routes/auth.ts。
+  // 必须在任何 /:id 之类的动态路由之前注册，否则会被抢先匹配。
+  registerAuthRoutes(router, {
+    getDs: () => AppDataSource,
+    authMiddleware,
+    jwtSecret: JWT_SECRET,
+    signSessionToken,
+    freshRole,
+    isSensitiveAction,
+    revokeAllSessions,
+    closeWindow,
+    getRunningWindowIds
   })
 
   // ===== 窗口同步开关 =====
@@ -2624,102 +2418,19 @@ router.post('/auth/logout', authMiddleware, async (req: AuthedRequest, res: Resp
   // getDs 传函数而非值：AppDataSource 是运行时赋值的 export let，按值捕获会拿到 undefined。
   registerLogRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
-  // ===== API 令牌 =====
-  router.get('/tokens', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ApiTokenEntity)
-    res.json(await repo.find({ where: ownerScope(req) }))
-  })
-
-  router.post('/tokens', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ApiTokenEntity)
-    const token = 'rb_' + crypto.randomBytes(24).toString('hex')
-    const t = await repo.save(repo.create({ teamId: req.tid!, ownerId: req.uid!, name: req.body?.name || '默认令牌', token }))
-    await writeLog(req, 'create_token', `创建 API 令牌「${t.name}」`)
-    res.json(t)
-  })
-
-  router.delete('/tokens/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ApiTokenEntity)
-    const t = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (t) await repo.remove(t)
-    res.json({ ok: true })
-  })
-
-  // 全局设置（单例，key='global'）
-  router.get('/settings', authMiddleware, async (_req: AuthedRequest, res: Response) => {
-    // 复用 getSettings 走同一条解密路径，避免「读接口与内部调用解密行为不一致」
-    res.json(await getSettings())
-  })
-
-  router.put('/settings', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(AppSettingsEntity)
-    const merged = { ...DEFAULT_SETTINGS, ...(req.body || {}) } as Record<string, unknown>
-    // 国家 / 语言走白名单：非法值直接回落默认，避免把脏数据写进 JSON 列
-    // （theme.ts 与 i18n 都按这些值取时区与词典，脏值会导致界面/主题取不到而崩溃）
-    const country = normalizeCountry(merged.country as string) || DEFAULT_SETTINGS.country
-    const language = normalizeLocale(merged.language as string) || DEFAULT_SETTINGS.language
-    merged.country = country
-    merged.language = language
-    // 搜索引擎同样走白名单：脏值会让起始页拼出错误的搜索 URL
-    merged.searchEngine = normalizeSearchEngine(merged.searchEngine) || DEFAULT_SETTINGS.searchEngine
-    // AI Agent 子对象深合并默认值：UI 仅暴露部分字段，避免未展示字段被覆盖成 undefined
-    if (merged.aiAgent && typeof merged.aiAgent === 'object') {
-      merged.aiAgent = { ...DEFAULT_SETTINGS.aiAgent, ...(merged.aiAgent as Record<string, unknown>) }
-    }
-    let row = await repo.findOne({ where: { key: 'global' } })
-    // 落库前加密凭据字段（JSON 列无 Transformer，只能在此收口）
-    const toPersist = encryptSettingsSecrets(merged)
-    if (!row) row = repo.create({ key: 'global', settings: toPersist })
-    else row.settings = toPersist
-    await repo.save(row)
-    // 设置变更后刷新 webhook 内存缓存（避免每次事件查库）
-    setCachedWebhooks(Array.isArray(merged.webhooks) ? (merged.webhooks as WebhookConfig[]) : [])
-    // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
-    startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
-    res.json({ ok: true, settings: merged })
-  })
-
-  // ===== CDP 调试端口设置 =====
-  // 读：与本地配置文件（权威来源）合并返回，让设置页展示真实生效值
-  router.get('/cdp', authMiddleware, async (_req: AuthedRequest, res: Response) => {
-    const cfg = readCdpConfig()
-    res.json({ ok: true, enabled: cfg.enabled, port: cfg.port, info: await getCdpInfo() })
-  })
-
-  // 写：同时落「本地文件 + app_settings」。
-  // 本地文件是运行时权威来源（app ready 前读不到 DB），app_settings 只是让设置页能回显。
-  // **需重启应用生效**：Chromium 的命令行开关无法在运行时更改。
-  router.put('/cdp', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const cfg: CdpConfig = {
-      enabled: !!req.body?.enabled,
-      port: clampPort(req.body?.port)
-    }
-    writeCdpConfig(cfg)
-    // 同步一份到 app_settings，供设置页下次进入时读取（与本地文件可能因外部手改而不一致，
-    // 故读取接口以本地文件为准，这里只是冗余留档）
-    const repo = AppDataSource.getRepository(AppSettingsEntity)
-    const row = (await repo.findOne({ where: { key: 'global' } })) || repo.create({ key: 'global', settings: {} })
-    row.settings = { ...(row.settings as Record<string, unknown>), cdpEnabled: cfg.enabled, cdpPort: cfg.port }
-    await repo.save(row)
-    // 开启 CDP 属敏感操作：端点等同于完整浏览器控制权，必须留痕
-    await writeLog(
-      req,
-      cfg.enabled ? 'enable_cdp' : 'disable_cdp',
-      `${cfg.enabled ? '开启' : '关闭'} CDP 调试端口（端口 ${cfg.port}，仅 127.0.0.1 可访问）${cfg.enabled ? '，需重启应用生效' : ''}`
-    )
-    res.json({ ok: true, enabled: cfg.enabled, port: cfg.port, restartRequired: true })
-  })
-
-  // Webhook 发送测试：用前端传入的配置单发一次，返回投递结果（不写入持久化）
-  router.post('/webhooks/test', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const wh = (req.body && (req.body as { webhook?: WebhookConfig }).webhook) || null
-    if (!wh || !wh.url) {
-      res.status(400).json({ message: '缺少 webhook 配置或 url' })
-      return
-    }
-    // 测试时不强制要求 enabled（便于在未启用状态下验证地址/密钥）
-    const result = await testWebhook(wh)
-    res.json({ ok: result.ok, status: result.status, error: result.error })
+  // 设置域（API 令牌 / 全局设置 / CDP 调试端口 / Webhook 测试）见 routes/settings.ts。
+  registerSettingsRoutes(router, {
+    getDs: () => AppDataSource,
+    authMiddleware,
+    writeLog,
+    getSettings,
+    encryptSettingsSecrets,
+    restartSchedulers: () => {
+      // 设置变更后重新调度定时巡检（间隔可能为 0 = 关闭）
+      startProxyCheckScheduler().catch((e) => console.error('[roxy] 重启巡检调度失败:', e))
+    },
+    defaultSettings: DEFAULT_SETTINGS,
+    normalizeSearchEngine
   })
 
   // ===== AI Agent：连通性探针（本地 Ollama 或 云端 BYOK）=====
