@@ -136,6 +136,47 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 - 上限 200 个/次（一次删太多会长时间持锁，且多半是误操作）。
 - 归属校验走 `ownerScope`：批量是批量越权的高发路径，绝不能只信前端传来的 id。
 
+### 1.7 环境生命周期（到期时间 · 预警 · 批量续期）
+
+环境可设到期时间（到期后**拒绝开窗**，对标竞品的订阅到期），到期时间承载于
+`fingerprint.expiresAt`（项目规则 #24：不新增数据库列），支持离线单测。
+
+#### 到期预警（主动告知，不靠用户想起来去问）
+
+此前零件齐全但没接线：代理有 `expiresAt`、助手能查「3 天内到期」、列表有到期提示、
+webhook 通道也有——唯独都要用户自己想起来。现在定时扫描临期 / 已过期的代理与环境，
+按团队合并成一条消息写日志 + 推 webhook（事件名 `expiry_alert`）。
+
+- 设置项「到期预警 → 扫描间隔（默认 24 小时，0 = 关闭）」「提前天数（默认 7 天）」。
+  **与代理巡检间隔分开**：巡检关心「能不能用」，预警关心「还能用多久」，时间尺度不同。
+- **默认开启**：到期是「用户看不见但会突然失效」的事，与「自动改环境 IP」这类
+  用户不可见的重大变更性质不同。
+- **启动时先扫一次**：用户重启应用就该看到当前状态，而不是等一个完整间隔。
+- **不重复刷屏**：去重 key 为 `id:expiresAt`，同一到期项只报一次；
+  用户改了到期时间则 key 变化，能重新预警一次。
+- **分级**：已过期与即将到期分开表述（两者对用户的行动要求完全不同）。
+- 判定逻辑在 `src/shared/expiryAlert.ts`（纯函数、零依赖、25 项离线单测），
+  边界取 `ceil`（剩 23 小时算 1 天）与 `≤`（恰好 7 天算「即将到期」）。
+
+#### 批量改到期时间
+
+到期环境一多就得一个个点开改，而「这批号都是同一天买的，一起续 30 天」是最常见的真实场景。
+
+- 入口：环境列表勾选后 → 「批量改到期时间」；助手动作 `batchExtendExpiry`（可说「给这些号续 30 天」）。
+- 三种模式：
+  - **各自分别延长 N 天**（可填负数表示提前）
+  - **统一设为指定日期**
+  - **清除到期时间**（转为长期有效，前端二次确认）
+- **两条如实回报**，绝不静默：
+  - `skippedNoExpiry` —— 原本长期有效的在「延长 N 天」下会被跳过，不顺带改成有期限；
+  - `stillExpired` —— 延长后**仍在过去**的（过期半年的号 +30 天大概率还是过期）。
+    只报「已延长 N 个」会让用户以为全部续上了，实际有几个照样打不开。
+
+#### 环境到期时间
+
+单条编辑弹窗里可设 / 清空；到期后开窗会被拒绝并提示「请在编辑中延长或清空到期时间」，
+批量开窗时同样跳过已到期环境。列表页有「到期」列，按剩余天数显示状态色。
+
 ### 2. 浏览器指纹（软件 + 硬件全维度模拟）
 
 一键随机生成一整套**自洽**的指纹参数（操作系统 / UA / 语言 / 时区 / 分辨率 / CPU / 内存 / 显卡），也可逐项手动微调：
@@ -973,12 +1014,12 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 1. **敏感拦截**：`api_tokens` / `users` 整体禁查；`proxies.username|password`、`accounts.password`、`cookies.value`、`api_tokens.token`、`users.passwordHash|twoFactorSecret` 等字段后端直接剔除。命中时返回「该数据敏感，暂不提供查询，请到对应模块手动操作」，而不是查询结果。
 2. **只读白名单**：`src/main/assistantSchema.ts` 定义可查实体与字段；`entity` / `field` / `filter` 必须落在白名单内，否则降级或拒绝。查询走 TypeORM QueryBuilder **参数化**，并强制 `teamId` + `ownerId` 隔离（admin 不加 ownerId），`limit` 限制 1~50。
-3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 14 个动作，按 `danger` 分级——
+3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 15 个动作，按 `danger` 分级——
 
 | 分级 | 动作 | 前端确认方式 |
 | --- | --- | --- |
 | `safe` | `openEnv` / `runRpa` / `healthcheckEnv` | 直接执行 |
-| `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* | 确认条 |
+| `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* / `batchExtendExpiry`* | 确认条 |
 | `destructive` | `deleteEnv` / `batchDeleteEnvs`* / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
 
 `*` = 批量动作，参数是 `profileIds: number[]` 而非单个 id。详见 [§14.1 多步编排](#141-多步编排与技能库planner-进阶) 的「批量动作（collect fan-in）」小节。
