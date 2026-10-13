@@ -30,7 +30,7 @@ import {
 import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import mysql from 'mysql2/promise'
-import { DataSource, In } from 'typeorm'
+import { DataSource } from 'typeorm'
 import type { AddressInfo } from 'net'
 import { app } from 'electron'
 
@@ -52,13 +52,12 @@ import {
   RpaScriptEntity,
   AssistantSkillEntity
 } from './entities'
-import { randomFingerprint, defaultFingerprint, listFingerprintPresets } from '../shared/fingerprint'
 import { getEnvExpiresAt } from '../shared/envExpiry'
 import { substituteSteps } from '../shared/rpa'
-import type { Fingerprint, AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
-import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
+import type { AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
+import { DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 // buildSnapshot 仍被「快照定时自动备份」调度器使用；其余导出/导入器已随routes/profileMigrate.ts 迁走。
-import { exportProfileFull, buildSnapshot } from './exporters'
+import { buildSnapshot } from './exporters'
 import { getSystemStats } from './systemStats'
 // AI Agent（探针 / 对话）与智能助手 Planner 已拆到 routes/assistant.ts，
 // 连带 ollama / cloud / knowledge / assistantPlanner 的引用一并迁走。
@@ -90,6 +89,7 @@ import { registerExtensionRoutes } from './routes/extensions'
 import { registerRpaRoutes } from './routes/rpa'
 import { registerAssistantRoutes } from './routes/assistant'
 import { registerTrashRoutes } from './routes/trash'
+import { registerProfileCrudRoutes } from './routes/profileCrud'
 import { registerProfileWindowRoutes } from './routes/profileWindow'
 import { registerProfileMigrateRoutes } from './routes/profileMigrate'
 
@@ -1061,223 +1061,21 @@ function buildApiRouter(): express.Router {
     res.json({ ok: true })
   })
 
-  // ===== 浏览器环境 =====
-  router.get('/profiles', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const isTemplate = req.query.templates === '1'
-    const qb = repo
-      .createQueryBuilder('p')
-      .where('p.teamId = :tid', { tid: req.tid })
-      .andWhere('p.isTemplate = :tpl', { tpl: isTemplate ? 1 : 0 })
-      // 回收站（软删除）的环境不出现在常规列表；templates 查询同样排除
-      .andWhere('p.deletedAt IS NULL')
-      .orderBy('p.seq', 'ASC')
-    if (req.query.groupId) qb.andWhere('p.groupId = :gid', { gid: Number(req.query.groupId) })
-    if (req.query.keyword) qb.andWhere('(p.name LIKE :kw OR p.remark LIKE :kw OR p.platform LIKE :kw)', { kw: `%${req.query.keyword}%` })
-    ownerAndWhere(qb, req)
-    const list = await qb.getMany()
-
-    const groupRepo = AppDataSource.getRepository(GroupEntity)
-    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const groups = await groupRepo.find({ where: ownerScope(req) })
-    const proxies = await proxyRepo.find({ where: ownerScope(req) })
-    const groupMap = new Map(groups.map((g) => [g.id, g.name]))
-    const proxyMap = new Map(proxies.map((p) => [p.id, p]))
-    res.json(list.map((p) => mapProfile(p, p.groupId ? groupMap.get(p.groupId) : null, p.proxyId ? proxyMap.get(p.proxyId) ?? null : null)))
+  // 环境 CRUD 域（列表 / 导出 / 快速创建 / 单条增删改查 / 换代理线路）见 routes/profileCrud.ts。
+  // **注册位置不可挪动**：静态段 /profiles/export 必须排在 /profiles/:id 之前，
+  // 否则会被 :id 抢先匹配，用户点「导出全部」却收到「环境不存在」。
+  registerProfileCrudRoutes(router, {
+    getDs: () => AppDataSource,
+    authMiddleware,
+    writeLog,
+    mapProfile
   })
 
-  // 导出环境（JSON，含完整指纹 + 分组 + 代理 + 账号，可直接迁移到另一台设备）
-  router.get('/profiles/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const groupRepo = AppDataSource.getRepository(GroupEntity)
-    const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-    const accountRepo = AppDataSource.getRepository(AccountEntity)
-    const tid = req.tid!
-
-    const ids = String(req.query.ids || '')
-      .split(',')
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isFinite(n) && n > 0)
-    const qb = repo
-      .createQueryBuilder('p')
-      .where('p.teamId = :tid', { tid })
-      .andWhere('p.isTemplate = 0')
-      .andWhere('p.deletedAt IS NULL')
-    if (ids.length) qb.andWhere('p.id IN (:...ids)', { ids })
-    ownerAndWhere(qb, req)
-    const list = await qb.orderBy('p.seq', 'ASC').getMany()
-
-    const groups = await groupRepo.find({ where: ownerScope(req) })
-    const proxies = await proxyRepo.find({ where: ownerScope(req) })
-    const accounts = await accountRepo.find()
-    const groupMap = new Map(groups.map((g) => [g.id, g.name]))
-    const proxyMap = new Map(proxies.map((x) => [x.id, x]))
-
-    res.json(
-      list.map((p) => {
-        const proxy = p.proxyId ? proxyMap.get(p.proxyId) : null
-        return {
-          name: p.name,
-          platform: p.platform,
-          startUrl: p.startUrl,
-          remark: p.remark,
-          group: p.groupId ? groupMap.get(p.groupId) || null : null,
-          proxy: proxy?.name || null,
-          proxyDetail: proxy
-            ? {
-                type: proxy.type,
-                host: proxy.host,
-                port: proxy.port,
-                username: proxy.username,
-                password: proxy.password
-              }
-            : null,
-          fingerprint: p.fingerprint,
-          accounts: accounts
-            .filter((a) => a.profileId === p.id)
-            .map((a) => ({ platform: a.platform, username: a.username, password: a.password, remark: a.remark }))
-        }
-      })
-    )
-  })
-
-  router.post('/profiles/quick-create', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const qbMax = repo
-      .createQueryBuilder('p')
-      .select('MAX(p.seq)', 'm')
-      .where('p.teamId = :tid', { tid: req.tid })
-    ownerAndWhere(qbMax, req)
-    const max = await qbMax.getRawOne<{ m: number | null }>()
-    const seq = (max?.m || 1000) + 1
-    const p = await repo.save(
-      repo.create({
-        teamId: req.tid!,
-        ownerId: req.uid!,
-        name: `环境 ${seq}`,
-        seq,
-        remark: '',
-        platform: '',
-        startUrl: DEFAULT_START_URL,
-        proxyId: null,
-        fingerprint: randomFingerprint() as unknown as Record<string, unknown>,
-        isTemplate: false,
-        createdBy: req.uid!
-      })
-    )
-    await writeLog(req, 'quick_create_profile', `快速创建环境「${p.name}」(#${p.id})`)
-    res.json(mapProfile(p))
-  })
   // 回收站域（软删除：列表 / 恢复 / 彻底删除 / 手动清分区 + 两个批量接口）见 routes/trash.ts。
   // **注册位置不可挪动**：静态段 /profiles/trash 必须排在 /profiles/:id 之前，
   // 否则会被 :id 抢先匹配，回收站页面直接报「环境不存在」。
   registerTrashRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
-  router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    res.json(mapProfile(p))
-  })
-
-  router.post('/profiles', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const body = req.body || {}
-    const qbMax = repo
-      .createQueryBuilder('p')
-      .select('MAX(p.seq)', 'm')
-      .where('p.teamId = :tid', { tid: req.tid })
-    ownerAndWhere(qbMax, req)
-    const max = await qbMax.getRawOne<{ m: number | null }>()
-    const seq = (max?.m || 1000) + 1
-    const fingerprint = (body.fingerprint || defaultFingerprint()) as Fingerprint
-    const p = await repo.save(
-      repo.create({
-        teamId: req.tid!,
-        ownerId: req.uid!,
-        groupId: body.groupId || null,
-        name: body.name || `环境 ${seq}`,
-        seq,
-        remark: body.remark || '',
-        platform: body.platform || '',
-        startUrl: body.startUrl || DEFAULT_START_URL,
-        proxyId: body.proxyId || null,
-        fingerprint: fingerprint as unknown as Record<string, unknown>,
-        isTemplate: !!body.isTemplate,
-        createdBy: req.uid!
-      })
-    )
-    await writeLog(req, 'create_profile', `创建环境「${p.name}」(#${p.id})`)
-    res.json(mapProfile(p))
-  })
-
-  // 整环境迁移：导出（含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名；扩展以名称带出，导入按名重映射）
-  router.get('/profiles/export/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    // 复用导出器，保证「单环境导出」与「全空间快照」走同一套结构，往返一致
-    const data = await exportProfileFull(p, { tid: req.tid!, uid: req.uid, role: req.role })
-    res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Content-Disposition', `attachment; filename="profile-${p.id}-${encodeURIComponent(p.name)}.json"`)
-    res.send(JSON.stringify(data, null, 2))
-  })
-
-  router.put('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    const body = req.body || {}
-    const fields = ['name', 'remark', 'platform', 'startUrl', 'groupId', 'proxyId', 'extensions'] as const
-    for (const f of fields) {
-      if (f in body) (p as any)[f] = body[f] === '' && (f === 'groupId' || f === 'proxyId') ? null : body[f]
-    }
-    if (body.fingerprint) p.fingerprint = body.fingerprint
-    await repo.save(p)
-    await writeLog(req, 'update_profile', `修改环境「${p.name}」(#${p.id})`)
-    res.json(mapProfile(p))
-  })
-
-  // 手动切换线路（对标官方）：从 IP 池分配一条「不同的」可用代理替换当前绑定。
-  // 旧代理随 proxyId 覆盖自动释放回池（占用数 -1）。运行中的环境只改绑定，
-  // 窗口代理在打开时注入，需重启环境才生效（响应里带 running 标记由前端提示）。
-  router.post('/profiles/:id/switch-line', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    try {
-      const { proxy, reused } = await allocateProxy(AppDataSource, req.tid!, {
-        excludeProxyId: p.proxyId,
-        country: (req.body || {}).country,
-        region: (req.body || {}).region
-      })
-      const oldProxy = p.proxyId ? await AppDataSource.getRepository(ProxyEntity).findOne({ where: { id: p.proxyId } }) : null
-      p.proxyId = proxy.id
-      await repo.save(p)
-      const running = p.status === 'running'
-      await writeLog(
-        req,
-        'switch_line',
-        `环境「${p.name}」(#${p.id})切换线路：${oldProxy ? `「${oldProxy.name}」` : '（无代理）'} → 「${proxy.name}」(#${proxy.id})${reused ? '（池中无空闲代理，复用已占用代理）' : ''}${running ? '；环境运行中，重启后生效' : ''}`
-      )
-      res.json({ proxy, running, oldProxyId: oldProxy?.id ?? null })
-    } catch (e) {
-      if (e instanceof ApiError) return res.status(e.status).json({ message: e.message })
-      throw e
-    }
-  })
-
-  router.delete('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    if (p.status === 'running') return res.status(400).json({ message: '请先关闭正在运行的窗口' })
-    // 软删除：进回收站，关联账号 / Cookie 原样保留，恢复即完整还原
-    p.deletedAt = new Date()
-    await repo.save(p)
-    await writeLog(req, 'delete_profile', `删除环境「${p.name}」(#${p.id})（已进回收站）`)
-    res.json({ ok: true, trashed: true })
-  })
   // 环境窗口操作域（开关窗口 / 体检 / 批量体检 / 截图 / 在线检测 / 模板克隆 / 跨团队转移）
   // 见 routes/profileWindow.ts。getBridge 传函数而非值：browserBridge 由 main 进程
   // 在启动后才注入，按值捕获会拿到 null，所有窗口操作一律报「浏览器引擎未就绪」。
@@ -1289,20 +1087,6 @@ function buildApiRouter(): express.Router {
     mapProfile
   })
 
-
-  // 生成随机指纹
-  router.post('/fingerprint/random', authMiddleware, (req: Request, res: Response) => {
-    const body = req.body || {}
-    const os = body.os
-    const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
-    const cv = typeof body.coreVersion === 'number' ? body.coreVersion : undefined
-    res.json(randomFingerprint(valid as OSKind | undefined, cv))
-  })
-
-  // 指纹预设库（内置验证过的指纹组合）
-  router.get('/fingerprint/presets', authMiddleware, (_req: Request, res: Response) => {
-    res.json(listFingerprintPresets())
-  })
 
   // ===== Cookie 管理（按环境隔离，团队维度鉴权） =====
   // 路由实现已抽到 src/main/routes/cookies.ts，解析逻辑在 src/main/cookieText.ts（可离线单测）。
