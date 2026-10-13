@@ -509,7 +509,7 @@ for (const ctx of browser.contexts()) {
 src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
-│   ├── server.ts             # Express + TypeORM：业务 API（已按域拆出 12 个 routes/* 模块，剩余 profiles 域待拆）
+│   ├── server.ts             # Express + TypeORM：鉴权 / 中间件 / 限流 / 调度器 + 路由注册（内联路由已清零，业务全部委托给 routes/*）
 │   ├── browserBridge.ts      # BrowserBridge 接口（纯类型，供 server 与 routes/v1 共用，避免反向 import 形成循环依赖）
 │   ├── apiAudit.ts           # 自动化 API 审计：method+path → action / detail 推导（纯函数，可单测）
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
@@ -539,7 +539,12 @@ src/
 │   │   ├── extensions.ts     #   扩展管理：上传或本地目录添加 / 取图标 / 删除（含失败回滚落盘）
 │   │   ├── rpa.ts            #   RPA 脚本：CRUD / 导入导出 / 内置市场 / 录制 / 回放
 │   │   ├── assistant.ts      #   AI Agent 与智能助手：探针 / 对话 / Planner 动作 / 技能库
-│   │   └── v1.ts            #   自动化 API v1：令牌鉴权 + {code,data} 返回约定 + 审计中间件
+│   │   ├── trash.ts          #   回收站域：列表 / 恢复 / 彻底删除 / 手动清分区 + 两个批量接口
+│   │   ├── profileCrud.ts    #   环境 CRUD：列表 / 导出 / 快速创建 / 单条增删改查 / 切线路 / 指纹预设
+│   │   ├── profileWindow.ts  #   环境窗口操作：开关窗 / 体检 / 截图 / 在线检测 / 模板克隆 / 跨团队转移
+│   │   ├── profileMigrate.ts #   迁移与批量：导入 / 全空间快照 / 克隆 / 批量重随机 / 批量移动·绑代理·删除·打开
+│   │   ├── system.ts         #   系统与分组：窗口同步 / 已打开窗口 / 系统占用 / 环境内新标签页 / 分组增删查
+│   │   └── v1.ts             #   自动化 API v1：令牌鉴权 + {code,data} 返回约定 + 审计中间件
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
