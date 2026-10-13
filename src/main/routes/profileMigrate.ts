@@ -6,7 +6,7 @@ import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
 import { randomFingerprint, deriveJitteredFingerprint } from '../../shared/fingerprint'
-import { getEnvExpiresAt } from '../../shared/envExpiry'
+import { getEnvExpiresAt, withEnvExpiresAt } from '../../shared/envExpiry'
 import {
   SNAPSHOT_FORMAT,
   SNAPSHOT_VERSION,
@@ -303,6 +303,85 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
       }
       await writeLog(req, 'batch_bind_proxy', `批量绑定 ${updated} 个环境到代理 #${proxyId ?? '无'}`)
       return res.json({ updated })
+    }
+
+    // 批量延长 / 设置 / 清除到期时间。
+    // 此前只有单条编辑弹窗能改到期时间——到期环境一多就得一个个点开改，
+    // 而「这些号都是同一天买的，一起延期」恰恰是最常见的真实场景。
+    if (action === 'extendExpiry') {
+      const raw = req.body?.days
+      const days = Number(raw)
+      // mode: 'add' 是在各自现有到期时间上加 N 天（默认）；'set' 是统一设为某一天；
+      //        null / 'clear' 是清除到期时间（转为长期有效）。
+      const mode = (req.body?.mode as string) || (raw === null || raw === '' ? 'clear' : 'add')
+      if (mode === 'clear') {
+        let cleared = 0
+        for (const p of profiles) {
+          const fp = (p.fingerprint || {}) as Record<string, unknown>
+          if (!getEnvExpiresAt(fp)) continue
+          p.fingerprint = withEnvExpiresAt(fp, null) as never
+          await repo.save(p)
+          cleared++
+        }
+        await writeLog(req, 'batch_clear_expiry', `批量清除 ${cleared} 个环境的到期时间（转为长期有效）`)
+        return res.json({ updated: cleared, cleared })
+      }
+      // 天数只在 mode:'add' 下才需要校验 —— 'set' 走的是 expiresAt，不看 days。
+      // 早先把校验放在分支外，导致 set 模式因 days 缺失（NaN）被提前 400 掉、整个模式静默失效。
+      if (mode === 'add') {
+        if (!Number.isFinite(days)) return res.status(400).json({ message: '天数必须是数字' })
+        // 上限 3650 天（10 年）：再长就该用 mode:'set' 直接指定日期，
+        // 而且超长天数本身就多半是用户手滑多打了个 0。
+        const absDays = Math.abs(Math.round(days))
+        if (absDays === 0 || absDays > 3650) {
+          return res.status(400).json({ message: '天数需在 1 ~ 3650 之间（或用「设为指定日期」）' })
+        }
+      }
+      let updated = 0
+      let skippedNoExpiry = 0
+      // 延期后仍在过去的环境数量：已经过期很久的号 +30 天大概率还是过期，
+      // 用户以为「续上了」但环境照样打不开 —— 这个数要如实返回给前端提示。
+      let stillExpired = 0
+      const target = mode === 'set' ? req.body?.expiresAt : null
+      // 直接校验 ISO 字符串本身，**不要**套 getEnvExpiresAt——
+      // 后者签名是「读指纹对象里的 expiresAt 键」，传字符串进去必然取不到值，
+      // 于是每次 set 都返回 400，表现为「这个模式完全不起作用」。
+      if (mode === 'set') {
+        const t = typeof target === 'string' ? new Date(target).getTime() : NaN
+        if (!Number.isFinite(t)) {
+          return res.status(400).json({ message: 'expiresAt 不是合法日期' })
+        }
+      }
+      for (const p of profiles) {
+        const fp = (p.fingerprint || {}) as Record<string, unknown>
+        if (mode === 'set') {
+          p.fingerprint = withEnvExpiresAt(fp, target as string) as never
+          await repo.save(p)
+          updated++
+          continue
+        }
+        const cur = getEnvExpiresAt(fp)
+        // 原本就没有到期时间（长期有效）的环境不加天数——
+        // 用户勾选时看到的一批「临期」，不该被顺带改成有期限，反过来也是。
+        if (!cur) {
+          skippedNoExpiry++
+          continue
+        }
+        const base = new Date(cur).getTime()
+        const next = base + days * 86400000
+        if (next < Date.now()) stillExpired++
+        p.fingerprint = withEnvExpiresAt(fp, new Date(next).toISOString()) as never
+        await repo.save(p)
+        updated++
+      }
+      await writeLog(
+        req,
+        'batch_extend_expiry',
+        mode === 'set'
+          ? `批量设置 ${updated} 个环境的到期时间为 ${String(target).slice(0, 10)}`
+          : `批量延长 ${updated} 个环境的到期时间 ${days > 0 ? '+' : ''}${days} 天${skippedNoExpiry ? `，跳过 ${skippedNoExpiry} 个长期有效的` : ''}`
+      )
+      return res.json({ updated, skippedNoExpiry, stillExpired })
     }
 
     if (action === 'delete') {

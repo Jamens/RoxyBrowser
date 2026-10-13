@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert
+  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert, Radio, DatePicker
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { useI18n } from '../i18n'
@@ -8,7 +8,7 @@ import {
   PlusOutlined, ReloadOutlined, SearchOutlined, PlayCircleOutlined, PoweroffOutlined,
   EditOutlined, DeleteOutlined, CopyOutlined, FolderAddOutlined, MoreOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ImportOutlined, ExportOutlined, ThunderboltOutlined, SwapOutlined, RestOutlined, UndoOutlined, ApiOutlined,
-  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined,
+  SafetyCertificateOutlined, ShareAltOutlined, CameraOutlined, DeploymentUnitOutlined, ClockCircleOutlined,
   StarOutlined, StarFilled, UserOutlined, ClearOutlined
 } from '@ant-design/icons'
 import type { HealthReport, HealthItem } from '@shared/healthcheck'
@@ -213,6 +213,11 @@ export default function Environments() {
   const [importText, setImportText] = useState('')
   const [editing, setEditing] = useState<ProfileDTO | null>(null)
   const [groupModalOpen, setGroupModalOpen] = useState(false)
+  // 批量改到期时间
+  const [expiryModalOpen, setExpiryModalOpen] = useState(false)
+  const [expiryMode, setExpiryMode] = useState<'add' | 'set' | 'clear'>('add')
+  const [expiryDays, setExpiryDays] = useState(30)
+  const [expiryDate, setExpiryDate] = useState<string | null>(null)
   const [groupForm] = Form.useForm()
   const [quickCreating, setQuickCreating] = useState(false)
   // 环境体检报告
@@ -764,6 +769,68 @@ export default function Environments() {
     }
   }
 
+  /**
+   * 批量延长到期时间。
+   *
+   * 后端支持三种 mode：
+   *  - `add`（默认）：在各自现有到期时间上加 N 天 —— 「这批号一起续 30 天」的真实场景
+   *  - `set`：统一设为指定日期 —— 「这批号统一到期日为 X 月 X 日」
+   *  - `clear`：清除到期时间（转为长期有效）
+   *
+   * `skippedNoExpiry`（本来就是长期有效的被跳过）与 `stillExpired`
+   * （延长后仍在过去，比如过期半年的号 +30 天）都必须如实提示——
+   * 只报「已延长 N 个」会让用户以为全部续上了，实际有几个照样打不开。
+   */
+  const batchExtendExpiry = async (mode: 'add' | 'set' | 'clear', days?: number, expiresAt?: string) => {
+    const ids = selected.map(Number)
+    if (!ids.length) return
+    try {
+      const res = await api.post<{ updated: number; skippedNoExpiry?: number; stillExpired?: number }>(
+        '/api/profiles/batch',
+        { ids, action: 'extendExpiry', mode, days, expiresAt }
+      )
+      const notes: string[] = []
+      if (res.skippedNoExpiry) notes.push(`跳过 ${res.skippedNoExpiry} 个长期有效的`)
+      if (res.stillExpired) notes.push(`${res.stillExpired} 个延长后仍是过期状态`)
+      const suffix = notes.length ? `（${notes.join('；')}）` : ''
+      if (mode === 'clear') message.success(`已清除 ${res.updated} 个环境的到期时间，转为长期有效${suffix}`)
+      else if (mode === 'set') message.success(`已设置 ${res.updated} 个环境的到期时间${suffix}`)
+      else message.success(`已延长 ${res.updated} 个环境 ${days! > 0 ? '+' : ''}${days} 天${suffix}`)
+      setSelected([])
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const submitExpiryModal = async () => {
+    if (expiryMode === 'set' && !expiryDate) {
+      message.warning('请选择到期日期')
+      return
+    }
+    if (expiryMode === 'add' && (!expiryDays || Math.abs(expiryDays) > 3650)) {
+      message.warning('天数需在 -3650 ~ 3650 之间')
+      return
+    }
+    // 「清除到期」是不可撤销的方向性变更（转成长期有效），用 Popconfirm 的语义确认一次
+    if (expiryMode === 'clear') {
+      Modal.confirm({
+        title: `确定清除 ${selected.length} 个环境的到期时间？`,
+        content: '清除后这些环境转为长期有效。此操作可在批量操作中重新设置。',
+        okText: '确定清除',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: async () => {
+          await batchExtendExpiry('clear')
+          setExpiryModalOpen(false)
+        }
+      })
+      return
+    }
+    await batchExtendExpiry(expiryMode, expiryMode === 'add' ? expiryDays : undefined, expiryDate ?? undefined)
+    setExpiryModalOpen(false)
+  }
+
   const duplicate = async (id: number) => {
     try {
       const res = await api.post<{ migratedAccounts: number }>(`/api/profiles/${id}/duplicate`)
@@ -1153,6 +1220,9 @@ export default function Environments() {
               <Button icon={<SafetyCertificateOutlined />} loading={batchHealthLoading} onClick={runBatchHealth}>
                 批量体检 ({selected.length})
               </Button>
+              <Button icon={<ClockCircleOutlined />} onClick={() => setExpiryModalOpen(true)}>
+                批量改到期时间 ({selected.length})
+              </Button>
             </>
           )}
         </Space>
@@ -1178,6 +1248,58 @@ export default function Environments() {
         proxies={proxies}
         extensions={extensions}
       />
+
+      <Modal
+        title={`批量改到期时间（已选 ${selected.length} 个环境）`}
+        open={expiryModalOpen}
+        onOk={submitExpiryModal}
+        onCancel={() => setExpiryModalOpen(false)}
+        okText="应用"
+        cancelText="取消"
+        destroyOnClose
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="原本没有到期时间（长期有效）的环境不会被「延长 N 天」改动；要一起设期限请用「统一设为指定日期」。"
+        />
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Form.Item label="方式" style={{ marginBottom: 0 }}>
+            <Radio.Group
+              value={expiryMode}
+              onChange={(e) => setExpiryMode(e.target.value as typeof expiryMode)}
+              optionType="button"
+              buttonStyle="solid"
+            >
+              <Radio.Button value="add">各自分别延长 N 天</Radio.Button>
+              <Radio.Button value="set">统一设为指定日期</Radio.Button>
+              <Radio.Button value="clear">清除到期（长期有效）</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+          {expiryMode === 'add' && (
+            <Form.Item label="天数（可填负数表示提前）" style={{ marginBottom: 0 }}>
+              <InputNumber
+                value={expiryDays}
+                onChange={(v) => setExpiryDays(v ?? 30)}
+                min={-3650}
+                max={3650}
+                addonAfter="天"
+                style={{ width: 200 }}
+              />
+            </Form.Item>
+          )}
+          {expiryMode === 'set' && (
+            <Form.Item label="到期日期" style={{ marginBottom: 0 }}>
+              <DatePicker
+                value={expiryDate ? dayjs(expiryDate) : null}
+                onChange={(d) => setExpiryDate(d ? d.toISOString() : null)}
+                style={{ width: 220 }}
+              />
+            </Form.Item>
+          )}
+        </Space>
+      </Modal>
 
       <Modal title="新建分组" open={groupModalOpen} onOk={addGroup} onCancel={() => setGroupModalOpen(false)}>
         <Form form={groupForm} layout="vertical">
