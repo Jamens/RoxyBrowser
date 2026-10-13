@@ -11,6 +11,8 @@ import jwt from 'jsonwebtoken'
 import { generateTotpSecret, buildOtpAuthUrl, verifyTotp, totpQrDataUrl } from './totp'
 import { getJwtSecret } from './jwtSecret'
 import { lazySecretCrypto } from './secretKey'
+import { clampPort } from '../shared/cdp'
+import { getCdpInfo, readCdpConfig, writeCdpConfig, type CdpConfig } from './cdpManager'
 import { dispatchWebhook, setCachedWebhooks, testWebhook } from './webhook'
 import { apiActionName, apiShouldAudit, apiAuditDetail } from './apiAudit'
 import mysql from 'mysql2/promise'
@@ -2459,6 +2461,37 @@ function buildApiRouter(): express.Router {
     res.json({ ok: true, settings: merged })
   })
 
+  // ===== CDP 调试端口设置 =====
+  // 读：与本地配置文件（权威来源）合并返回，让设置页展示真实生效值
+  router.get('/cdp', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    const cfg = readCdpConfig()
+    res.json({ ok: true, enabled: cfg.enabled, port: cfg.port, info: await getCdpInfo() })
+  })
+
+  // 写：同时落「本地文件 + app_settings」。
+  // 本地文件是运行时权威来源（app ready 前读不到 DB），app_settings 只是让设置页能回显。
+  // **需重启应用生效**：Chromium 的命令行开关无法在运行时更改。
+  router.put('/cdp', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const cfg: CdpConfig = {
+      enabled: !!req.body?.enabled,
+      port: clampPort(req.body?.port)
+    }
+    writeCdpConfig(cfg)
+    // 同步一份到 app_settings，供设置页下次进入时读取（与本地文件可能因外部手改而不一致，
+    // 故读取接口以本地文件为准，这里只是冗余留档）
+    const repo = AppDataSource.getRepository(AppSettingsEntity)
+    const row = (await repo.findOne({ where: { key: 'global' } })) || repo.create({ key: 'global', settings: {} })
+    row.settings = { ...(row.settings as Record<string, unknown>), cdpEnabled: cfg.enabled, cdpPort: cfg.port }
+    await repo.save(row)
+    // 开启 CDP 属敏感操作：端点等同于完整浏览器控制权，必须留痕
+    await writeLog(
+      req,
+      cfg.enabled ? 'enable_cdp' : 'disable_cdp',
+      `${cfg.enabled ? '开启' : '关闭'} CDP 调试端口（端口 ${cfg.port}，仅 127.0.0.1 可访问）${cfg.enabled ? '，需重启应用生效' : ''}`
+    )
+    res.json({ ok: true, enabled: cfg.enabled, port: cfg.port, restartRequired: true })
+  })
+
   // Webhook 发送测试：用前端传入的配置单发一次，返回投递结果（不写入持久化）
   router.post('/webhooks/test', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const wh = (req.body && (req.body as { webhook?: WebhookConfig }).webhook) || null
@@ -2757,6 +2790,14 @@ function buildApiRouter(): express.Router {
       void writeLog(req as AuthedRequest, action, apiAuditDetail(req.method, req.path, req.body))
     })
     next()
+  })
+
+  // ===== CDP 调试端点（供 Playwright / Puppeteer 连接）=====
+  // 返回连接地址与「当前打开的环境 → targetId」映射。只读接口，不改任何数据，
+  // 故不进 apiShouldAudit 的写审计；但返回的 profileId 列表属于环境元信息，
+  // 令牌本身是按 teamId 鉴权的，跨团队拿不到别人的环境 id。
+  v1.get('/cdp', async (_req: Request, res: Response) => {
+    res.json({ code: 0, data: await getCdpInfo() })
   })
 
   v1.get('/profiles', async (req: Request, res: Response) => {

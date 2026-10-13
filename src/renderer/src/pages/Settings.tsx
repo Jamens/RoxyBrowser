@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS, SEARCH_ENGINES, WEBHOOK_EVENT_GROUPS, type AppSetting
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
+import { DEFAULT_CDP_PORT, type CdpInfo } from '@shared/cdp'
 import { useI18n, LOCALE_CHANGE_EVENT } from '../i18n'
 
 // 主题、自动时段、国家与语言同步进 localStorage，供渲染层 resolveDark / i18n 同步读取
@@ -167,6 +168,44 @@ export default function Settings() {
   useEffect(() => {
     window.roxy?.getVersions?.().then(setVersions).catch(() => {})
   }, [])
+
+  // ===== CDP 调试端口 =====
+  // 状态独立于主表单：它落在本地配置文件（不是 app_settings），且需重启生效。
+  // info 里的 port 是「实际生效」的端口（可能被占用后顺延），与表单里的配置值不一定相同，
+  // 所以两者分开存——配置值用于下次启动，info.port 用于当前展示连接地址。
+  const [cdpEnabled, setCdpEnabled] = useState(false)
+  const [cdpPort, setCdpPort] = useState(DEFAULT_CDP_PORT)
+  const [cdpInfo, setCdpInfo] = useState<CdpInfo | null>(null)
+  const [savingCdp, setSavingCdp] = useState(false)
+
+  const loadCdp = useCallback(async () => {
+    try {
+      const res = await api.get<{ enabled: boolean; port: number; info: CdpInfo }>('/api/cdp')
+      setCdpEnabled(res.enabled)
+      setCdpPort(res.port)
+      setCdpInfo(res.info)
+    } catch {
+      /* 后端未就绪时保持默认展示 */
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCdp()
+  }, [loadCdp])
+
+  const saveCdp = useCallback(async () => {
+    setSavingCdp(true)
+    try {
+      await api.put('/api/cdp', { enabled: cdpEnabled, port: cdpPort })
+      message.success(t('cdp.saved'))
+      // 重新拉一次：让「实际端口 / target 列表」反映当前运行态
+      await loadCdp()
+    } catch {
+      /* 错误提示由 api 层统一处理 */
+    } finally {
+      setSavingCdp(false)
+    }
+  }, [cdpEnabled, cdpPort, loadCdp, t])
 
   const country = Form.useWatch('country', form) || DEFAULT_SETTINGS.country
   const networkMode = Form.useWatch('networkMode', form) || DEFAULT_SETTINGS.networkMode
@@ -869,6 +908,114 @@ export default function Settings() {
           </Button>
         </Form.Item>
       </Form>
+
+      {/* 调试端口（CDP）：独立 Card 而非塞进上面的表单 ——
+          它与普通设置不同：需重启应用生效、配置写在本地文件（app ready 前读不到 DB），
+          单独成卡能让「需重启」这件事在视觉上就与常规设置区分开 */}
+      <Card
+        style={{ marginTop: 16 }}
+        title={
+          <Space>
+            <span>{t('cdp.section')}</span>
+            {cdpInfo?.enabled ? <Tag color="green">{t('cdp.activePort')} {cdpInfo.port}</Tag> : <Tag>{t('cdp.notEnabled')}</Tag>}
+          </Space>
+        }
+        extra={
+          <Space>
+            <Button size="small" onClick={loadCdp}>{t('cdp.refresh')}</Button>
+            <Button size="small" type="primary" loading={savingCdp} onClick={saveCdp}>{t('settings.save')}</Button>
+          </Space>
+        }
+      >
+        <Typography.Paragraph type="secondary">{t('cdp.desc')}</Typography.Paragraph>
+
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space wrap>
+            <Switch checked={cdpEnabled} onChange={setCdpEnabled} />
+            <span>{t('cdp.enable')}</span>
+            <InputNumber
+              min={1024}
+              max={40000}
+              value={cdpPort}
+              onChange={(v) => setCdpPort(Number(v) || DEFAULT_CDP_PORT)}
+              disabled={!cdpEnabled}
+              addonBefore={t('cdp.port')}
+            />
+          </Space>
+
+          {cdpEnabled && (
+            <Typography.Text type="warning">
+              <SafetyOutlined /> {t('cdp.restartTip')}
+            </Typography.Text>
+          )}
+
+          {/* 只在已启用且已重启（拿到实际端口）时展示连接信息 */}
+          {cdpInfo?.enabled && cdpInfo.endpoint && (
+            <>
+              <Space wrap>
+                <Typography.Text strong>{t('cdp.endpoint')}</Typography.Text>
+                <Typography.Text code copyable={{ text: cdpInfo.endpoint }}>
+                  {cdpInfo.endpoint}
+                </Typography.Text>
+              </Space>
+              <Typography.Paragraph>
+                <Typography.Text strong>{t('cdp.usage')}</Typography.Text>
+              </Typography.Paragraph>
+              <pre
+                style={{
+                  background: 'var(--color-background-tertiary)',
+                  padding: 12,
+                  borderRadius: 8,
+                  fontSize: 12,
+                  margin: 0,
+                  overflowX: 'auto'
+                }}
+              >
+{`// Playwright
+${cdpInfo.usage.playwright}
+
+// Puppeteer
+${cdpInfo.usage.puppeteer}`}
+              </pre>
+            </>
+          )}
+
+          {/* 已启用时列出「已打开环境 → target」，这是外部工具区分环境的依据 */}
+          {cdpInfo?.enabled && (
+            <div>
+              <Typography.Text strong>{t('cdp.targets')}</Typography.Text>
+              {cdpInfo.targetsError ? (
+                <Typography.Paragraph type="secondary" style={{ marginTop: 4 }}>
+                  {cdpInfo.targetsError}
+                </Typography.Paragraph>
+              ) : cdpInfo.targets.length === 0 ? (
+                <Typography.Paragraph type="secondary" style={{ marginTop: 4 }}>
+                  {t('cdp.noTargets')}
+                </Typography.Paragraph>
+              ) : (
+                <Table
+                  style={{ marginTop: 8 }}
+                  size="small"
+                  pagination={false}
+                  rowKey="id"
+                  dataSource={cdpInfo.targets}
+                  columns={[
+                    {
+                      title: t('cdp.targets'),
+                      dataIndex: 'profileId',
+                      render: (v: number | null) => (v === null ? <Tag>{t('cdp.targetUnbound')}</Tag> : <Tag color="blue">#{v}</Tag>)
+                    },
+                    { title: 'targetId', dataIndex: 'id', render: (v: string) => <Typography.Text code>{v.slice(0, 12)}…</Typography.Text> },
+                    { title: 'URL', dataIndex: 'url', ellipsis: true }
+                  ]}
+                />
+              )}
+            </div>
+          )}
+
+          <Alert type="warning" showIcon message={t('cdp.securityWarning')} />
+        </Space>
+      </Card>
 
       {/* 关于（对标官方「内核版本」）：纯展示，不进表单 */}
       <Divider>{t('settings.sectionAbout')}</Divider>

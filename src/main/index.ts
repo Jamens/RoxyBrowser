@@ -5,6 +5,7 @@ import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSett
 import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint, captureScreenshot, scanSite } from './browserManager'
 import { AgentRunner } from './agent/runner'
 import { setupAutoUpdater } from './updater'
+import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, setCdpPort } from './cdpManager'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -176,6 +177,16 @@ async function createMainWindow() {
   }
 }
 
+// ===== CDP 调试端口：必须在 app.whenReady 之前设置命令行开关 =====
+// app.commandLine.appendSwitch 只在 Chromium 初始化前有效，因此这一段刻意放在
+// 所有 await / bootstrap 之前——此时 DB 还没连，所以配置读的是本地文件而非数据库。
+{
+  const cfg = readCdpConfig()
+  applyCdpCommandLine(cfg.enabled, cfg.port)
+  setCdpEnabled(cfg.enabled)
+  setCdpPort(cfg.port)
+}
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -198,6 +209,9 @@ if (!gotLock) {
       return
     }
     process.env.ROXY_API_BASE = apiBase
+
+    // 1.5 确定 CDP 实际端口（bootstrap 之后即可，此时 app 已 ready）
+    await finalizeCdpPort()
 
     // 2. 注入浏览器窗口桥 + 同步开关
     setBrowserBridge({ openWindow, closeWindow, probeFingerprint, captureScreenshot, scanSite })

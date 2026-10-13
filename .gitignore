@@ -24,3 +24,7 @@ pex.json
 
 # 项目本地数据 / 记忆（不入库）
 .workbuddy/
+
+# IDE 配置
+.idea/
+.vscode/

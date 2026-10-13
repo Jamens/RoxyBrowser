@@ -26,6 +26,7 @@ const COMPILES = [
   { name: 'jwtSecret', files: ['src/main/jwtSecret.ts'], out: '.tmp_jwt' },
   // secretKey 依赖 shared/secretCrypto，tsc 会自动一并编进同一临时目录
   { name: 'secretCrypto', files: ['src/shared/secretCrypto.ts', 'src/main/secretKey.ts'], out: '.tmp_sc' },
+  { name: 'cdp', files: ['src/shared/cdp.ts'], out: '.tmp_cdp' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
@@ -42,6 +43,7 @@ const TESTS = [
   { name: 'normalize_fingerprint', file: 'tests/normalize_fingerprint.test.cjs' },
   { name: 'jwtSecret', file: 'tests/jwtSecret.test.cjs' },
   { name: 'secretCrypto', file: 'tests/secretCrypto.test.cjs' },
+  { name: 'cdp', file: 'tests/cdp.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 

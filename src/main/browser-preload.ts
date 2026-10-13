@@ -45,6 +45,25 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
   const profileArg = process.argv.find((a: string) => a.startsWith('--roxy-profile='))
   const seed = profileArg ? Number(profileArg.slice('--roxy-profile='.length)) * 2654435761 : 12345
 
+  // ===== CDP 环境身份标记 =====
+  // 外部自动化工具（Playwright / Puppeteer）通过 CDP 连上后拿到的只是
+  // 一串 target（targetId + url + title），无法知道「哪个 target 对应哪个环境」。
+  // 这里把 profileId 挂成全局变量，主进程通过 CDP 的 Runtime.evaluate 求值
+  // 即可把 target 精确映射回环境，避免外部工具靠 URL 猜（同一站点多环境时必然猜错）。
+  // 命名带 __roxy 前缀并设为不可枚举，尽量不干扰页面的特征检测面。
+  try {
+    const pid = profileArg ? Number(profileArg.slice('--roxy-profile='.length)) : null
+    Object.defineProperty(window, '__roxyProfileId', {
+      value: Number.isFinite(pid as number) ? pid : null,
+      configurable: true,
+      enumerable: false,
+      writable: false
+    })
+    Object.defineProperty(window, '__roxyApp', { value: 'RoxyBrowserClone', configurable: true, enumerable: false })
+  } catch {
+    /* 注入失败不影响环境使用，仅导致外部工具无法自动识别环境归属 */
+  }
+
   // 确定性随机（同一环境的 Canvas/音频噪声保持稳定，不同环境之间互不相同）
   function mulberry32(a: number) {
     return function () {
