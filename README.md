@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（20 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（21 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -316,12 +316,12 @@ app.listen(4000)
 
 两项均已接入**环境体检**（新增 `WebGPU 显卡` / `音频特征` / `音频压缩器 reduction` 三个检查项），可在体检报告里直接看到注入是否生效。
 
-**后续补强（继续对齐真实 Chrome 的暴露面）**：
+**已落地的四项（曾列在「后续补强」，现已完成，勿再当待办）**：
 
-- **WebGPU 软件渲染回退不伪装**（`webGpuSpoofAllowed`）：`adapter.isFallbackAdapter === true`（SwiftShader / llvmpipe）时**不覆盖** vendor / architecture。否则会造出一个新的矛盾——「WebGL 说 RTX 4090、WebGPU 说软件渲染」，正是上面那条原则的延伸。
-- **子群尺寸改为原生透传**（`subgroupMinSize` / `subgroupMaxSize`）：体检新增「WebGPU 子群尺寸」项，只校验「min ≤ max 且 > 0」的自洽性，weight 0 不计分。
-- **Canvas 噪声改为按画布确定性派生**（`src/shared/canvasNoise.ts`）：检测站的**首要**检查点是「同一块画布读两次是否一致」。此前噪声种子共享一个随调用推进的 rng，两次读取结果不同 → 直接暴露注入。现在种子由 `(环境种子, 宽, 高)` 派生，相同画布必得完全相同的噪声序列。配套两条：极小画布（< 8px 的 1×N 纯色参考条）跳过噪声，避免被「反篡改纯色探针」识别；种子为 0 / NaN 时退回 `webglVendor` 哈希，防止无种子环境共用同一套噪声被聚类。体检 `canvasNoise` 项新增**一致性要求**（探针画两遍比 `toDataURL`），不一致即判红——那是真实注入缺陷，不是环境限制。
-- **WebAudio IAMF 刻意不注入**：IAMF 属**编解码能力查询**（`canPlayType` / `MediaCapabilities`），由 Chromium 版本与 OS 决定，**不是硬件指纹**；且本项目 Electron 内置 Chromium 低于 152，原生即不支持，伪造反而制造「浏览器声称支持、实际解不了」的矛盾。体检新增「音频编解码能力」信息项（weight 0）如实展示环境的编解码面，并记录「不注入」这一决策。
+- **WebGPU 软件渲染回退不伪装**（`webGpuSpoofAllowed`）：`adapter.isFallbackAdapter === true`（SwiftShader / llvmpipe）时**不覆盖** vendor / architecture。否则会造出一个新的矛盾——「WebGL 说 RTX 4090、WebGPU 说软件渲染」，正是上面那条原则的延伸。已接入 `browser-preload.ts` 与体检。
+- **子群尺寸原生透传**（`subgroupMinSize` / `subgroupMaxSize`）：体检「WebGPU 子群尺寸」项只校验「min ≤ max 且 > 0」的自洽性，weight 0 不计分。
+- **Canvas 噪声按画布确定性派生**（`src/shared/canvasNoise.ts`）：检测站的**首要**检查点是「同一块画布读两次是否一致」。噪声种子现由 `(环境种子, 宽, 高)` 派生，相同画布必得完全相同的噪声序列。配套两条：极小画布（< 8px 的 1×N 纯色参考条）跳过噪声，避免被「反篡改纯色探针」识别；种子为 0 / NaN 时退回 `webglVendor` 哈希，防止无种子环境共用同一套噪声被聚类。体检 `canvasNoise` 项要求**一致性**（探针画两遍比 `toDataURL`），不一致即判红——那是真实注入缺陷，不是环境限制。
+- **WebAudio IAMF 刻意不注入**：IAMF 属**编解码能力查询**（`canPlayType` / `MediaCapabilities`），由 Chromium 版本与 OS 决定，**不是硬件指纹**；本项目 Electron 内置 Chromium 低于 152，原生即不支持，伪造反而制造「浏览器声称支持、实际解不了」的矛盾。体检已加「音频编解码能力」信息项（weight 0）如实展示编解码面（IAMF / Opus / AAC）。
 
 ### 在线检测（外部视角验证）
 
@@ -495,7 +495,10 @@ for (const ctx of browser.contexts()) {
 
 - **查得到**：覆盖环境 / 代理 / 账号 / Cookie / 扩展 / RPA 脚本 / 操作日志 / 分组 / 团队。每条结果都带**深链**，点「跳转处理 →」直接定位到对应页面并高亮该行（环境页与代理页已接入）。
 - **答得了语义**：「环境快过期」本身没有过期字段，会映射为「所绑定代理的 `expiresAt` 在未来 7 天内」，并在结果里补出「使用该代理的环境」。
-- **做得到（且可控）**：可顺手执行动作，按危险分级确认——`safe`（打开环境、跑 RPA）直接执行；`medium`（分配代理、重命名）确认条；`destructive`（删除环境 / 代理、转团队、移除成员）强确认弹窗 + 写敏感审计。
+- **做得到（且可控）**：可顺手执行动作，按危险分级确认——`safe`（打开环境、跑 RPA、环境体检）直接执行；`medium`（分配代理、重命名、**创建环境、导入环境、批量重随机指纹、批量绑定代理**）确认条；`destructive`（删除环境 / 代理、批量删除、转团队、移除成员）强确认弹窗 + 写敏感审计。分级判据不是「看起来严不严重」，而是**出错后的可恢复性**：可逆的一律 medium，没有逐条撤销路径的才 destructive。
+- **批量动作一次确认**：`collect` 编排让「给查出来的这 12 个环境批量换代理」产出**一条**动作而非 12 条——用户点一次确认，而不是点到手酸。它与既有的 `forEach`（N 行 → N 条独立动作，用于「逐个删掉这 3 个过期代理」）并存，提案里用 `bulk` / `batch` 两个互斥字段供前端区分渲染。id 由后端从查询结果汇总并去重、剔除非法值、上限 200，**不让模型自己枚举**（本地小模型枚举长列表极易错漏）。
+- **批量动作不谎报**：运行中 / 已删除的环境会被自动跳过（改指纹、绑代理、删环境都不动正在跑的窗口），结果里的跳过数会如实写进回复；全部被跳过时直接报错，而不是回一句「已处理 0 个」。
+- **不提供 `closeEnv`**：助手关掉用户正在用的窗口，可能打断他正在做的操作，而这类现场状态模型无从得知。
 - **敏感数据后端硬拦截**：`api_tokens` / `users` 整体禁查，密码 / 令牌 / Cookie 值等字段后端直接剔除，返回「该数据敏感，请到对应模块手动操作」。三道闸（敏感拦截 → 只读白名单 → 动作映射）全在后端兜底，**不依赖模型自觉**；查询走白名单 + QueryBuilder 参数化，并强制 team / owner 隔离。
 - **前置条件**：需在「设置 → AI Agent」开启；默认本地 Ollama（`qwen2.5:7b`，零 token），也可切云端 BYOK。
 
@@ -506,7 +509,8 @@ for (const ctx of browser.contexts()) {
 src/
 ├── main/                     # Electron 主进程（Node 环境）
 │   ├── index.ts              # 入口：启动本地服务 → 打开主窗口
-│   ├── server.ts             # Express + TypeORM：业务 API + 自动化 API v1（已按域抽出 auth/settings/logs/cookies/v1Cookie，剩余待拆）
+│   ├── server.ts             # Express + TypeORM：业务 API（已按域拆出 12 个 routes/* 模块，剩余 profiles 域待拆）
+│   ├── browserBridge.ts      # BrowserBridge 接口（纯类型，供 server 与 routes/v1 共用，避免反向 import 形成循环依赖）
 │   ├── apiAudit.ts           # 自动化 API 审计：method+path → action / detail 推导（纯函数，可单测）
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
 │   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
@@ -528,7 +532,14 @@ src/
 │   │   ├── settings.ts       #   设置域：API 令牌 / 全局设置 / CDP 调试端口 / Webhook 测试
 │   │   ├── logs.ts           #   操作日志：列表（take 500）+ CSV/JSON 导出
 │   │   ├── cookies.ts        #   Cookie 管理：增删改查 / 批量导入导出 / 立即注入已打开窗口
-│   │   └── v1Cookie.ts       #   Cookie 自动化接口（Bearer 令牌鉴权，按 teamId + profileId 过滤）
+│   │   ├── v1Cookie.ts       #   Cookie 自动化接口（Bearer 令牌鉴权，按 teamId + profileId 过滤）
+│   │   ├── proxies.ts        #   代理域：CRUD / 批量导入导出 / 代理池状态 / 分配
+│   │   ├── accounts.ts       #   账号域：CRUD / 批量关联环境 / 导入导出（明文密码仅管理员可见）
+│   │   ├── team.ts           #   团队域：成员增删改 / 邮箱邀请 / 接受邀请 / SMTP 测试
+│   │   ├── extensions.ts     #   扩展管理：上传或本地目录添加 / 取图标 / 删除（含失败回滚落盘）
+│   │   ├── rpa.ts            #   RPA 脚本：CRUD / 导入导出 / 内置市场 / 录制 / 回放
+│   │   ├── assistant.ts      #   AI Agent 与智能助手：探针 / 对话 / Planner 动作 / 技能库
+│   │   └── v1.ts            #   自动化 API v1：令牌鉴权 + {code,data} 返回约定 + 审计中间件
 ├── preload/index.ts          # 主窗口预加载：向渲染进程暴露 API 地址
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
@@ -575,7 +586,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 20 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 21 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
@@ -624,4 +635,4 @@ pnpm dist:dir     # 仅产出免安装目录 → release/win-unpacked/（调试�
 - 执行 `pnpm dist` 时，electron-builder 会生成 `latest.yml` 与安装包并上传到该地址；安装版据此差分下载更新。
 
 > **已知环境限制**：在受限终端（如带删除保护沙箱的 IDE 内置终端）中，electron-builder 收尾清理临时文件可能报错，**但安装包已在此之前生成完毕**，属无害告警；普通终端下不会出现。若 `release/` 残留旧目录无法清理，用 `-c.directories.output=<新目录>` 换个输出路径即可。
-
+
