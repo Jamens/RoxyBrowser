@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（12 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（13 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
 pnpm migrate:secrets --apply  # 真执行迁移
@@ -122,6 +122,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **团队协作 / 账号中心 / Cookie / 扩展**：成员角色控权、账号批量导入、Cookie 按环境隔离与批量导入、按环境加载 Chrome 扩展
 - **数据看板 / 自动化 API（v1）**：核心指标与趋势图表；Bearer 令牌鉴权的本地 HTTP API，可对接外部调度器；**令牌的写操作统一落操作日志**（操作人记为 `api:<令牌名>`，删除 / 导入 / 导出自动标敏感），审计不留盲区
 - **登录二次验证（2FA / TOTP）**：登录除密码外还需验证器动态码；设置页扫码启用 / 关闭，TOTP 用 Node 内置 crypto 实现（无外部依赖）
+- **会话可撤销**：登出与「退出所有设备」会**吊销**该用户的全部会话令牌（不再是「只清本地、令牌在服务端还剩 7 天有效」）；其他设备下次请求收到 401 即自动跳登录页，详见下节
 - **Webhook 通知**：把操作日志事件（创建/打开环境、增删代理、团队变更、AI Agent 执行等）实时推送到你自己的服务，用于自动化与审计；HMAC-SHA256 签名校验来源、设置页「发送测试」即时验证、按事件分类订阅（含「全部事件」），详见下节
 - **操作日志导出**：操作日志页一键把当前筛选结果导出为 CSV / JSON，便于审计留存；导出本身记入操作日志（属敏感操作），四语支持，详见下节
 - **团队切换器**：顶栏一键在「我所属的团队」之间切换工作区（无需退出登录）；切换时用该团队的实时角色重发会话令牌，并关闭旧团队运行中的环境窗口，切换后整页刷新、所有数据自动归属新团队，详见下节
@@ -345,6 +346,23 @@ app.listen(4000)
 
 离线单测：`tests/secretCrypto.test.cjs`（40 例全绿）覆盖往返一致（含中文 / emoji / 换行 / 256 字符）、随机 IV、篡改检测、错误密钥 fail-closed、历史明文兼容、空值语义、密钥优先级。
 
+### 会话撤销（登出真正失效 / 退出所有设备）
+
+会话令牌是 `jwt.sign({...}, secret, { expiresIn: '7d' })`——**无状态**。这带来两个绕不过去的问题：
+
+1. 「登出」此前只做前端清 localStorage，令牌在服务端**依然有效满 7 天**。令牌一旦被截获（XSS、日志泄漏、备份文件），攻击者可在有效期内完整使用该账号——登出这个动作在安全上形同虚设。
+2. 用户无法强制让某个账号的全部会话下线（比如怀疑账号被盗）。
+
+- **为什么用 `tokenVersion` 而不是 JWT 黑名单**：JWT 无状态，要撤销单个令牌就得维护黑名单，而黑名单要么无限增长、要么过期清理出错（**漏删即等于该死令牌仍然有效**）。而我们真正需要的语义是「让某个用户的全部会话失效」——登出、改密码、管理员强制下线三种场景都是这个。递增 `users.tokenVersion`（一个整数）即吊销该用户全部令牌：**O(1)、无存储、无清理**。
+- **代价是「改密码会让所有设备下线」**，但这恰恰是**用户期望的行为**（密码泄露时你当然希望把其他设备踢下线），不是缺陷。
+- **升级不踢人**：`ver` 缺失的旧令牌按版本 0 处理。若把「缺失」判为非法，所有在线用户会在升级瞬间被集体登出。`tests/sessionRevoke.test.cjs` 专门锁死这一条。
+- **反向不一致也不放行**：令牌版本**高于**库里的当前值（库被回滚 / 重置，或令牌来自另一套环境）同样拒绝——放行等于绕过撤销。
+- **签发收敛到唯一入口** `signSessionToken()`：原本 5 处 `jwt.sign` 各自手写 payload，漏掉 `ver` 不会有任何编译错误或测试报错，只会**悄悄让该入口签发的令牌永不被撤销**。收敛后从结构上杜绝。
+- **2FA 挑战令牌同样带 `ver`**：否则用户改密码后，已发出的 5 分钟挑战令牌仍能换正式令牌，撤销被绕过。
+- **前端 401 自动登出**（`api.ts` + `SessionGuard`）：服务端吊销后，其他设备下次请求拿到 401 会自动清本地令牌并跳登录页。此前 401 完全无处理，被踢下线的设备会拿着废令牌反复报错，只能手动清 localStorage。
+- **登出请求必须先于清本地令牌发出**：`clearToken()` 之后请求就不再带 `Authorization` 头，服务端鉴权失败、撤销不执行——恰好是这个功能要修的那个洞。
+- **接口**：`POST /api/auth/logout`（当前用户全设备下线）、`POST /api/auth/logout-all`（同义，供 UI 表达「退出所有设备」）、`GET /api/auth/session`（会话状态 / 有效期）。撤销均写审计日志 `logout`。
+
 ### 代理故障自愈（巡检失效后自动换绑，避免环境裸奔）
 
 定时巡检原本只把 `proxies.status` 写成 `invalid` 就结束了——**没有任何后续动作**。对矩阵运营来说，一个环境的代理掉线等于该环境的出口 IP 变成了宿主真实 IP；多个环境同时掉线则可能挤到同一个 IP 上，这正是防关联最忌讳的情况。
@@ -437,6 +455,7 @@ src/
 │   ├── secretCrypto.ts       # 凭据静态加密：AES-256-GCM 加解密 + rb1: 版本前缀 + 历史明文惰性兼容（纯函数，可单测）
 │   ├── cdp.ts                # CDP 调试端点：端口规整 / 分配 / endpoint 拼装（**零 Node 依赖**，renderer 也会 import）
 │   ├── proxyHeal.ts          # 代理故障自愈：阈值闸门 / 合规替代代理挑选 / 跨环境出口 IP 去重（纯函数，可单测）
+│   ├── sessionRevoke.ts      # 会话撤销判定：tokenVersion 比对 / 类型校验（纯函数，可单测）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -465,11 +484,12 @@ src/
 6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 7. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 8. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 12 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 13 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 10. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 11. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 12. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
 13. **`src/shared/` 禁止 import Node 模块**：shared 是主进程 / 渲染进程共用层，只要 renderer 侧（`@shared/xxx`）引用到某个文件，该文件就会被 vite 打进浏览器包。引入 `net` / `fs` / `path` 等会直接构建失败，报 `Module "net" has been externalized for browser compatibility`。需要 Node 能力的实现拆成两个文件——纯逻辑留 `shared/`、Node 侧留 `main/`（如 `shared/cdp.ts` 只有端口规整与 endpoint 拼装，`probePort` 在 `main/cdpManager.ts`）。
+14. **新增 `jwt.sign` 会话令牌只能走 `signSessionToken()`**：手写 payload 漏掉 `ver`（会话版本号）不会有任何编译错误或测试报错，只会让该入口签发的令牌**永不被撤销**——撤销功能静默破防，且极难定位。判定逻辑见 `shared/sessionRevoke.ts`。同理，任何"要求客户端重新登录"的改动都必须同时确认 `api.ts` 的 401 分支能正确清理本地令牌并跳登录页。
 
 ## 打包分发
 
