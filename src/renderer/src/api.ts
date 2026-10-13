@@ -34,6 +34,40 @@ export function setSessionExpiredHandler(fn: ((reason: string) => void) | null) 
  */
 const NO_SESSION_EXPIRED_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/switch-team', '/api/auth/2fa/']
 
+/**
+ * 带 HTTP 状态码的接口错误。
+ *
+ * 为什么要自定义而不是直接 throw new Error：调用方需要**区分错误类型**才能
+ * 决定行为。真实教训——Layout 的 `/api/auth/me` 之前写成
+ * `.catch(() => { clearToken(); navigate('/login') })`，结果限流（429）时
+ * 也被当成「认证失败」踢出登录。用户表现是「频繁点菜单 → 突然退出登录」，
+ * 而 429 完全是前端自己请求太密导致的，与会话无关。
+ */
+export class ApiError extends Error {
+  readonly status: number
+  readonly code?: string
+  /** Retry-After 头给出的建议等待秒数（限流时才有） */
+  readonly retryAfterSec?: number
+
+  constructor(message: string, status: number, code?: string, retryAfterSec?: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.retryAfterSec = retryAfterSec
+  }
+
+  /** 会话已失效（服务端明确拒绝当前令牌）——只有这种才该清令牌跳登录页 */
+  get isSessionExpired(): boolean {
+    return this.status === 401
+  }
+
+  /** 被限流：临时故障，等一会儿重试即可，不该影响登录态 */
+  get isRateLimited(): boolean {
+    return this.status === 429
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -62,7 +96,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         onSessionExpired?.(reason)
       }
     }
-    throw new Error((data as { message?: string }).message || `请求失败 (${res.status})`)
+    throw new ApiError(
+      (data as { message?: string }).message || `请求失败 (${res.status})`,
+      res.status,
+      (data as { code?: string })?.code,
+      // Retry-After 头告诉客户端该等多久，限流时用它决定退避时长
+      Number(res.headers.get('Retry-After')) || undefined
+    )
   }
   return data as T
 }

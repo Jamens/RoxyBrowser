@@ -552,7 +552,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   proxyHealEnabled: false,
   proxyHealThreshold: 2,
   logRetentionDays: 90,
-  rateLimitPerMin: 120,
+  // 接口限额（每分钟）。实测最坏情况：环境页两个轮询（5s 列表 + 3s 窗口状态）
+  // = 32 次/分钟，加上其他页轮询与用户操作约 78 次/分钟。
+  // 原默认 120 只剩 42 次余量，繁忙时极易撞限流——而撞限流曾被误当成
+  // 「会话失效」把用户踢出登录（见 pages/Layout.tsx 事故注释）。
+  // 360 留足余量；本项目跑在本地、只有回环流量，这个量级不会削弱限流的防护意义
+  // （登录爆破另有按用户名计数的锁定，见 routes/auth.ts）。
+  rateLimitPerMin: 360,
   loginLockoutThreshold: 5,
   loginLockoutMinutes: 15,
   networkMode: 'system',

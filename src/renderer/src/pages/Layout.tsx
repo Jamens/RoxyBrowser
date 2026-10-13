@@ -22,7 +22,7 @@ import {
   SwapOutlined
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { api, getToken, clearToken, setToken } from '../api'
+import { api, getToken, clearToken, setToken, ApiError } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
 import SystemStats from '../components/SystemStats'
 import ErrorBoundary from '../components/ErrorBoundary'
@@ -76,9 +76,30 @@ export default function AppLayout() {
     api
       .get<{ username: string; nickname: string; role: string }>('/api/auth/me')
       .then(setMe)
-      .catch(() => {
-        clearToken()
-        navigate('/login')
+      .catch((e: unknown) => {
+        // **只对真正的会话失效退出登录**，不能一律 clearToken + 跳登录页。
+        //
+        // 事故记录：此前这里是裸 `.catch(() => { clearToken(); navigate('/login') })`，
+        // 于是**任何**失败都会被当成认证失败——包括限流（429）。
+        // 而 429 在本项目里极易触发：全站轮询密集（环境页 3 秒 + 5 秒两次轮询），
+        // 默认限额只有 120 次/分钟。频繁切菜单时请求量叠加，撞限流后
+        // 用户的登录态就被清了，表现为「点着点着突然退出登录」，
+        // 却完全看不出跟限流有关。
+        //
+        // 现在：401（令牌被拒绝）才退出；429 / 网络错误等临时故障保留登录态，
+        // 只提示一次，不打断用户操作。
+        if (e instanceof ApiError && e.isSessionExpired) {
+          clearToken()
+          navigate('/login')
+          return
+        }
+        if (e instanceof ApiError && e.isRateLimited) {
+          message.warning(t('layout.rateLimitedHint', { sec: e.retryAfterSec ?? 3 }))
+          return
+        }
+        // 其他错误（网络抖动、服务端 500）：登录态未必失效，保持现状不动作，
+        // 避免因一次偶发失败把用户踢出登录
+        console.warn('[layout] 加载用户信息失败（已保留登录态）:', e)
       })
     loadTeams()
   }, [navigate])

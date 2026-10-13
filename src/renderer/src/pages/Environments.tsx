@@ -17,6 +17,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { expiryWarn, expiryLabel } from '../utils/expiry'
 import { api } from '../api'
+import { createPoller } from '@shared/pollBackoff'
 import ProfileForm from '../components/ProfileForm'
 import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
 import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO, AccountDTO } from '@shared/types'
@@ -244,7 +245,6 @@ export default function Environments() {
   const [cloneName, setCloneName] = useState('')
   const [cloneAccounts, setCloneAccounts] = useState(false)
   const [cloneLoading, setCloneLoading] = useState(false)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 环境转移到其他团队（跨团队分享）：把环境及其 Cookie / 账号归属改写到目标团队。
   // 操作人必须同时是两团队的成员，可复用团队切换器打通的 /api/auth/teams 接口拉取可选目标。
@@ -285,12 +285,16 @@ export default function Environments() {
     load()
   }, [load])
 
+  // 轮询用可退避的 poller：遇 429 按 Retry-After 自动暂停，否则会形成
+  // 「越限流越打」的正反馈——限流窗口永远不恢复（详见 shared/pollBackoff.ts）。
   useEffect(() => {
-    pollRef.current = setInterval(load, 5000)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [load])
+    const poller = createPoller({
+      intervalMs: 5000,
+      fn: load,
+      onRateLimited: (sec) => message.warning(t('layout.rateLimitedHint', { sec }))
+    })
+    return () => poller.stop()
+  }, [load, message, t])
 
   const openProfile = async (id: number) => {
     try {
@@ -577,9 +581,15 @@ export default function Environments() {
       }
     }
     fetchWindows()
-    const timer = setInterval(fetchWindows, 3000)
-    return () => clearInterval(timer)
-  }, [syncMode])
+    // 3 秒一次是全站最密的轮询（20 次/分钟），必须支持退避：
+    // 撞限流后继续打只会让限流窗口一直不恢复
+    const poller = createPoller({
+      intervalMs: 3000,
+      fn: fetchWindows,
+      onRateLimited: (sec) => message.warning(t('layout.rateLimitedHint', { sec }))
+    })
+    return () => poller.stop()
+  }, [syncMode, message, t])
 
   // ===== 批量能力 =====
   const exportProfiles = async () => {
