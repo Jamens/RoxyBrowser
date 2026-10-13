@@ -18,6 +18,7 @@ import dayjs from 'dayjs'
 import { expiryWarn, expiryLabel } from '../utils/expiry'
 import { api } from '../api'
 import { createPoller } from '@shared/pollBackoff'
+import { formatBatchResult } from '@shared/trashBatch'
 import ProfileForm from '../components/ProfileForm'
 import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
 import type { ProfileDTO, GroupDTO, ProxyDTO, ExtensionDTO, AccountDTO } from '@shared/types'
@@ -491,8 +492,13 @@ export default function Environments() {
 
   // ===== 回收站（软删除恢复 / 彻底删除）=====
   const [trashOpen, setTrashOpen] = useState(false)
-  const [trashList, setTrashList] = useState<{ id: number; name: string; seq: number; platform: string; deletedAt: string }[]>([])
+  const [trashList, setTrashList] = useState<
+    { id: number; name: string; seq: number; platform: string; deletedAt: string; status?: string }[]
+  >([])
   const [trashLoading, setTrashLoading] = useState(false)
+  // 回收站勾选状态：批量恢复 / 批量彻底删除
+  const [trashSelected, setTrashSelected] = useState<React.Key[]>([])
+  const [trashActing, setTrashActing] = useState(false)
 
   const loadTrash = useCallback(async () => {
     setTrashLoading(true)
@@ -528,6 +534,39 @@ export default function Environments() {
       loadTrash()
     } catch (e) {
       message.error((e as Error).message)
+    }
+  }
+
+  /**
+   * 批量恢复 / 批量彻底删除。
+   *
+   * **刻意不用「循环调单条接口」**：那样 50 个环境就是 50 次鉴权 + 50 次日志写入，
+   * 又慢又容易撞限流；且中途失败时前端无法区分「已处理」与「未处理」，重试会造成重复操作。
+   *
+   * 后端逐条独立判定（一条失败不影响其他），但**拒绝原因必须如实展示**——
+   * 否则用户以为全删了，实际有几个还在，日后被清掉会措手不及。
+   */
+  const runTrashBatch = async (action: 'restore' | 'purge') => {
+    if (!trashSelected.length || trashActing) return
+    setTrashActing(true)
+    try {
+      const res = await api.post<{ restored?: number; purged?: number; rejected?: { id: number; name: string; reason: string }[] }>(
+        `/api/profiles/batch-${action}`,
+        { ids: trashSelected }
+      )
+      const done = res.restored ?? res.purged ?? 0
+      const rejected = res.rejected ?? []
+      const text = formatBatchResult(action, done, rejected as never)
+      // 部分成功用 warning（黄）而非 success（绿）：绿会让用户以为全成功了
+      if (rejected.length > 0) message.warning(text)
+      else message.success(text)
+      setTrashSelected([])
+      loadTrash()
+      if (action === 'restore') load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setTrashActing(false)
     }
   }
 
@@ -1152,7 +1191,7 @@ export default function Environments() {
       {/* 回收站：软删除的环境可恢复或彻底删除（彻底删除将清理关联账号与 Cookie） */}
       <Drawer
         title="回收站"
-        width={520}
+        width={620}
         open={trashOpen}
         onClose={() => setTrashOpen(false)}
       >
@@ -1163,12 +1202,54 @@ export default function Environments() {
         ) : !trashList.length ? (
           <Empty description="回收站是空的" />
         ) : (
-          <Table
+          <>
+            {/* 批量操作栏：只在有勾选时出现，避免常驻占空间 */}
+            {trashSelected.length > 0 && (
+              <Space
+                style={{
+                  width: '100%',
+                  justifyContent: 'space-between',
+                  marginBottom: 12,
+                  padding: '8px 12px',
+                  background: 'var(--ant-color-fill-quaternary, #f5f5f5)',
+                  borderRadius: 6
+                }}
+              >
+                <Typography.Text type="secondary">已选 {trashSelected.length} 项</Typography.Text>
+                <Space>
+                  <Button
+                    size="small"
+                    icon={<UndoOutlined />}
+                    loading={trashActing}
+                    onClick={() => runTrashBatch('restore')}
+                  >
+                    批量恢复
+                  </Button>
+                  <Popconfirm
+                    title={`彻底删除 ${trashSelected.length} 个环境不可恢复`}
+                    description={`将同时删除这些环境关联的账号与 Cookie，确定？`}
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => runTrashBatch('purge')}
+                  >
+                    <Button size="small" danger icon={<DeleteOutlined />} loading={trashActing}>
+                      批量彻底删除
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              </Space>
+            )}
+            <Table
             rowKey="id"
             size="small"
             dataSource={trashList}
             onRow={(r) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
             pagination={false}
+            rowSelection={{
+              selectedRowKeys: trashSelected,
+              onChange: (keys) => setTrashSelected(keys),
+              // 正在批量操作时禁掉勾选，避免用户中途改选择导致漏操作
+              getCheckboxProps: () => ({ disabled: trashActing })
+            }}
             columns={[
               { title: '环境', dataIndex: 'name', key: 'name', ellipsis: true },
               { title: '平台', dataIndex: 'platform', key: 'platform', width: 90, ellipsis: true },
@@ -1203,6 +1284,7 @@ export default function Environments() {
               }
             ]}
           />
+          </>
         )}
       </Drawer>
 

@@ -56,6 +56,7 @@ import {
 } from './entities'
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { getEnvExpiresAt } from '../shared/envExpiry'
+import { planBatch, canPurge, canRestore, type TrashItemLike } from '../shared/trashBatch'
 import { substituteSteps } from '../shared/rpa'
 import { MARKET_SCRIPTS } from './rpaMarket'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig, SmtpSettings } from '../shared/types'
@@ -1437,7 +1438,11 @@ function buildApiRouter(): express.Router {
         seq: p.seq,
         platform: p.platform,
         proxyId: p.proxyId,
-        deletedAt: p.deletedAt
+        deletedAt: p.deletedAt,
+        // 必须带上 status：批量彻底删除要拦「窗口正在运行」的环境。
+        // 回收站里的环境理论上都是 idle，但软删除后仍可能被 RPA / 自动化
+        // 重新拉起，此时不带上就会漏判，把运行中的环境删掉。
+        status: p.status
       }))
     )
   })
@@ -1467,6 +1472,82 @@ function buildApiRouter(): express.Router {
     await cookieRepo.delete({ profileId: p.id })
     await writeLog(req, 'purge_profile', `彻底删除环境「${p.name}」(#${p.id})（含账号与 Cookie）`)
     res.json({ ok: true })
+  })
+
+  /** Date | null → ISO 字符串 | null（批量判定只关心「是否为空」，统一成字符串好过类型） */
+function isoOf(d: Date | null | undefined): string | null {
+  return d ? d.toISOString() : null
+}
+
+// ===== 回收站批量操作 =====
+  // 为什么需要批量接口而不是前端循环调单条：
+  // ① 循环 50 次单条接口 = 50 次鉴权 + 50 次日志写入，慢且容易撞限流；
+  // ② 单条接口中途失败时前端无法区分「已删」与「未删」，重试会造成重复操作；
+  // ③ 批量审计日志需要聚合成一条，否则 50 个环境删除会刷出 50 行日志。
+  //
+  // **逐条独立判定**（见 shared/trashBatch.ts）：一条失败不影响其他，
+  // 但拒绝原因必须如实回报——否则用户以为全删了，实际有几个还在。
+  const readTrashBatch = async (req: AuthedRequest): Promise<ProfileEntity[]> => {
+    const ids = Array.isArray(req.body?.ids)
+      ? (req.body.ids as unknown[]).map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0)
+      : []
+    // 上限保护：一次删太多会长时间持锁，且用户多半是误操作
+    if (!ids.length) throw new Error('请选择至少一个环境')
+    if (ids.length > 200) throw new Error('一次最多操作 200 个环境')
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    // ownerScope 必带：批量是批量越权的高发路径，绝不能只信前端传来的 id
+    return repo.find({ where: { id: In(ids), ...ownerScope(req) } })
+  }
+
+  router.post('/profiles/batch-restore', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profiles = await readTrashBatch(req)
+    const plan = planBatch(
+      profiles.map((p) => ({ id: p.id, name: p.name, deletedAt: isoOf(p.deletedAt), status: p.status })),
+      canRestore
+    )
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    let done = 0
+    for (const id of plan.okIds) {
+      try {
+        await repo.update({ id }, { deletedAt: null })
+        done++
+      } catch (e) {
+        console.error(`[roxy] 批量恢复失败 #${id}:`, (e as Error).message)
+      }
+    }
+    if (done > 0) {
+      await writeLog(req, 'restore_profile', `批量恢复 ${done} 个环境（回收站）${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`)
+    }
+    res.json({ ok: true, restored: done, rejected: plan.rejected })
+  })
+
+  router.post('/profiles/batch-purge', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const profiles = await readTrashBatch(req)
+    const plan = planBatch(
+      profiles.map((p) => ({ id: p.id, name: p.name, deletedAt: isoOf(p.deletedAt), status: p.status })),
+      canPurge
+    )
+    const repo = AppDataSource.getRepository(ProfileEntity)
+    const accRepo = AppDataSource.getRepository(AccountEntity)
+    const cookieRepo = AppDataSource.getRepository(CookieEntity)
+    let done = 0
+    for (const id of plan.okIds) {
+      const p = profiles.find((x) => x.id === id)
+      if (!p) continue
+      try {
+        // 与单条 purge 保持完全一致的级联语义：账号、Cookie 一并清理
+        await repo.remove(p)
+        await accRepo.delete({ profileId: id })
+        await cookieRepo.delete({ profileId: id })
+        done++
+      } catch (e) {
+        console.error(`[roxy] 批量彻底删除失败 #${id}:`, (e as Error).message)
+      }
+    }
+    if (done > 0) {
+      await writeLog(req, 'purge_profile', `批量彻底删除 ${done} 个环境（含账号与 Cookie）${plan.rejected.length ? `，${plan.rejected.length} 个未成功` : ''}`)
+    }
+    res.json({ ok: true, purged: done, rejected: plan.rejected })
   })
 
   router.get('/profiles/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
