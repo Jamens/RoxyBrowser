@@ -9,6 +9,28 @@ import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, set
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
+// ===== GPU 降级兜底 =====
+// 虚拟机 / 远程桌面 / 无显卡驱动的环境里，Chromium 的 GPU 进程会反复崩溃并最终
+// `FATAL: GPU process isn't usable. Goodbye.` 直接终止整个应用——主窗口都来不及显示。
+//
+// 为什么必须用命令行 switch 而不是 `app.disableHardwareAcceleration()`：
+// 后者是「请求」式降级，Chromium 仍会尝试拉起 GPU 进程，失败后再崩；
+// 而 `--disable-gpu` 是**命令层强制**，GPU 进程根本不会被创建。
+// 两者都加上，覆盖不同 Chromium 版本的开关解析差异。
+//
+// 为什么默认就关而不是「崩溃后再降级」：Electron 没有「GPU 进程崩溃 N 次后降级
+// 重试」的回调可用，真到 FATAL 时进程已经死了，救不回来。只能启动前决策。
+// 指纹浏览器核心是 JS 层伪装，GPU 渲染只影响界面流畅度，关掉不影响任何功能。
+// 想启用硬件加速可设环境变量 ROXY_ENABLE_GPU=1。
+if (process.env.ROXY_ENABLE_GPU !== '1') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+  app.commandLine.appendSwitch('disable-software-rasterizer')
+  app.commandLine.appendSwitch('in-process-gpu')
+}
+
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuiting = false
