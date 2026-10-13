@@ -321,6 +321,59 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
     if (!row) return
     await repo.save(repo.create({ ...row, settings: { ...(row.settings || {}), healthBaseline: b } }))
   }
+  async function clearHealthBaseline(): Promise<boolean> {
+    const repo = getDs().getRepository(AppSettingsEntity)
+    const row = await repo.findOne({ where: { key: 'global' } })
+    if (!row) return false
+    // 解构掉再存，而不是设成 null：留一个 healthBaseline: null 在 JSON 里，
+    // 每次读都要多判一次 null，而「字段不存在」本身就是「没有基线」的唯一事实。
+    const { healthBaseline: _drop, ...rest } = (row.settings || {}) as Record<string, unknown>
+    await repo.save(repo.create({ ...row, settings: rest }))
+    return true
+  }
+
+  // ===== 体检基线重置 =====
+  // 没有这个口子时，一旦用户在**异常期**建了基线（比如某次网络抖动导致大面积
+  // 检查项失败，或只挑了状态最差的一批环境去跑），之后每次体检都会持续报回归，
+  // 而且只能等「下次 ≥5 个环境的体检」才自然覆盖——中间这段时间用户看到的是
+  // 一条条红色误报，却找不到任何自救办法。**一个诊断工具必须能被重置**。
+  //
+  // 但重置有个真实代价，接口必须让调用方知道：**如果当前确实存在注入回归，
+  // 重置等于把它抹掉**，此后不再告警。故前端必须提示这一点并要求确认。
+  router.post('/health/baseline/reset', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const before = await loadHealthBaseline()
+    const ok = await clearHealthBaseline()
+    if (!ok) return res.status(500).json({ message: '设置行不存在，无法重置' })
+    await writeLog(
+      req,
+      'reset_health_baseline',
+      before
+        ? `重置体检基线（原基线建于 ${before.savedAt.slice(0, 19).replace('T', ' ')}，${before.probed} 个环境，下次体检将按当前状态重建）`
+        : '重置体检基线（当前本就无基线）',
+    )
+    res.json({ ok: true, hadBaseline: !!before, previous: before ? { savedAt: before.savedAt, probed: before.probed } : null })
+  })
+
+  // 供前端展示「基线现状」而不必先跑一次体检
+  router.get('/health/baseline', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    const b = await loadHealthBaseline()
+    res.json({
+      exists: !!b,
+      savedAt: b?.savedAt ?? null,
+      probed: b?.probed ?? 0,
+      avgScore: b?.avgScore ?? 0,
+      // 逐项通过率：让用户能看出「这条基线本身就建得很差」——
+      // 那多半正是误报回归的根因，重置前就该看见而不是事后猜。
+      items: b
+        ? Object.entries(b.items).map(([key, v]) => ({
+            key,
+            passRate: v.passed + v.failed > 0 ? v.passed / (v.passed + v.failed) : 0,
+            passed: v.passed,
+            failed: v.failed
+          }))
+        : []
+    })
+  })
 
   // 环境截图：截取运行中环境窗口当前视口，返回 PNG（data URL）。
   // 用于 SEO 报告 / 收录检测 / A-B 测试证据 / 竞品调研留痕等；必须在环境运行时执行——

@@ -224,6 +224,7 @@ export default function Environments() {
   const [healthReport, setHealthReport] = useState<HealthReportWithFixes | null>(null)
   // 一键修复一致性
   const [fixing, setFixing] = useState(false)
+  const [resettingBaseline, setResettingBaseline] = useState(false)
   const [fixResult, setFixResult] = useState<{ applied: string[]; before: Record<string, unknown>; after: Record<string, unknown>; summary: string } | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [healthName, setHealthName] = useState('')
@@ -879,6 +880,81 @@ export default function Environments() {
           message.error((e as Error).message)
         } finally {
           setFixing(false)
+        }
+      }
+    })
+  }
+
+  /**
+   * 重置体检基线。
+   *
+   * 什么时候需要：基线是在「上一次批量体检」时建的。若那次刚好赶上网络抖动、
+   * 或用户只挑了状态最差的一批环境去跑，基线本身就很差——之后每次体检都会
+   * 持续报回归，而用户除了看着红色告警之外没有任何自救办法。
+   *
+   * 必须提示的代价：**若当前确实存在注入回归，重置等于把它抹掉**，此后不再告警。
+   * 所以先查基线现状（GET /health/baseline）并展示出来，让用户看到
+   * 「基线本身的通过率是多少」——这通常就是误报的根因。
+   */
+  const confirmResetBaseline = async () => {
+    if (resettingBaseline) return
+    let info: { exists: boolean; savedAt: string | null; probed: number; avgScore: number; items: { key: string; passRate: number }[] } | null = null
+    try {
+      info = await api.get('/api/health/baseline')
+    } catch (e) {
+      message.error((e as Error).message)
+      return
+    }
+    if (!info?.exists) {
+      message.info('当前没有体检基线，无需重置')
+      return
+    }
+    // 基线里通过率明显偏低（<50%）的项列出来——这些正是「基线建歪了」的证据
+    const weak = info.items.filter((i) => i.passRate < 0.5).sort((a, b) => a.passRate - b.passRate)
+    Modal.confirm({
+      title: '重置体检基线？',
+      width: 560,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div>
+            当前基线建于 <b>{info.savedAt ? dayjs(info.savedAt).format('YYYY-MM-DD HH:mm') : '—'}</b>
+            ，样本 {info.probed} 个环境，平均分 {info.avgScore}。
+          </div>
+          {weak.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <b>基线本身就偏低的项目</b>（很可能是误报回归的根因）：
+              <ul style={{ paddingLeft: 18, margin: '4px 0 0' }}>
+                {weak.slice(0, 5).map((i) => (
+                  <li key={i.key}>
+                    {HEALTH_LABELS[i.key] || i.key}：{Math.round(i.passRate * 100)}%
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 10 }}
+            message="重置后，下次批量体检会用当前状态重新建立基线。"
+            description="如果当前确实存在注入回归，重置会把它抹掉，此后不再告警。确认基线确实建歪了再操作。"
+          />
+        </div>
+      ),
+      okText: '确认重置',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setResettingBaseline(true)
+        try {
+          const res = await api.post<{ hadBaseline: boolean }>('/api/health/baseline/reset')
+          message.success(res.hadBaseline ? '基线已重置，下次批量体检将重新建立' : '当前本就无基线')
+          setBatchHealthData(null)
+          load()
+        } catch (e) {
+          message.error((e as Error).message)
+        } finally {
+          setResettingBaseline(false)
         }
       }
     })
@@ -1763,6 +1839,17 @@ export default function Environments() {
                 style={{ marginBottom: 16 }}
                 type={batchHealthData.baseline.regressed.length ? 'error' : batchHealthData.baseline.firstRun ? 'info' : 'success'}
                 showIcon
+                action={
+                  <Button
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={resettingBaseline}
+                    onClick={confirmResetBaseline}
+                    title="基线是上次体检的结果。若它在异常期建立（如网络抖动时），会持续误报回归"
+                  >
+                    重置基线
+                  </Button>
+                }
                 message={
                   batchHealthData.baseline.regressed.length
                     ? `检测到 ${batchHealthData.baseline.regressed.length} 个检查项相对上次集体下滑 —— 若非有意改动注入逻辑，可能是注入代码被改坏了`
