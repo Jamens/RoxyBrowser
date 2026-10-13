@@ -9,6 +9,160 @@
 
 ---
 
+## 2026-10-13 · 新增：设备级会话撤销（普通登出只踢本设备）+ 环境数据分区生命周期清理
+
+这两项都是「用户能直接感知的行为变更」，且都改变了既有语义，故并列记录。
+
+### 新增
+
+- **普通「退出登录」改为仅本设备失效**（`2a7e7ae`）：此前 `POST /auth/logout` 会把用户的 `tokenVersion` 加一，
+  **该账号所有设备的会话一起失效**——在自己电脑上登出，手机上也没了。改为：
+  - JWT 新增 `dev` 声明（设备指纹 = User-Agent 的哈希，纯函数、零 Node 依赖，签发侧与校验侧共用一份）；
+  - 用户行新增 `revokedDevices` 存设备级撤销列表（去重 + TTL 回收 + 50 条硬上限，避免黑名单无界增长）；
+  - `POST /auth/logout` 只撤销当前设备，`POST /auth/logout-all` 仍是全端撤销，两者语义在 README 里写死。
+  - **升级不踢人**：旧令牌的 `dev` 缺失，校验时跳过设备判定。
+  - **拿不到 UA 时降级为全设备撤销**并 `console.warn`——宁可多踢一次也不给「登出后仍有效」留口子。
+  - ⚠️ **升级已有数据库的用户需手动执行 `pnpm db:sync`**（新增了 `users.revokedDevices` 列）。
+- **环境数据分区生命周期清理**（`234e117`）：彻底删除环境时，一并清理该环境的持久化分区
+  `userData/Partitions/env-<id>/`。
+  - **根因不是磁盘增长，是串号**：删环境后 localStorage / IndexedDB / Service Worker 缓存仍留在盘上，
+    id 被复用时新环境会继承旧环境的登录态——指纹浏览器最不能容忍的串号。
+  - 两步清理：`session.clearStorageData()` + `clearCache()`，再 `rm -rf` 分区目录（带 `maxRetries` 重试）。
+  - 另加手动入口 `POST /profiles/:id/clear-partition` + 环境列表「清理浏览器数据」按钮——
+    真实磁盘压力往往来自**还在用**的环境，用户不会为了清缓存去删环境。
+  - **清理失败不阻断删除**（记录已没了，此时把用户卡在报错里毫无意义），但结果如实写进审计日志与响应字段 `partitionCleared`。
+- **回收站批量恢复 / 批量彻底删除**（`2be41f3`）：勾选后批量操作，逐条独立判定（一条失败不影响其他），
+  拒绝原因如实回报（`rejected` 数组）。纯判定逻辑抽到 `shared/trashBatch.ts`，可离线单测。
+- **环境窗口并发上限 + 主进程崩溃兜底**（`f450e7e`）：修「打开三个窗口后整个应用闪退」。
+  上限判定抽到 `shared/windowLimit.ts`（纯函数、可单测）；崩溃后重启时不再丢失用户数据。
+
+### 修复
+
+- **限流（429）被误判为会话失效**（`fc61016`）：这是「点着点着就退出登录」的真正根因。
+  之前只要响应带 401/403 就跳登录页，而限流返回的 429 在某些路径下走进了同一分支。
+  两者必须严格区分：**429 是「你太快了」，401 才是「你掉线了」**。
+- **401 一律跳登录页且失效原因不可见**（`a41b8c6`）：补充失效原因展示，让「为什么被登出」可见。
+- **渲染进程崩溃后环境卡在 running**（`8caa3ab`）：用户只能重启应用才能恢复。启动自愈之外，
+  增加崩溃事件监听，崩溃即回收该环境的状态标记。
+
+### 验证
+
+- 新增 `tests/envPartition.test.cjs`（7 项）、`tests/trashBatch.test.cjs`、`tests/windowLimit.test.cjs`、
+  `tests/sessionRevoke.test.cjs`（13 组）—— 均为纯函数、可离线单测。
+- `pnpm test` 全绿。
+
+---
+
+## 2026-10-13 · 新增：智能助手补齐五类动作 + 新增 collect 批量编排
+
+助手此前只能开窗、跑脚本、改名、删东西，「帮我建 10 个环境」「给这些环境批量换代理」这类话一律做不到。
+
+### 新增动作
+
+| 动作 | 危险级 | 说明 |
+| -- | -- | -- |
+| `healthcheckEnv` | safe | 复用 `buildHealthReport`，与 UI 体检同一套判定口径 |
+| `createEnv` | medium | 批量创建，`count` 上限 50，`seq` 从 1001 起（与「快速创建」一致） |
+| `importEnvs` | medium | 复用 `exporters.importProfileItems`，与 UI 导入 / 全空间快照导入**同源** |
+| `randomizeFingerprints` | medium | 批量重随机指纹 |
+| `batchAssignProxy` | medium | 批量绑定 / 解绑代理（`proxyId: null` 表示解绑） |
+| `batchDeleteEnvs` | destructive | 批量软删除（进回收站，可还原） |
+
+### 新增 `collect` 编排（`shared/assistantPlan.ts`）
+
+此前只有 `forEach`（N 行 → N 条独立动作），适合「把 3 个过期代理**逐个**删掉」。
+但「给这 12 个环境**批量**换代理」必须是**一条**动作——否则用户要确认 12 次，
+且中途失败会留下半改半不改的状态。让模型自己枚举 12 个 id 更是错漏高发。
+
+新增 `collect: { fromQuery, collect: 'profileIds' }`：所有查询行的 `_id` 汇总进一条动作。
+
+- 汇总时**去重**（`enrich` 补全会产生重复行）、**剔除非法 id**（0 / 负数 / 小数 / null）、上限 `MAX_COLLECT_IDS = 200`；
+- **空结果 / 越界下标 / 全非法 id → 不产出任何动作**（不能带着 `profileIds: []` 去执行）；
+- 提案新增 `bulk` 字段，与 `batch` **互斥**，前端据此区分渲染（i18n 补齐中英日德）；
+- 提示词里明确要求模型「不要用 `forEach` 做批量动作」「永远不要自己枚举 id」。
+
+### 批量动作的三条硬约束
+
+1. **归属隔离**走 `In(ids)` + `teamId`，member 改不了别人的环境；
+2. **运行中 / 已删除的环境自动跳过**——改指纹、绑代理、删环境都不动正在跑的窗口；
+3. **跳过数如实回报**；全部被跳过时**报错**，而不是回一句「已处理 0 个」。
+
+### 为什么没有 `closeEnv`
+
+助手关掉用户正在用的窗口，可能打断他正在做的操作，而这类现场状态模型无从得知。同理，
+危险分级的判据不是「看起来严不严重」，而是**出错后的可恢复性**：可逆的（改名、绑代理、创建，软删除可回收）
+一律 medium；没有逐条撤销路径的（批量写、改归属）才是 destructive。
+
+### 验证
+
+新增 `tests/assistantPlan.test.cjs`（21 项），覆盖 `collect` 的去重 / 截断 / 空结果 /
+与 `forEach` 的优先级，以及 `resolveRelTime` 的字符串返回约定。
+另用真实 `executeAssistantAction` + DataSource 桩跑了 14 条行为验证（跳过语义 / 归属隔离 /
+解绑 / 不谎报）。`pnpm test` 20 → **21 个**。
+
+---
+
+## 2026-10-13 · 重构：server.ts 按域拆分完成（4247 → 1310 行，内联路由清零）
+
+### 结果
+
+| | 行数 |
+| -- | -- |
+| 拆分前 | 4247 |
+| 拆分后 | **1310** |
+
+**`server.ts` 内的 `router.*` 内联路由数已为 0**，只剩鉴权、中间件、限流、定时调度器、数据库初始化与路由注册。
+业务全部委托给 15 个 `routes/*` 模块（auth / settings / logs / cookies / v1Cookie / proxies /
+accounts / team / extensions / rpa / assistant / v1 / trash / profileCrud / profileWindow /
+profileMigrate / system）。
+
+### 拆分过程中的三次关键判断
+
+- **`apiBase` 是 `export let`**：团队域的 `getApiBase` 必须传**函数**而非值。
+  按值捕获拿到空串，邮件里的邀请链接退化成相对路径 `/accept-invite?token=...`，
+  **收件人点了没反应，且没有任何报错**。
+- **`BrowserBridge` 接口定义在 server.ts 是个隐藏地雷**：v1 拆出后需要引用该类型，
+  若接口留在原地会迫使 `routes/v1` 反向 import server 形成运行时循环依赖。
+  已抽到 `browserBridge.ts`（纯类型、零运行时副作用），server.ts 保留 re-export。
+- **路由遮蔽的精确判据**：Express 按**注册顺序**匹配，先注册者胜。
+  早先按「路径前缀相同」粗筛误报 26 对冲突；按真实语义（同 method + **段数相同** + `:x` 匹配任意一段）
+  重算，全项目只有 **2 对**真冲突：`GET /profiles/export × /profiles/:id`、
+  `GET /profiles/trash × /profiles/:id`。（`DELETE /profiles/:id/purge` 是 3 段而 `:id` 是 2 段，天然不冲突。）
+
+### 自己踩了刚写下的坑（已修）
+
+上一刀把 `profileCrud`（含 `GET /profiles/:id`）注册在了 `trash`（含 `GET /profiles/trash`）**之前**，
+结果回收站页面命中 `:id` 直接报「环境不存在」——正是上一条 commit message 里警告过的情形。
+已交换顺序，并补了一条**按 server.ts 真实顺序装配全部 15 个域**的测试锁住三条顺序敏感路由。
+
+### TypeScript 陷阱（两次踩到）
+
+把 `if (!browserBridge) return; browserBridge.probeFingerprint()` 机械替换成 `getBridge()`
+会引入 5 处 `TS2531`：**函数调用不参与空值收窄**，`if (!getBridge()) return` 之后的
+`getBridge().xxx` 仍被视为可能为 null。正确写法是先 `const bridge = getBridge()` 再判空再用。
+
+### 验证
+
+- **每个新模块起真 Express + 发真 HTTP 请求**断言状态码与响应体，累计 60 余条，
+  重点覆盖：路径遮蔽、`bridge=null` → 500「浏览器引擎未就绪」、idle 环境做体检/截图/检测必须被拦下（不能假绿）、
+  批量操作跳过 running/已删除/模板环境。
+- **路由清单静态比对**：55 → 131，**零丢失**（新增项均为此前已拆出模块的路由）。
+- `pnpm test` 21/21 全绿、`pnpm typecheck` 零错误、`pnpm build` 零告警。
+
+### 收尾
+
+server.ts 剩余部分（鉴权中间件、令牌签发、限流、四个定时调度器、数据库初始化）彼此耦合紧、
+且都依赖 `export let` 的运行时注入，**建议到此为止**，不再按域拆分。
+
+### 顺带修掉
+
+`.gitignore` 的 `.tmp_*/` 末尾斜杠表示**只匹配目录**，一次性的验证脚本 `.tmp_xxx.cjs`
+匹配不上被误提交。已补 `.tmp_*`（`2be9929`）。
+
+---
+
+---
+
 ## 2026-10-13 · perf：启动性能优化（实测驱动，约省 240ms）
 
 **先测后改**，逐阶段实测耗时，不靠猜测：

@@ -72,6 +72,37 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 
 > 与 `POST /api/profiles/:id/duplicate`（单个复制、**指纹原样**）的区别就在微抖动：批量开号用本接口，单环境资料迁移用前者。
 
+### 1.2.1 环境数据分区清理（彻底删除 + 不删环境也能清）
+
+指纹浏览器的环境不是「一条数据库记录」——每个环境还有一个 Chromium 持久化分区
+`userData/Partitions/env-<id>/`，里面装着 localStorage、IndexedDB、Service Worker 缓存。
+
+**为什么这是必须处理的（根因不是磁盘增长，是串号）**：删掉环境后，数据库记录没了，
+但 Chromium 自己写的本地存储还在盘上。数据库 id 是自增复用的，**新环境拿到这个 id 时，
+会直接继承上一个环境的站点登录态**——表现是「明明是新开的号，却已经登着某个站点」。
+这是指纹浏览器最不能容忍的一类串号。
+
+- **随彻底删除自动执行**：两步清理——`session.clearStorageData()` + `clearCache()`，
+  再删分区目录（`rm -rf` 带 `maxRetries: 3` 重试，应对 Windows 上文件被占）。
+- **手动入口**：`POST /api/profiles/:id/clear-partition`，环境列表操作列「清理浏览器数据」按钮。
+  真实磁盘压力往往来自**还在用**的环境（跑一周的账号环境缓存能到几百 MB），
+  用户不会为了清缓存去删环境，所以必须有不丢环境的回收手段。
+- **清理失败不阻断删除**：记录已经没了，此时把用户卡在报错里毫无意义。
+  但结果如实写进审计日志与响应字段 `partitionCleared`，绝不静默吞掉。
+- **运行中的环境硬拦**：窗口正在跑时清分区会让正在使用的页面状态错乱，直接拒绝。
+- 判定逻辑抽到 `shared/envPartition.ts`（纯函数、零 Node 依赖、可离线单测）。
+
+### 1.2.2 回收站批量操作（勾选恢复 / 彻底删除）
+
+环境列表的回收站支持勾选后批量恢复或批量彻底删除。
+
+- **接口**：`POST /api/profiles/batch-restore`、`POST /api/profiles/batch-purge`，
+  body `{ ids: number[] }` → `{ ok, restored|purged, partitionCleared, rejected: [{ id, name, reason }] }`。
+- **逐条独立判定**（`shared/trashBatch.ts` 纯函数）：一条失败不影响其余，
+  但**拒绝原因必须如实回报**——否则用户以为全删了，实际有几个还在。
+- 上限 200 个/次（一次删太多会长时间持锁，且多半是误操作）。
+- 归属校验走 `ownerScope`：批量是批量越权的高发路径，绝不能只信前端传来的 id。
+
 ### 1.3 全空间快照（团队整体打包 / 迁移）
 
 把整个团队空间打包成单个 JSON 一键备份 / 迁移，解决「换机器 / 重装 / 整机迁移」时逐模块导出的繁琐与易漏。
@@ -844,6 +875,22 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
   - 暗色下侧边栏 / 标题栏 / 内容区 / 卡片统一适配；主色随明暗微调（浅色 `#1677ff`、暗色 `#4096ff`）。
   - 主题与自动时段经 `localStorage` 即时套用，无需重启。
 
+### 10.0 账号与会话（登录 / 登出 / 设备级撤销）
+
+- **普通「退出登录」只让本设备失效**：`POST /api/auth/logout` 仅撤销当前设备。
+  此前该接口把用户的 `tokenVersion` 加一，导致**该账号所有设备一起掉线**——
+  在自己电脑上登出，手机上也没了。
+  - JWT 新增 `dev` 声明（设备指纹 = User-Agent 的哈希）；用户行存 `revokedDevices` 设备级撤销列表。
+  - 撤销列表**有界**：去重 + TTL 回收 + 50 条硬上限，避免黑名单无界增长。
+  - 「退出所有设备」保留为独立入口 `POST /api/auth/logout-all`，语义与前者明确区分。
+- **升级不踢人**：旧令牌没有 `dev` 声明，校验时跳过设备判定。
+- **拿不到 User-Agent 时降级为全设备撤销**并 `console.warn`——
+  宁可多踢一次，也不给「登出后仍然有效」留口子。
+- **429 与 401 严格区分**：限流（429）是「你太快了」，会话失效（401）才是「你掉线了」。
+  早期版本把两者混在一起，导致「频繁点几下菜单就被踢出登录」——这是本项目反复出现过的真实故障。
+- ⚠️ **升级已有数据库需手动执行 `pnpm db:sync`**：新增了 `users.revokedDevices` 列
+  （`synchronize` 已改为按需执行，见 README 的「取巧」说明）。
+
 ### 10.1 国家 / 地区与当地时间（含冬夏令时）
 
 自动主题的「当前小时」取自设置里所选**国家**的当地时间，而不是宿主机系统时间——因此在国内把国家设为美国时，白天 / 黑夜按纽约时间判定，而不是北京时间。
@@ -926,15 +973,25 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 1. **敏感拦截**：`api_tokens` / `users` 整体禁查；`proxies.username|password`、`accounts.password`、`cookies.value`、`api_tokens.token`、`users.passwordHash|twoFactorSecret` 等字段后端直接剔除。命中时返回「该数据敏感，暂不提供查询，请到对应模块手动操作」，而不是查询结果。
 2. **只读白名单**：`src/main/assistantSchema.ts` 定义可查实体与字段；`entity` / `field` / `filter` 必须落在白名单内，否则降级或拒绝。查询走 TypeORM QueryBuilder **参数化**，并强制 `teamId` + `ownerId` 隔离（admin 不加 ownerId），`limit` 限制 1~50。
-3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 8 个动作，按 `danger` 分级——
+3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 14 个动作，按 `danger` 分级——
 
 | 分级 | 动作 | 前端确认方式 |
 | --- | --- | --- |
-| `safe` | `openEnv` / `runRpa` | 直接执行 |
-| `medium` | `assignProxy` / `renameProfile` | 确认条 |
-| `destructive` | `deleteEnv` / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
+| `safe` | `openEnv` / `runRpa` / `healthcheckEnv` | 直接执行 |
+| `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* | 确认条 |
+| `destructive` | `deleteEnv` / `batchDeleteEnvs`* / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
 
-动作执行严格复用 server 既有逻辑（删代理先解绑引用、转移环境级联 Cookie / 账号），保证与手动操作行为一致。
+`*` = 批量动作，参数是 `profileIds: number[]` 而非单个 id。详见 [§14.2](#142-批量动作collect-编排)。
+
+**分级的判据不是「看起来严不严重」，而是出错后的可恢复性**：可逆的（改名、绑代理、创建，软删除可回收）
+一律 medium；没有逐条撤销路径的（批量写、改归属）才 destructive。
+
+动作执行严格复用 server 既有逻辑（删代理先解绑引用、转移环境级联 Cookie / 账号、导入复用
+`exporters.importProfileItems`、体检复用 `buildHealthReport`），保证与手动操作行为一致——
+助手另写一套落库/判定逻辑，只会让同一份数据经不同入口得到不同结果。
+
+**刻意不提供 `closeEnv`**：助手关掉用户正在用的窗口，可能打断他正在做的操作，
+而这类现场状态（用户在窗口里进行到哪一步了）模型无从得知。
 
 ### 接口
 
@@ -971,6 +1028,45 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 - 接口：`GET /api/assistant/skills`（列表）、`POST /api/assistant/skills`（保存，校验 name + 模板）、`DELETE /api/assistant/skills/:id`、`POST /api/assistant/skills/:id/run`（复用 `runSkillPlan`）。
 - `executePlan` 是所有路径的唯一执行出口：LLM 路径与技能重跑路径共用，杜绝「技能绕过校验」。
 - **索引对齐**：`executePlan` 内部用与 `plan.queries` **等长**的数组承载查询结果（被禁查 / 跳过的查询位留 `null`），保证 `forEach.fromQuery` 的下标永远对齐原始计划，修复了「前置查询被跳过导致索引错位、forEach 静默 0 动作」的 bug。
+
+#### 批量动作（collect fan-in）
+
+`forEach` 是「N 行 → N 条动作」（fan-out），适合**逐条处理**：「把这 3 个过期代理逐个删掉」。
+
+但「给查出来的这 12 个环境**批量**换代理」必须是**一条**动作（fan-in）——
+否则用户要确认 12 次，且中途失败会留下半改半不改的状态。逐个删也要逐个删，
+一次换绑却必须一次换完。让模型自己枚举 12 个 id 更是错漏高发（本地小模型尤甚）。
+
+故新增 `collect: { fromQuery, collect: 'profileIds' }`：把指定查询的**所有行**汇总成
+**一条**动作，id 收进 `params.profileIds`。
+
+```json
+{
+  "kind": "batchAssignProxy",
+  "collect": { "fromQuery": 0, "collect": "profileIds" },
+  "params": { "proxyId": 7 }
+}
+```
+
+- 汇总时**去重**（`enrich` 反向补全会产生重复行）、**剔除非法 id**（0 / 负数 / 小数 / null）、
+  上限 `MAX_COLLECT_IDS = 200`（真要处理 500 条，用户该去 UI 里勾选 + 分批，
+  而不是让一句话悄悄跑 500 次写操作）。
+- **空结果 / 越界下标 / 全非法 id → 不产出任何动作**——不能带着 `profileIds: []` 去执行。
+- 展开后的动作带 `bulk: { queryIndex, total }`，与 `forEach` 的 `batch` **互斥**。
+  前端据此区分渲染：前者显示单个确认卡片 + 「将影响 N 个环境」橙色标签（i18n 补齐中英日德），
+  后者渲染成 N 条各带按钮。
+- 系统提示里明确要求模型「不要用 `forEach` 做批量动作」「**永远不要自己枚举 id**」。
+
+#### 批量动作的三条硬约束
+
+1. **归属隔离**走 `In(ids)` + `teamId`，member 改不了别人的环境（admin 不加 `ownerId`）；
+2. **运行中 / 已删除的环境自动跳过**——改指纹、绑代理、删环境都不动正在跑的窗口
+   （窗口正在用这套配置跑，改了下一次采集就对不上；删了则进程里还开着、库里已软删，状态自相矛盾）；
+3. **跳过数如实回报**；全部被跳过时**报错**，而不是回一句「已处理 0 个」——
+   只报成功数会让用户以为运行中的窗口也改了。
+
+`batchAssignProxy` 的 `proxyId` 允许显式传 `null`：用户说「批量解绑代理」时这是唯一正确表达，
+因此判空用 `=== null` 而非真值判断。
 
 #### 相对时间标记（防技能时间冻结）
 
