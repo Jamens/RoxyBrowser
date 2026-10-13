@@ -32,8 +32,10 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（8 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（9 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
+pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
+pnpm migrate:secrets --apply  # 真执行迁移
 pnpm clean:out    # 精确回收 out/ 里的陈旧构建产物（默认 dry-run，加 --apply 才真删）
 ```
 
@@ -139,6 +141,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **账号-环境批量关联（应用层）**：账号中心列表勾选多个账号，一键统一绑定到某个目标环境（改写 AccountEntity.profileId）
 - **列表搜索 / 筛选 / 收藏（应用层）**：环境列表与账号列表均支持——环境：关键词搜索（名称/备注/平台）+ 分组筛选；账号：关键词搜索（平台/账号/备注）+ 所属环境筛选 + 平台筛选；两者均可叠加（后端 GET 参数）。两列表均新增首列星标「收藏」与工具栏「仅看收藏」开关，收藏集存于浏览器 localStorage（不落库、不加列），删除后自动裁剪脏 ID。；仅对当前用户可见的账号生效（member 只动自己账号），目标环境须为有效非模板环境。免去逐条在编辑弹窗里选环境。——彻底规避「两个环境共用同一代理」这一防关联大忌（与旧的「绑定代理=全部绑同一代理」反模式相反）。支持按国家 / 类型过滤；已独占合规代理的环境原地保留、运行中的环境不动、池不足的环境标记跳过（绝不强行复用）。分配核心逻辑抽成纯函数 allocateProxies（已离线单测 20 例全绿）。
 - **智能助手 Planner（AI 客服）**：右下角悬浮助手，用自然语言查询全项目数据（环境 / 代理 / 账号 / Cookie / 日志 / 团队…），结果带**深链可一键跳转定位**到对应页面处理；支持顺手执行动作并按危险分级确认（safe 直执行 / medium 确认条 / destructive 强确认 + 审计）。敏感数据（`api_tokens` / `users`、密码 / 令牌字段）后端硬拦截，返回「请手动操作」而非查询结果，详见下节
+- **凭据静态加密**：账号密码 / 代理密码 / 2FA 密钥 / 云端 API Key 全部以 AES-256-GCM 密文入库，密钥来自环境变量或本地文件、**绝不回落默认值**；历史明文可一键迁移，详见下节
 
 各模块的详细说明与接口示例见 [FEATURES.md](./FEATURES.md)。
 
@@ -326,6 +329,21 @@ app.listen(4000)
 - **不会自动跳回**：检测后停在检测站结果页（而不是退回起始页），因为跳回会重新加载、可能丢失用户登录态或表单；需要时请自行后退。
 - **隐私提示**：此功能会把环境窗口的真实指纹发送给第三方站点，UI 已用 Alert 明确告知；对高价值账号环境请谨慎使用。
 
+### 凭据静态加密（AES-256-GCM）
+
+此前 `accounts.password`、`proxies.password`、`users.twoFactorSecret` 与 `app_settings.aiAgent.cloudApiKey` **全部明文入库**——全项目没有任何加解密实现。对一个以「多账号防关联」为卖点、且专门做了 `api_tokens` 敏感拦截的产品，一份 mysqldump 就等于全部店铺账号 + 2FA 长期接管权，是自相矛盾的硬伤。
+
+- **透明加解密**：加解密挂在 TypeORM 的 `ValueTransformer` 上（`entities.ts` 的 `secretTransformer`），「进入实体即加密、离开实体即解密」是默认行为。**这是唯一能防住「以后新增代码忘记加解密」的做法**——凭据散落在账号 CRUD、代理检测、导出、快照、RPA、AI 助手等几十条路径上，手动改造必然漏。
+- **覆盖四类凭据**：`accounts.password`、`proxies.password`、`users.twoFactorSecret`（TOTP 密钥泄漏 = 账号被长期接管，敏感度与密码同级）、`app_settings.aiAgent.cloudApiKey`（JSON 列无 Transformer，在 `getSettings()` / `PUT /settings` 两处收口）。
+- **密文格式**：`rb1:<b64(iv)>:<b64(authTag)>:<b64(ct)>`。前缀用于区分历史明文——上线前的数据没有 `rb1:` 标记，`decryptSecret` 判否即**原样返回**，读取路径完全不受影响（惰性兼容）。
+- **用 GCM 而非 CBC**：认证标签能在密文被篡改（库被改、备份损坏）时**抛错**而非吐出一段垃圾明文。对「密码能否登录」这种场景，静默产出错误值比报错危险得多。上层统一 fail-closed 返回空串——为了一个坏数据让整个列表接口 500 代价过高，而空串会导致登录/连接失败（安全地失败），不会误用错误密码。
+- **密钥管理**（`src/main/secretKey.ts`，与 `jwtSecret.ts` 同构）：`ROXY_SECRET_KEY` 环境变量 > `~/.roxy-clone/secret-key` 持久化文件 > 首次随机生成。**绝不回落任何硬编码默认值**——那等于把全部凭据的安全性寄托在一个公开字符串上。JWT 密钥与凭据密钥是两份独立材料：前者泄漏可伪造登录态，后者泄漏即全部凭据裸奔，影响面不同。
+- **列宽已同步加宽**：密文比明文长（256 字符明文 → 约 385 字符密文）。列宽仍为 256 会被 MySQL **静默截断**，表现为「密码莫名错误」且报错点离病因极远，故 `accounts.password` / `proxies.password` / `users.twoFactorSecret` 统一改为 `SECRET_COLUMN_LENGTH = 512`。
+- **历史数据迁移**：`pnpm migrate:secrets` 扫全表把明文加密，**默认 dry-run**，加 `--apply` 才写库；幂等（已带 `rb1:` 前缀的跳过）。不能只靠读取时惰性加密——长期不用的环境、废弃代理那些行永远不会被读到，密码就会一直以明文躺在库里。
+- **注意**：密钥文件或环境变量一旦更换，旧密文**无法恢复**（这是对称加密的固有性质，非缺陷）。更换前请先导出快照。解密失败时应用会打一条醒目的 error 日志指明原因。
+
+离线单测：`tests/secretCrypto.test.cjs`（40 例全绿）覆盖往返一致（含中文 / emoji / 换行 / 256 字符）、随机 IV、篡改检测、错误密钥 fail-closed、历史明文兼容、空值语义、密钥优先级。
+
 ### 脚本市场（RPA 预设目录）
 
 指纹浏览器的核心场景是跨境电商 / 海外社媒矩阵运营，这类账号的日常操作高度重复。脚本市场把这些高频流程固化为**内置预设**，用户在 RPA 页「脚本市场」Tab 一键安装到自己的脚本库即可回放，省去从零录制。
@@ -356,7 +374,8 @@ src/
 │   ├── apiAudit.ts           # 自动化 API 审计：method+path → action / detail 推导（纯函数，可单测）
 │   ├── webhook.ts            # Webhook 通知引擎：签名 / 事件匹配 / fire-and-forget 投递（纯函数，可单测）
 │   ├── logExport.ts          # 操作日志导出（CSV / JSON）拼装：转义 / BOM / 字段顺序（纯函数，可单测）
-│   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）
+│   ├── entities.ts           # 数据表实体（users/teams/proxies/profiles/accounts/cookies/...）+ 凭据加密 Transformer
+│   ├── secretKey.ts          # 凭据加密密钥：环境变量 > ~/.roxy-clone/secret-key > 随机生成（绝不回落默认值）
 │   ├── agent/                # AI Agent：ollama.ts 本地模型适配 + knowledge.ts 知识检索
 │   ├── browserManager.ts     # 环境窗口管理：独立 session、代理、Cookie 注入、同步转发
 │   ├── browser-preload.ts    # 指纹注入脚本（注入到每个环境窗口的每个页面）
@@ -375,6 +394,7 @@ src/
 ├── shared/                   # 主进程 / 渲染进程共用
 │   ├── types.ts              # DTO 与指纹类型
 │   ├── fingerprint.ts        # 随机指纹生成器（UA / 时区 / 显卡池 / GEO 坐标 / 反追踪开关）
+│   ├── secretCrypto.ts       # 凭据静态加密：AES-256-GCM 加解密 + rb1: 版本前缀 + 历史明文惰性兼容（纯函数，可单测）
 │   ├── trackers.ts           # 追踪器屏蔽：分析 / 广告 / 埋点域名清单与 isTrackerUrl 判定（纯函数，可单测）
 │   ├── webgpu.ts             # WebGPU 指纹：由 WebGL vendor/renderer 推导 GPUAdapterInfo（纯函数，可单测）
 │   ├── webaudio.ts           # WebAudio 指纹：由环境 seed 派生 sampleRate / baseLatency / 声道 / reduction（纯函数，可单测）
@@ -403,8 +423,10 @@ src/
 6. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 7. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 8. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 8 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+9. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 10 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 10. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
+11. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
+12. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
 
 ## 打包分发
 

@@ -9,6 +9,36 @@
 
 ---
 
+## 2026-10-13 · 新增：凭据静态加密（账号密码 / 代理密码 / 2FA 密钥 / 云端 API Key）
+
+### 新增
+
+- **AES-256-GCM 凭据静态加密**（`src/shared/secretCrypto.ts` + `src/main/secretKey.ts`）：此前 `accounts.password`、`proxies.password`、`users.twoFactorSecret` 与 `app_settings.aiAgent.cloudApiKey` **全部明文入库**，全项目 grep `encrypt|cipher` 仅命中 `crypto.randomBytes`（生成令牌），**无任何加解密实现**。对以「多账号防关联」为卖点、且专门做了 `api_tokens` 敏感拦截的产品，一份 mysqldump 即等于全部店铺账号 + 2FA 长期接管权，属自相矛盾的硬伤。
+  - **透明加解密**：加解密挂在 TypeORM `ValueTransformer`（`entities.ts` 的 `secretTransformer`），「进入实体即加密、离开实体即解密」是默认行为。这是唯一能防住「以后新增代码忘记加解密」的做法——凭据散落在账号 CRUD、代理检测、导出、快照、RPA、AI 助手等几十条路径（实测 `browserManager` / `exporters` 均直读 `.password`），手动改造必然漏。
+  - **覆盖四类凭据**：`accounts.password`、`proxies.password`、`users.twoFactorSecret`（TOTP 密钥泄漏 = 账号被长期接管，敏感度与密码同级）、`app_settings.aiAgent.cloudApiKey`（JSON 列无 Transformer，在 `getSettings()` 与 `PUT /settings` 两处收口，`GET /settings` 改为复用 `getSettings()` 避免解密行为分叉）。
+  - **密文格式** `rb1:<b64(iv)>:<b64(authTag)>:<b64(ct)>`：前缀用于区分历史明文——上线前的数据无 `rb1:` 标记，`decryptSecret` 判否即**原样返回**，读取路径完全不受影响。
+  - **用 GCM 而非 CBC**：认证标签能在密文被篡改时**抛错**而非吐出垃圾明文。对「密码能否登录」场景，静默产出错误值比报错危险得多。上层统一 fail-closed 返回空串——为一个坏数据让整个列表接口 500 代价过高，而空串会安全地失败（登录/连接失败），不会误用错误密码。
+  - **密钥管理**（`secretKey.ts`，与 `jwtSecret.ts` 同构）：`ROXY_SECRET_KEY` 环境变量 > `~/.roxy-clone/secret-key` 持久化 > 首次随机生成，**绝不回落任何硬编码默认值**。与 JWT 密钥是两份独立材料：前者泄漏可伪造登录态，后者泄漏即全部凭据裸奔，影响面不同。密钥材料统一经 `deriveKey()` 做 sha256 派生成固定 32 字节，避免环境变量配了非 hex 字符串时 `createCipheriv` 抛「Invalid key length」造成「同配置不同机器时好时坏」。
+  - **列宽同步加宽（关键）**：密文比明文长，256 字符明文 → 约 385 字符密文（`maxCiphertextLength` 可算）。列宽仍为 256 会被 MySQL **静默截断**，表现为「密码莫名错误」且报错点离病因极远，故三列统一改为 `SECRET_COLUMN_LENGTH = 512`。
+- **历史明文迁移脚本**（`scripts/migrate-secrets.ts` + `pnpm migrate:secrets`）：扫全表把明文加密成密文，**默认 dry-run**，加 `--apply` 才写库；幂等（带 `rb1:` 前缀的跳过）。不能只靠读取时惰性加密——长期不用的环境、废弃代理那些行永远不会被读到，密码会一直以明文留在库里。连接失败给可操作提示（README 的 docker run 示例）而非裸 errno。
+- **离线单测**（`tests/secretCrypto.test.cjs`，40 例全绿）：往返一致（含中文 / emoji / 换行 / 256 字符）、随机 IV 保证同明文两次密文不同、篡改检测、错误密钥与「带前缀但格式损坏」均 fail-closed、历史明文惰性兼容、空值语义（空串不加密，「无密码」与「有密码」可区分）、密钥优先级、跨密钥轮换场景不静默出错值。
+
+### 修复
+
+- **测试编译产物层级漂移**（`scripts/run-tests.mjs` + 各测试 require 路径）：tsc 未显式指定 `--rootDir` 时，会按「当前编译文件集的公共祖先目录」推算，导致同一份代码在不同批次下产物层级不一致——`jwtSecret` 编译出扁平 `.tmp_jwt/jwtSecret.js`，而一旦 `entities.ts` 引入新依赖就变成 `.tmp_ck/main/cookieText.js`，既有测试的 require 路径时灵时不灵（`cookieText` 被连带打红）。已显式钉死 `--rootDir src` 使层级恒定，并把 9 个测试的 require 路径统一为带 `shared/` `main/` 前缀的形式。
+
+### 验证
+
+- `pnpm test` **10/10 全绿**（新增 secretCrypto，既有 9 个全部保持通过）。
+- `pnpm typecheck` 零错误；`pnpm build` 构建成功零告警（renderer 产物结构不变）。
+
+### 注意事项
+
+- 密钥文件或环境变量一旦更换，旧密文**无法恢复**（对称加密固有性质，非缺陷）。更换前请先导出全空间快照。
+- 全新安装的数据库列宽已是 512；存量库在应用下次启动时由 `synchronize` 自动加宽（纯 ALTER，不丢数据）。建议随后跑一次 `pnpm db:check` 确认无破坏性变更。
+
+---
+
 ## 2026-10-06 · 修复：实体注册遗漏（全新安装必崩）+ 发版护栏与首片拆分
 
 ### 修复
