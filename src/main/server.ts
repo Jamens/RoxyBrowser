@@ -3,8 +3,8 @@ import express, { type Request, type Response, type NextFunction, type Express }
 import cors from 'cors'
 import http from 'http'
 import { homedir } from 'os'
-import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync, existsSync, statSync, readdirSync, unlinkSync } from 'fs'
-import { join, sep } from 'path'
+import { mkdirSync, writeFileSync, statSync, readdirSync, unlinkSync } from 'fs'
+import { join } from 'path'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { getJwtSecret } from './jwtSecret'
@@ -57,8 +57,7 @@ import {
 import { randomFingerprint, defaultFingerprint, listFingerprintPresets, normalizeFingerprint, deriveJitteredFingerprint } from '../shared/fingerprint'
 import { getEnvExpiresAt } from '../shared/envExpiry'
 import { planBatch, canPurge, canRestore, type TrashItemLike } from '../shared/trashBatch'
-import { substituteSteps } from '../shared/rpa'
-import { MARKET_SCRIPTS } from './rpaMarket'
+import { substituteSteps, normalizeVariables } from '../shared/rpa'
 import type { Fingerprint, AppSettings, OSKind, RpaStep, AIAgentSettings, WebhookConfig } from '../shared/types'
 import { DEFAULT_START_URL, DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 import { buildHealthReport, type FingerprintProbe, type HealthReport } from '../shared/healthcheck'
@@ -102,12 +101,11 @@ import {
   replayRpaScript,
   closeWindow,
   applyCookies,
-  startRpaRecording,
-  stopRpaRecording,
-  isRpaRecording,
-  rpaRecordCount,
   clearProfilePartition
 } from './browserManager'
+// 扩展管理与 RPA 脚本域已拆出；下面这些浏览器侧能力随之只在 routes/rpa.ts 里被引用。
+import { registerExtensionRoutes } from './routes/extensions'
+import { registerRpaRoutes } from './routes/rpa'
 
 // ---------- 配置 ----------
 // 默认端口 3306（Docker / 官方安装版的 MySQL 默认监听端口）。环境变量 DB_PORT 仍可覆盖。
@@ -754,30 +752,6 @@ async function startProxyCheckScheduler(): Promise<void> {
   console.log(`[roxy] 代理定时巡检已启动，间隔 ${interval} 分钟`)
 }
 
-// 定时执行间隔归一化：非法 / 过小一律回到默认 30 分钟（>=1 才有意义）
-function normalizeScheduleInterval(v: unknown): number {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return 30
-  return Math.max(1, Math.min(525600, Math.round(n)))
-}
-
-// RPA 变量：接受对象或 [key,value] 数组，统一规整成 {k: string}；空 / 非法 → {}
-function normalizeVariables(v: unknown): Record<string, string> | null {
-  if (!v || typeof v !== 'object') return null
-  const out: Record<string, string> = {}
-  if (Array.isArray(v)) {
-    for (const item of v as Array<{ key?: unknown; value?: unknown }>) {
-      const k = String(item?.key ?? '').trim()
-      if (k) out[k] = String(item?.value ?? '')
-    }
-  } else {
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (k) out[k] = String(val ?? '')
-    }
-  }
-  return Object.keys(out).length ? out : null
-}
-
 // ===== RPA 定时执行调度器（对标「定时任务到点自动开工」）=====
 // 每 30s 扫一次开启了定时的脚本；到点且目标环境处于运行态才执行。
 // 环境未运行 → 跳过本轮（写日志），绝不自动开窗——自动拉起窗口会绕过
@@ -976,30 +950,6 @@ function startRpaScheduleScheduler(): void {
   }, RPA_SCAN_MS)
   rpaScheduleTimer.unref?.()
   console.log(`[roxy] RPA 定时执行调度器已启动（每 ${RPA_SCAN_MS / 1000}s 扫描一次）`)
-}
-
-// ---------- 扩展（浏览器插件）存储辅助 ----------
-// 扩展以「解压目录」形式存放在 userData/extensions/<id>/（Electron 仅支持解压目录，不支持 .crx）
-function extUserDir(): string {
-  return join(app.getPath('userData'), 'extensions')
-}
-function readExtensionManifest(dir: string): Record<string, unknown> | null {
-  const mPath = join(dir, 'manifest.json')
-  if (!existsSync(mPath)) return null
-  try {
-    return JSON.parse(readFileSync(mPath, 'utf8')) as Record<string, unknown>
-  } catch {
-    return null
-  }
-}
-function pickExtensionIcon(manifest: Record<string, unknown> | null): string {
-  const icons = (manifest?.icons ?? {}) as Record<string, string>
-  if (!icons || Object.keys(icons).length === 0) return ''
-  const key = ['128', '96', '64', '48', '32', '16'].find((k) => icons[k]) || Object.keys(icons)[0]
-  return icons[key] ? String(icons[key]).replace(/^\//, '') : ''
-}
-function normalizeRelPath(p: string): string {
-  return p.split('/').join(sep)
 }
 
 // ---------- API 路由 ----------
@@ -2789,329 +2739,10 @@ function isoOf(d: Date | null | undefined): string | null {
   })
 
   // ---------- 扩展管理（浏览器插件） ----------
-  router.get('/extensions', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ExtensionEntity)
-    const list = await repo.find({ where: ownerScope(req), order: { id: 'DESC' } })
-    res.json(
-      list.map((e) => ({
-        id: e.id,
-        name: e.name,
-        version: e.version,
-        description: e.description,
-        createdAt: e.createdAt
-      }))
-    )
-  })
-
-  router.post('/extensions', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const body = req.body || {}
-    const repo = AppDataSource.getRepository(ExtensionEntity)
-    const ext = repo.create({ teamId: req.tid!, ownerId: req.uid!, name: '', version: '', description: null, extPath: '', iconPath: '' })
-    const saved = await repo.save(ext)
-    const dest = join(extUserDir(), String(saved.id))
-    mkdirSync(dest, { recursive: true })
-    try {
-      if (body.localPath) {
-        const src = String(body.localPath)
-        if (!existsSync(src) || !statSync(src).isDirectory()) {
-          throw new Error('本地路径不存在或不是目录')
-        }
-        if (!existsSync(join(src, 'manifest.json'))) {
-          throw new Error('该目录不含 manifest.json，不是有效的扩展目录')
-        }
-        cpSync(src, dest, { recursive: true })
-      } else if (Array.isArray(body.files) && body.files.length) {
-        for (const f of body.files as Array<{ path: string; data: string }>) {
-          if (!f || !f.path) continue
-          const target = join(dest, normalizeRelPath(f.path))
-          mkdirSync(join(target, '..'), { recursive: true })
-          writeFileSync(target, Buffer.from(f.data || '', 'base64'))
-        }
-        if (!existsSync(join(dest, 'manifest.json'))) {
-          throw new Error('上传内容中未找到 manifest.json，不是有效的扩展目录')
-        }
-      } else {
-        throw new Error('请提供 localPath（本地已解压扩展目录）或 files（上传的目录文件列表）')
-      }
-      const manifest = readExtensionManifest(dest)
-      if (!manifest) {
-        throw new Error('目录中没有 manifest.json，无法识别为扩展')
-      }
-      saved.name = String(manifest.name || '未命名扩展').slice(0, 128)
-      saved.version = String(manifest.version || '').slice(0, 32)
-      saved.description = manifest.description ? String(manifest.description) : null
-      saved.extPath = `extensions/${saved.id}`
-      const iconRel = pickExtensionIcon(manifest)
-      saved.iconPath = iconRel ? `extensions/${saved.id}/${iconRel}` : ''
-      await repo.save(saved)
-      await writeLog(req, 'create_extension', `添加扩展「${saved.name}」(#${saved.id})`)
-      res.json({ id: saved.id, name: saved.name, version: saved.version, description: saved.description, createdAt: saved.createdAt })
-    } catch (e) {
-      await repo.remove(saved).catch(() => {})
-      rmSync(dest, { recursive: true, force: true })
-      res.status(400).json({ message: (e as Error).message })
-    }
-  })
-
-  router.get('/extensions/:id/icon', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ExtensionEntity)
-    const ext = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!ext || !ext.iconPath) return res.status(404).end()
-    const abs = join(app.getPath('userData'), ext.iconPath)
-    if (!existsSync(abs)) return res.status(404).end()
-    res.sendFile(abs)
-  })
-
-  router.delete('/extensions/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(ExtensionEntity)
-    const ext = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!ext) return res.status(404).json({ message: '扩展不存在' })
-    const dest = join(extUserDir(), String(ext.id))
-    // remove 后实体主键会被清空，先取出来写日志
-    const { id: extId, name } = ext
-    await repo.remove(ext)
-    rmSync(dest, { recursive: true, force: true })
-    await writeLog(req, 'delete_extension', `删除扩展「${name}」(#${extId})`)
-    res.json({ ok: true })
-  })
+  registerExtensionRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   // ===== RPA 脚本录制 / 回放 =====
-  // 注意路由顺序：/rpa/record/* 等静态路径必须排在 /rpa/:id 之前（项目既有约定）
-  const rpaRepo = () => AppDataSource.getRepository(RpaScriptEntity)
-
-  // 导出单个脚本为 JSON 文件（按 :id 路由在下方，但 export 是两段式，必须放在 /rpa/:id 之前）
-  router.get('/rpa/export/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const s = await rpaRepo().findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!s) return res.status(404).json({ message: '脚本不存在' })
-    const data = {
-      id: s.id,
-      name: s.name,
-      remark: s.remark,
-      steps: s.steps,
-      variables: s.variables || {}
-    }
-    res.setHeader('Content-Type', 'application/json; charset=utf-8')
-    res.setHeader('Content-Disposition', `attachment; filename="rpa-${s.id}-${encodeURIComponent(s.name)}.json"`)
-    res.send(JSON.stringify(data, null, 2))
-  })
-
-  // 导入脚本（接受单个对象、{items:[...]} 或数组）。新建到当前团队，定时配置重置。
-  router.post('/rpa/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const payload = req.body || {}
-    const arr = Array.isArray(payload)
-      ? payload
-      : Array.isArray((payload as { items?: unknown }).items)
-        ? (payload as { items: unknown[] }).items
-        : [payload]
-    if (!Array.isArray(arr) || !arr.length) return res.status(400).json({ message: '没有可导入的数据' })
-    const created: number[] = []
-    for (const item of arr as Array<Record<string, unknown>>) {
-      if (!item || !item.name || !Array.isArray(item.steps)) continue
-      const saved = await rpaRepo().save(
-        rpaRepo().create({
-          teamId: req.tid!,
-          ownerId: req.uid!,
-          name: String(item.name).slice(0, 128),
-          remark: String(item.remark || '').slice(0, 512),
-          steps: item.steps,
-          variables: normalizeVariables(item.variables),
-          scheduleEnabled: false,
-          scheduleIntervalMin: 30,
-          scheduleProfileId: null
-        })
-      )
-      created.push(saved.id)
-    }
-    if (!created.length) return res.status(400).json({ message: '没有有效的脚本可导入（需含 name 与 steps）' })
-    await writeLog(req, 'import_rpa_script', `导入 RPA 脚本 ${created.length} 个`)
-    res.json({ ok: true, created })
-  })
-
-  // ===== RPA 市场（内置预设脚本目录）=====
-  // 注意：/rpa/market 与 /rpa/market/install/:id 是静态前缀，必须排在 /rpa/:id 之前（既有约定）。
-  router.get('/rpa/market', authMiddleware, async (_req: AuthedRequest, res: Response) => {
-    res.json(
-      MARKET_SCRIPTS.map((m) => ({
-        id: m.id,
-        name: m.name,
-        description: m.description,
-        category: m.category,
-        tags: m.tags,
-        stepCount: m.steps.length,
-        variables: m.variables,
-        note: m.note || '',
-        steps: m.steps
-      }))
-    )
-  })
-
-  // 从市场安装一个预设脚本到当前团队（克隆为一个新脚本，定时配置重置；用户可随后编辑/回放）
-  router.post('/rpa/market/install/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const m = MARKET_SCRIPTS.find((x) => x.id === req.params.id)
-    if (!m) return res.status(404).json({ message: '市场脚本不存在' })
-    const saved = await rpaRepo().save(
-      rpaRepo().create({
-        teamId: req.tid!,
-        ownerId: req.uid!,
-        name: m.name,
-        remark: `[市场] ${m.description}`.slice(0, 512),
-        steps: m.steps,
-        variables: normalizeVariables(m.variables),
-        scheduleEnabled: false,
-        scheduleIntervalMin: 30,
-        scheduleProfileId: null
-      })
-    )
-    await writeLog(req, 'install_rpa_market', `从市场安装脚本「${m.name}」(#${saved.id})`)
-    res.json({ ok: true, id: saved.id })
-  })
-
-  router.get('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const list = await rpaRepo().find({ where: ownerScope(req), order: { id: 'DESC' } })
-    res.json(
-      list.map((s) => ({
-        id: s.id,
-        name: s.name,
-        remark: s.remark,
-        steps: s.steps as unknown as RpaStep[],
-        variables: s.variables || {},
-        scheduleEnabled: s.scheduleEnabled,
-        scheduleIntervalMin: s.scheduleIntervalMin,
-        scheduleProfileId: s.scheduleProfileId,
-        lastScheduledRunAt: s.lastScheduledRunAt,
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt
-      }))
-    )
-  })
-
-  router.post('/rpa', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const b = req.body || {}
-    if (!b.name || !Array.isArray(b.steps)) return res.status(400).json({ message: '名称和步骤不能为空' })
-    const saved = await rpaRepo().save(
-      rpaRepo().create({
-        teamId: req.tid!,
-        ownerId: req.uid!,
-        name: String(b.name).slice(0, 128),
-        remark: String(b.remark || '').slice(0, 512),
-        steps: b.steps,
-        variables: normalizeVariables(b.variables),
-        scheduleEnabled: !!b.scheduleEnabled && !!b.scheduleProfileId,
-        scheduleIntervalMin: normalizeScheduleInterval(b.scheduleIntervalMin),
-        scheduleProfileId: b.scheduleProfileId || null
-      })
-    )
-    await writeLog(req, 'create_rpa_script', `创建 RPA 脚本「${saved.name}」(#${saved.id})，${b.steps.length} 步`)
-    res.json({ id: saved.id })
-  })
-
-  router.put('/rpa/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = rpaRepo()
-    const s = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!s) return res.status(404).json({ message: '脚本不存在' })
-    const b = req.body || {}
-    if (b.name !== undefined) s.name = String(b.name).slice(0, 128)
-    if (b.remark !== undefined) s.remark = String(b.remark).slice(0, 512)
-    if (Array.isArray(b.steps)) s.steps = b.steps
-    if (b.variables !== undefined) s.variables = normalizeVariables(b.variables)
-    if (b.scheduleIntervalMin !== undefined) s.scheduleIntervalMin = normalizeScheduleInterval(b.scheduleIntervalMin)
-    if (b.scheduleProfileId !== undefined) s.scheduleProfileId = b.scheduleProfileId || null
-    if (b.scheduleEnabled !== undefined) s.scheduleEnabled = !!b.scheduleEnabled && !!s.scheduleProfileId
-    // 开启定时必须已绑定目标环境（save 前校验，避免落库一个永远不会执行的配置）
-    if (s.scheduleEnabled && !s.scheduleProfileId) {
-      return res.status(400).json({ message: '开启定时执行前请先选择目标环境' })
-    }
-    await repo.save(s)
-    await writeLog(req, 'update_rpa_script', `更新 RPA 脚本「${s.name}」(#${s.id})`)
-    res.json({ ok: true })
-  })
-
-  router.delete('/rpa/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = rpaRepo()
-    const s = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!s) return res.status(404).json({ message: '脚本不存在' })
-    // remove 后实体主键会被清空，先取出来写日志
-    const { id, name } = s
-    await repo.remove(s)
-    await writeLog(req, 'delete_rpa_script', `删除 RPA 脚本「${name}」(#${id})`)
-    res.json({ ok: true })
-  })
-
-  // 开始录制（环境需处于运行态）
-  router.post('/rpa/record/start', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profileId = Number((req.body || {}).profileId)
-    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    // 归属校验（普通用户只能录制自己的环境）
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({
-      where: { id: profileId, ...ownerScope(req) }
-    })
-    if (!profile) return res.status(404).json({ message: '环境不存在' })
-    try {
-      ;startRpaRecording(profileId)
-    } catch (e) {
-      return res.status(400).json({ message: (e as Error).message })
-    }
-    await writeLog(req, 'rpa_record_start', `开始录制 RPA 脚本（环境「${profile.name}」#${profileId}）`)
-    res.json({ ok: true })
-  })
-
-  // 停止录制：返回采集到的步骤，由前端命名后调 POST /rpa 保存
-  router.post('/rpa/record/stop', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profileId = Number((req.body || {}).profileId)
-    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const steps = stopRpaRecording(profileId)
-    res.json({ steps })
-  })
-
-  // 录制状态（轮询用）
-  router.get('/rpa/record/status', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profileId = Number((req.query || {}).profileId)
-    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const recording = isRpaRecording(profileId)
-    const count = rpaRecordCount(profileId)
-    res.json({ recording, count })
-  })
-
-  // 回放：在指定环境窗口执行脚本（后台异步执行，结果写操作日志）
-  router.post('/rpa/:id/run', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const profileId = Number((req.body || {}).profileId)
-    if (!profileId) return res.status(400).json({ message: 'profileId 不能为空' })
-    const s = await rpaRepo().findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (!s) return res.status(404).json({ message: '脚本不存在' })
-    const profile = await AppDataSource.getRepository(ProfileEntity).findOne({
-      where: { id: profileId, ...ownerScope(req) }
-    })
-    if (!profile) return res.status(404).json({ message: '环境不存在' })
-    // 变量替换：回放时可传入覆盖变量；否则用脚本自带变量
-    const reqVars = (req.body || {}).variables
-    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
-      ? normalizeVariables(reqVars) || {}
-      : s.variables || {}
-    const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
-    // 前置校验环境必须处于运行态（否则后台任务会静默失败，用户无从得知）
-    const runningIds = getRunningWindowIds()
-    if (!runningIds.includes(profileId)) {
-      return res.status(400).json({ message: '环境未运行，请先打开环境再回放' })
-    }
-    // 回放可能持续数分钟，不阻塞请求；完成 / 中止写操作日志
-    ;(async () => {
-      let executed = 0
-      let err = ''
-      try {
-        executed = await replayRpaScript(profileId, steps)
-      } catch (e) {
-        err = (e as Error).message
-      }
-      await writeLog(
-        req,
-        'rpa_run',
-        err
-          ? `回放脚本「${s.name}」失败：${err}`
-          : `回放脚本「${s.name}」完成（环境「${profile.name}」#${profileId}，执行 ${executed}/${steps.length} 步）`
-      )
-    })()
-    res.json({ started: true, steps: steps.length })
-  })
+  registerRpaRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   router.use('/v1', wrapAsync(v1))
   return wrapAsync(router)
