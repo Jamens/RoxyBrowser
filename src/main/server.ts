@@ -58,7 +58,6 @@ import type { AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/type
 import { DEFAULT_SETTINGS, normalizeSearchEngine } from '../shared/types'
 // buildSnapshot 仍被「快照定时自动备份」调度器使用；其余导出/导入器已随routes/profileMigrate.ts 迁走。
 import { buildSnapshot } from './exporters'
-import { getSystemStats } from './systemStats'
 // AI Agent（探针 / 对话）与智能助手 Planner 已拆到 routes/assistant.ts，
 // 连带 ollama / cloud / knowledge / assistantPlanner 的引用一并迁走。
 import { renderAcceptInvitePage } from './acceptInvitePage'
@@ -90,6 +89,7 @@ import { registerRpaRoutes } from './routes/rpa'
 import { registerAssistantRoutes } from './routes/assistant'
 import { registerTrashRoutes } from './routes/trash'
 import { registerProfileCrudRoutes } from './routes/profileCrud'
+import { registerSystemRoutes } from './routes/system'
 import { registerProfileWindowRoutes } from './routes/profileWindow'
 import { registerProfileMigrateRoutes } from './routes/profileMigrate'
 
@@ -969,112 +969,34 @@ function buildApiRouter(): express.Router {
     }
   })
 
-  // ===== 窗口同步开关 =====
-  // body: { enabled: boolean, ids?: number[] } —— ids 为空表示同步到全部已打开窗口
-  router.post('/sync', authMiddleware, (req: Request, res: Response) => {
-    const body = (req.body || {}) as { enabled?: boolean; ids?: unknown }
-    const ids = Array.isArray(body.ids) ? body.ids.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : undefined
-    if (syncToggle) syncToggle({ enabled: !!body.enabled, ids })
-    res.json({ ok: true, enabled: !!body.enabled, ids: ids || [] })
+  // 系统与分组域（窗口同步 / 已打开窗口 / 系统占用 / 环境内新标签页信息 / 分组增删查）
+  // 见 routes/system.ts。syncToggle / windowsProvider 传函数而非值：
+  // 二者由 main 进程在启动后注入，按值捕获拿到 null，开关请求会静默失效。
+  registerSystemRoutes(router, {
+    getDs: () => AppDataSource,
+    getSettings,
+    authMiddleware,
+    syncToggle: (opts) => syncToggle?.(opts),
+    windowsProvider: () => (windowsProvider ? windowsProvider() : [])
   })
 
-  // ===== 已打开的环境窗口（用于选择同步对象） =====
-  router.get('/windows', authMiddleware, (_req: Request, res: Response) => {
-    res.json(windowsProvider ? windowsProvider() : [])
-  })
 
-  // ===== 系统资源占用（主窗口顶栏展示） =====
-  router.get('/system/stats', authMiddleware, async (_req: Request, res: Response) => {
-    res.json(await getSystemStats())
-  })
-
-  // ===== 浏览器环境（环境内新标签页信息，无需登录态） =====
-  router.get('/browser/profile-info/:id', async (req: Request, res: Response) => {
-    const repo = AppDataSource.getRepository(ProfileEntity)
-    const p = await repo.findOne({ where: { id: Number(req.params.id) } })
-    if (!p) return res.status(404).json({ message: '环境不存在' })
-    const settings = await getSettings()
-    // 代理信息一并返回（含检测状态）：起始页据此在「用户点链接之前」就预警。
-    // 环境窗口一旦绑定了不可用的代理，所有站点（包括本可直连的国内站）都会
-    // ERR_PROXY_CONNECTION_FAILED 全挂；不提前说清楚，用户只会以为是搜索功能坏了。
-    let proxy: null | {
-      id: number
-      label: string
-      status: string
-      checked: boolean
-      country: string
-    } = null
-    if (p.proxyId) {
-      const proxyRepo = AppDataSource.getRepository(ProxyEntity)
-      const px = await proxyRepo.findOne({ where: { id: p.proxyId } })
-      if (px) {
-        proxy = {
-          id: px.id,
-          // 形如 socks5://1.2.3.4:1080，直接在页面上告诉用户是哪一条
-          label: `${px.type}://${px.host}:${px.port}`,
-          status: px.status || 'unknown',
-          checked: !!px.lastCheckAt && px.status === 'active',
-          country: px.country || ''
-        }
-      }
-    }
-    res.json({
-      id: p.id,
-      name: p.name,
-      seq: p.seq,
-      platform: p.platform,
-      startUrl: p.startUrl,
-      proxy,
-      searchEngine: settings.searchEngine,
-      fingerprint: {
-        os: p.fingerprint.os,
-        timezone: p.fingerprint.timezone,
-        languages: p.fingerprint.languages,
-        screenWidth: p.fingerprint.screenWidth,
-        screenHeight: p.fingerprint.screenHeight,
-        userAgent: p.fingerprint.userAgent
-      }
-    })
-  })
-
-  // ===== 分组 =====
-  router.get('/groups', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(GroupEntity)
-    const list = await repo.find({ where: ownerScope(req), order: { sort: 'ASC' } })
-    res.json(list)
-  })
-
-  router.post('/groups', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(GroupEntity)
-    const g = await repo.save(repo.create({ teamId: req.tid, ownerId: req.uid!, name: req.body.name, sort: req.body.sort || 0 }))
-    res.json(g)
-  })
-
-  router.delete('/groups/:id', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const repo = AppDataSource.getRepository(GroupEntity)
-    const g = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
-    if (g) await repo.remove(g)
-    if (g) {
-      const profileRepo = AppDataSource.getRepository(ProfileEntity)
-      await profileRepo.update({ ...ownerScope(req), groupId: g.id }, { groupId: null })
-    }
-    res.json({ ok: true })
-  })
+  // 回收站域（软删除：列表 / 恢复 / 彻底删除 / 手动清分区 + 两个批量接口）见 routes/trash.ts。
+  // **必须排在下面 profileCrud 域之前**：本域的 GET /profiles/trash 与 CRUD 域的
+  // GET /profiles/:id 都是 2 段路径，:id 匹配任意一段。谁先注册谁优先 ——
+  // CRUD 在前会让回收站页面命中 :id 然后报「环境不存在」。
+  registerTrashRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   // 环境 CRUD 域（列表 / 导出 / 快速创建 / 单条增删改查 / 换代理线路）见 routes/profileCrud.ts。
-  // **注册位置不可挪动**：静态段 /profiles/export 必须排在 /profiles/:id 之前，
-  // 否则会被 :id 抢先匹配，用户点「导出全部」却收到「环境不存在」。
+  // 本域内 GET /profiles/export 必须排在 GET /profiles/:id 之前（同为 2 段，
+  // 否则点「导出全部」会被当成 id="export" 查库）。
+  // 整块必须在上面的 trash 域之后：那条的 /profiles/trash 同样依赖这一点。
   registerProfileCrudRoutes(router, {
     getDs: () => AppDataSource,
     authMiddleware,
     writeLog,
     mapProfile
   })
-
-  // 回收站域（软删除：列表 / 恢复 / 彻底删除 / 手动清分区 + 两个批量接口）见 routes/trash.ts。
-  // **注册位置不可挪动**：静态段 /profiles/trash 必须排在 /profiles/:id 之前，
-  // 否则会被 :id 抢先匹配，回收站页面直接报「环境不存在」。
-  registerTrashRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
 
   // 环境窗口操作域（开关窗口 / 体检 / 批量体检 / 截图 / 在线检测 / 模板克隆 / 跨团队转移）
   // 见 routes/profileWindow.ts。getBridge 传函数而非值：browserBridge 由 main 进程
