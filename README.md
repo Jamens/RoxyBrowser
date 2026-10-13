@@ -32,7 +32,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（24 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（25 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -456,7 +456,9 @@ app.listen(4000)
 
 - **只修有把握的**：移动端 UA 含具体设备型号（Pixel 8 / iPhone 15 Pro），无法凭空合成，故仅支持 windows ↔ mac 双向替换，其余**明确给出不可修的理由**——否则用户以为"修不了"是工具坏了。
 - **三条硬约束**：运行中的环境直接拒绝（改指纹不作用于已开的窗口，只会让库与窗口彻底对不上）；`tzOffset` 与 `timezone` 必须同步；改完必须重新体检确认（落库字段要经一次窗口内实测才算生效）。
-- **不做无声自动修改**：报告抽屉里列出"可修/需手动"两类，先弹确认把将要改的字段摊开，改完展示 before → after 逐字段对比。判定逻辑在 `src/shared/healthFix.ts`（纯函数、23 项离线单测）。
+- **助手也能修**：动作 `fixConsistency`，可说「把这个环境的一致性修一下」。这里有个必须解决的矛盾——**要知道哪些不一致需要体检，而体检需要窗口开着；但修复又需要窗口关着**（改指纹不作用于运行中的窗口）。一致性三项恰好只看配置 + 代理国家、不需要实测，所以助手在关窗口状态下也能算出来；判定口径与体检共用 `checkConsistency`，不会出现两边说法矛盾。
+- **修复后新暴露的不一致也会一并处理**：时区从上海改成纽约后，原本一致的「语言↔时区」就变成了不一致。故传入全部三项让串行推演基于修复后的中间状态重新判定，否则会出现**修完反而多一处不一致**。
+- **不做无声自动修改**：报告抽屉里列出"可修/需手动"两类，先弹确认把将要改的字段摊开，改完展示 before → after 逐字段对比。判定逻辑在 `src/shared/healthFix.ts`（纯函数、23 项离线单测），一致性判定在 `shared/healthcheck.ts` 的 `checkConsistency`（11 项单测）。
 
 ### 体检基线（发现「注入改坏了」，而不是靠用户自己记得上次多少分）
 
@@ -632,7 +634,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 24 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 25 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。

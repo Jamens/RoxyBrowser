@@ -317,7 +317,18 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
   并提示**重新体检确认**（落库的字段要经一次窗口内实测才算真的生效）。
 - 接口：`POST /api/profiles/:id/fix-consistency`，body `{ keys, preview }`，
   `preview` 默认 true（只回提案不落库）。
-- 判定逻辑在 `src/shared/healthFix.ts`（纯函数、零依赖、23 项离线单测）。
+- **助手动作 `fixConsistency`**：可说「把这个环境的一致性修一下」。参数 `{ profileId }`（`keys` 可省）。
+  - 存在一个必须解决的矛盾：**要知道哪些不一致需要体检，而体检需要窗口开着；但修复又需要窗口关着**
+    （改指纹不作用于运行中的窗口）。一致性三项恰好**只看配置 + 代理国家、不需要实测**，
+    所以助手在关窗口状态下也能算出来。前提是判定口径与体检完全一致——
+    两者共用 `checkConsistency`（`src/shared/healthcheck.ts`），避免「助手说一致、体检说不一致」。
+  - **修复后新暴露的不一致也会被一并处理**：三项之间有修复后才暴露的依赖——
+    时区从上海改成纽约后，原本一致的「语言↔时区」变成了不一致。
+    故传入**全部**三项让 `proposeFixes` 的串行推演基于修复后的中间状态重新判定，
+    而不是只修「修复前判红的那几项」（那样会出现**修完反而多一处不一致**）。
+- 判定逻辑在 `src/shared/healthFix.ts`（纯函数、零依赖、23 项离线单测）；
+  一致性判定抽到 `shared/healthcheck.ts` 的 `checkConsistency`（11 项单测，
+  含与 `buildHealthReport` 逐项比对以证明抽取是零行为变化的重构）。
 
 ### 3. 代理 IP
 
@@ -1083,12 +1094,12 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 1. **敏感拦截**：`api_tokens` / `users` 整体禁查；`proxies.username|password`、`accounts.password`、`cookies.value`、`api_tokens.token`、`users.passwordHash|twoFactorSecret` 等字段后端直接剔除。命中时返回「该数据敏感，暂不提供查询，请到对应模块手动操作」，而不是查询结果。
 2. **只读白名单**：`src/main/assistantSchema.ts` 定义可查实体与字段；`entity` / `field` / `filter` 必须落在白名单内，否则降级或拒绝。查询走 TypeORM QueryBuilder **参数化**，并强制 `teamId` + `ownerId` 隔离（admin 不加 ownerId），`limit` 限制 1~50。
-3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 15 个动作，按 `danger` 分级——
+3. **动作映射**：`ASSISTANT_ACTIONS` 白名单 16 个动作，按 `danger` 分级——
 
 | 分级 | 动作 | 前端确认方式 |
 | --- | --- | --- |
 | `safe` | `openEnv` / `runRpa` / `healthcheckEnv` | 直接执行 |
-| `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* / `batchExtendExpiry`* | 确认条 |
+| `medium` | `assignProxy` / `renameProfile` / `createEnv` / `importEnvs` / `randomizeFingerprints`* / `batchAssignProxy`* / `batchExtendExpiry`* / `fixConsistency` | 确认条 |
 | `destructive` | `deleteEnv` / `batchDeleteEnvs`* / `deleteProxy` / `removeMember` / `transferEnv` | 强确认弹窗（列出确切影响对象）+ 写敏感审计 |
 
 `*` = 批量动作，参数是 `profileIds: number[]` 而非单个 id。详见 [§14.1 多步编排](#141-多步编排与技能库planner-进阶) 的「批量动作（collect fan-in）」小节。
