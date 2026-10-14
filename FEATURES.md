@@ -78,11 +78,25 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 
 - **内容范围**：环境（整环境结构，含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名引用）+ 代理池（结构化，保留国家 / 地区 / 到期等元信息）+ RPA 脚本 + 扩展元数据引用。
 - **导出**：`GET /api/snapshot/export` → 直接下载 `.json`（文件名含团队 id 与时间戳）。
-- **导入**：`POST /api/snapshot/import`，body 为快照 JSON → `{ profiles, proxiesCreated, proxiesSkipped, rpaCreated, extensionsReferenced }`。
+- **导入**：`POST /api/snapshot/import`，body 为快照 JSON → `{ profiles, proxiesCreated, proxiesSkipped, rpaCreated, extensionsReferenced, formatVersion, sourceVersion, migrations, warnings }`。
 - **复用既有导入器**：导出 / 导入直接复用 `src/main/exporters.ts` 中「整环境迁移 / 代理批量 / RPA」各模块的既有逻辑，保证单模块迁移与整团队迁移同源、字段一致。
 - **导入顺序**：先恢复代理池（按名称复用，缺失则新建）→ 再导入环境（引用同名代理）→ 最后导入 RPA（定时配置重置为关闭）。扩展按名称重映射，目标缺同名扩展则忽略引用。
 - **校验**：导入前用 `validateSnapshot()`（`src/shared/snapshot.ts`，纯函数）严格校验 `format` / `version` / `profiles[]`，非法文件直接 400 拒绝，不污染数据库。
+- **版本兼容**（详见 1.3.1）：文件级 `version` 与条目级 `version` 双轨，`migrateSnapshot()` 迁移阶梯 + 未来版本硬拒。
+- **代理元信息保真**：单环境导入的 `proxyDetail` 兜底路径会一并还原 `country` / `region` / `city` / `isp` / `expiresAt` / `status` / `anonymity`。此前只还原 6 个基础字段，导致迁移后代理「国家」变空——体检的一致性检查会误判「时区与代理国家不符」，代理到期预警也会一并失效。
+- **同名代理差异告警**：代理池按名称复用时会比对 `host:port`。代理换过 IP 后重新导入会产出 warning（如「现有 1.2.3.4:8080，快照 5.6.7.8:1080，已保留现有配置未覆盖」），而不是静默跳过让用户误以为迁移成功。
 - **定时自动备份**：设置页「空间快照」分区可开启，按设定间隔（小时）把**每个团队空间**自动打包写入本地目录，每个团队保留最近 7 份（按文件名时间戳排序，超出自动清理），目录不存在 / 不可写时静默跳过、不报错。复用代理巡检式 `setInterval` 调度器（保存设置即重启调度），逻辑集中在 `startSnapshotBackupScheduler()` / `runSnapshotBackupAll()`（`src/main/server.ts`）；文件复用 `buildSnapshot()`（`src/main/exporters.ts`，与手动导出 / 导入同源），保证自动备份与手动快照字段完全一致。
+
+### 1.3.1 快照版本兼容
+
+快照是**跨机器、跨版本**传输的数据，字段一旦改名而导入端没跟上，后果不是报错，而是**无声丢数据 + 接口返回成功**。故版本机制分三层：
+
+- **文件级版本** `SNAPSHOT_VERSION`（当前 1）：管整包结构（`proxies` / `rpa` / `extensions` 这几段的增删改）。
+- **条目级版本** `PROFILE_SNAPSHOT_VERSION`（当前 1）：管单个环境内部字段的演进。整包没变、只有环境字段改名时不无谓地升文件版本。
+- **上界硬拒**：`validateSnapshot()` 拒绝 `version > SNAPSHOT_VERSION` 的文件，报「请升级应用后再导入」。**不做降级导入**——若新版把某段改名（如 `proxies` → `proxyPool`），本版本会把「缺失」当空数组，代理池无声丢失却返回成功。
+- **条目级只告警**：单个条目的 `version` 超前只进 `warnings` 并带上环境名，不阻断整次迁移（一个条目不该让整包失败），但用户能看见哪些没完全还原。
+- **迁移阶梯** `MIGRATIONS` / `migrateSnapshot()`：键为来源版本，值为升到下一版的纯函数。当前只发布过 v1，阶梯为空，但**入口与保护常驻**——升不上去时如实返回 `to < SNAPSHOT_VERSION`，导入端 400 拒绝，绝不假装成功。
+- **可见性**：导入响应回传 `formatVersion` / `sourceVersion` / `migrations` / `warnings`；导出补齐 `appVersion`（此前字段声明了却从未赋值），便于排查「同一份快照在不同机器上行为不同」。
 
 ### 1.4 发布与自动更新
 
