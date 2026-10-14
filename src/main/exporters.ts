@@ -169,7 +169,16 @@ export async function importProfileItems(
               port: Number(detail.port),
               username: String(detail.username || ''),
               password: String(detail.password || ''),
-              remark: String(detail.remark || '')
+              remark: String(detail.remark || ''),
+              // 元信息必须一并带出：缺了它们，导入后代理的「国家」会变空，
+              // 体检的一致性检查会误判「时区与代理国家不符」，代理到期预警也会失效。
+              country: detail.country == null ? '' : String(detail.country),
+              region: detail.region == null ? '' : String(detail.region),
+              city: detail.city == null ? '' : String(detail.city),
+              isp: detail.isp == null ? '' : String(detail.isp),
+              expiresAt: detail.expiresAt ? new Date(detail.expiresAt as string) : null,
+              status: detail.status ? String(detail.status) : 'unknown',
+              anonymity: detail.anonymity ? String(detail.anonymity) : 'unknown'
             })
           )
           proxyIdByName.set(proxyName, x.id)
@@ -271,19 +280,34 @@ export async function exportProxiesStructured(ctx: ExportCtx): Promise<ProxySnap
  * 结构化导入代理池：按名称复用已有代理（跳过），缺失则新建。
  * 与快照导入流程配合——先建代理池，环境导入时即可按名复用，避免重复创建。
  */
-export async function importProxiesStructured(items: ProxySnapshot[], ctx: ExportCtx): Promise<{ imported: number; skipped: number; failed: string[] }> {
+export async function importProxiesStructured(
+  items: ProxySnapshot[],
+  ctx: ExportCtx
+): Promise<{ imported: number; skipped: number; failed: string[]; warnings: string[] }> {
   const repo = AppDataSource.getRepository(ProxyEntity)
   const existing = await repo.find({ where: { teamId: ctx.tid, ...scopeOf(ctx) } })
   const byName = new Map(existing.map((x) => [x.name, x]))
   let imported = 0
   let skipped = 0
   const failed: string[] = []
+  const warnings: string[] = []
   for (const it of items || []) {
     if (!it || !it.name) {
       failed.push('缺少 name')
       continue
     }
     if (byName.has(it.name)) {
+      // 同名即复用，但必须比对连接信息：代理换了 IP 之后重新导入，
+      // 若静默跳过，用户会以为迁移成功、实际环境还在用旧 IP（这是很难排查的一类故障）。
+      // 不覆盖已有代理（可能已被手工改过），只如实告知差异。
+      const cur = byName.get(it.name)!
+      const hostChanged = it.host && cur.host !== it.host
+      const portChanged = it.port && Number(cur.port) !== Number(it.port)
+      if (hostChanged || portChanged) {
+        warnings.push(
+          `代理「${it.name}」已存在且连接信息与快照不同（现有 ${cur.host}:${cur.port}，快照 ${it.host}:${it.port}），已保留现有配置未覆盖`
+        )
+      }
       skipped++
       continue
     }
@@ -313,7 +337,7 @@ export async function importProxiesStructured(items: ProxySnapshot[], ctx: Expor
     )
     imported++
   }
-  return { imported, skipped, failed }
+  return { imported, skipped, failed, warnings }
 }
 
 // ===================== RPA 脚本 =====================
@@ -367,7 +391,7 @@ export async function exportExtensionsMeta(ctx: ExportCtx): Promise<ExtensionSna
  * GET /api/snapshot/export 与「定时自动备份」共用此函数，保证手动导出与自动备份同源。
  * `exportedBy` 用于标记来源（手动导出传用户名，自动备份传「系统定时备份」）。
  */
-export async function buildSnapshot(ctx: ExportCtx, exportedBy?: string): Promise<SnapshotFile> {
+export async function buildSnapshot(ctx: ExportCtx, exportedBy?: string, appVersion?: string): Promise<SnapshotFile> {
   const teamRepo = AppDataSource.getRepository(TeamEntity)
   const team = await teamRepo.findOne({ where: { id: ctx.tid } })
   const profileRepo = AppDataSource.getRepository(ProfileEntity)
@@ -383,6 +407,7 @@ export async function buildSnapshot(ctx: ExportCtx, exportedBy?: string): Promis
     format: SNAPSHOT_FORMAT,
     version: SNAPSHOT_VERSION,
     exportedAt: new Date().toISOString(),
+    appVersion: appVersion || undefined,
     team: { id: ctx.tid, name: team?.name || 'team', icon: team?.icon || null },
     exportedBy,
     proxies,

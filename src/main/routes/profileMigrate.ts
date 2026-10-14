@@ -1,4 +1,5 @@
 import { Router, type Response, type NextFunction } from 'express'
+import { app } from 'electron'
 import type { DataSource } from 'typeorm'
 import { In } from 'typeorm'
 import { ProfileEntity, ProxyEntity, AccountEntity, GroupEntity, CookieEntity } from '../entities'
@@ -12,7 +13,7 @@ import {
   SNAPSHOT_VERSION,
   validateSnapshot,
   normalizeSnapshot,
-  type SnapshotFile
+  migrateSnapshot
 } from '../../shared/snapshot'
 import {
   importProfileItems,
@@ -90,7 +91,9 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
   // ===== 全空间快照：把整个团队空间打包为单一 JSON（环境 + 代理 + RPA + 扩展引用）=====
   // 复用各模块导出器拼装；导入端同样复用各模块导入器，保证「整环境迁移」与「整团队迁移」同源。
   router.get('/snapshot/export', authMiddleware, async (req: AuthedRequest, res: Response) => {
-    const snap = await buildSnapshot({ tid: req.tid!, uid: req.uid, role: req.role }, req.username)
+    // 带上 appVersion：将来排查「同一份快照在不同机器上行为不同」时，
+    // 第一手证据就是它由哪个应用版本导出（此前该字段声明了却从未赋值，等于没有）。
+    const snap = await buildSnapshot({ tid: req.tid!, uid: req.uid, role: req.role }, req.username, app.getVersion())
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Content-Disposition', `attachment; filename="roxy-snapshot-${req.tid}-${stamp}.json"`)
@@ -102,7 +105,15 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
   router.post('/snapshot/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const v = validateSnapshot(req.body)
     if (!v.ok) return res.status(400).json({ message: '快照文件不合法：' + v.errors.join('；'), detail: v })
-    const data = normalizeSnapshot(req.body as SnapshotFile)
+    // 迁移升级：老版本快照先升到当前结构再消费。v1 是首个发布版本，阶梯当前为空，
+    // 但入口与「升不上去就拒绝」的保护必须常驻——否则将来升版时无从补救。
+    const mig = migrateSnapshot(req.body)
+    if (mig.to !== SNAPSHOT_VERSION) {
+      return res.status(400).json({
+        message: `快照版本 ${mig.from} 无法迁移到当前版本 ${SNAPSHOT_VERSION}：缺少 v${mig.to} → v${mig.to + 1} 的迁移步骤`
+      })
+    }
+    const data = normalizeSnapshot(mig.data)
     const proxyRes = await importProxiesStructured(data.proxies, { tid: req.tid!, uid: req.uid, role: req.role })
     const profRes = await importProfileItems(data.profiles as unknown as Array<Record<string, unknown>>, {
       tid: req.tid!,
@@ -113,10 +124,12 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
     if (profRes.created === 0 && proxyRes.imported === 0 && rpaRes.created === 0) {
       return res.status(400).json({ message: '快照中没有可导入的内容' })
     }
+    // 迁移告警 + 版本信息一并回传：用户必须能看见「哪些条目没完全还原」
+    const warnings = [...v.warnings, ...proxyRes.warnings]
     await writeLog(
       req,
       'import_snapshot',
-      `导入快照（团队「${data.team.name || req.tid}」）：环境 ${profRes.created} 个、代理 ${proxyRes.imported} 条、RPA ${rpaRes.created} 个`
+      `导入快照（团队「${data.team.name || req.tid}」，格式 v${SNAPSHOT_VERSION}）：环境 ${profRes.created} 个、代理 ${proxyRes.imported} 条、RPA ${rpaRes.created} 个`
     )
     res.json({
       ok: true,
@@ -125,7 +138,11 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
       proxiesCreated: proxyRes.imported,
       proxiesSkipped: proxyRes.skipped,
       rpaCreated: rpaRes.created,
-      extensionsReferenced: data.extensions.length
+      extensionsReferenced: data.extensions.length,
+      formatVersion: SNAPSHOT_VERSION,
+      sourceVersion: mig.from,
+      migrations: mig.applied,
+      warnings
     })
   })
 

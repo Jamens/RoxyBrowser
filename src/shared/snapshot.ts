@@ -15,6 +15,15 @@
 export const SNAPSHOT_FORMAT = 'roxy-snapshot'
 export const SNAPSHOT_VERSION = 1
 
+/**
+ * 环境条目（ProfileSnapshot）自身的结构版本，与文件级 version 独立演进。
+ * 为什么要单独一个版本号：文件级管的是「整包结构」（proxies/rpa/extensions 这几段的增删），
+ * 环境级管的是「单个环境内部字段」的演进。整包结构没变、只有环境字段改名的情况很常见
+ * （例如将来把 expiresAt 从环境顶层挪进 fingerprint），此时不该无谓地升文件版本。
+ * 导入端按本字段判断条目是否来自更新版本。
+ */
+export const PROFILE_SNAPSHOT_VERSION = 1
+
 export interface ProxySnapshot {
   name: string
   type: string
@@ -107,6 +116,57 @@ const EMPTY_SUMMARY: SnapshotSummary = {
 }
 
 /**
+ * 版本迁移阶梯：键为「来源版本」，值为把该版本升到下一版的纯函数。
+ *
+ * 目前只发布过 v1，故阶梯为空。但**入口必须提前就位**：等真要升版时，老快照已经躺在
+ * 用户磁盘上，而导入端没有任何机制把它们升到新结构——只能靠「缺失字段当 null」硬扛，
+ * 一旦字段改名就是静默数据丢失（更糟的情况：整段被改名，缺失被当成空数组，
+ * 代理池/ RPA 全丢，导入还报「成功」）。空阶梯 ≠ 不需要阶梯，是它还没被需要。
+ */
+const MIGRATIONS: Record<number, (data: Record<string, unknown>) => Record<string, unknown>> = {}
+
+export interface SnapshotMigrationResult {
+  /** 迁移后的数据；补齐可选段、version 已归一到当前版本 */
+  data: SnapshotFile
+  /** 迁移前的文件级版本（缺 version 的极早期文件按 v1 处理） */
+  from: number
+  /** 实际到达的版本；小于当前版本说明阶梯有缺口，导入端应拒绝 */
+  to: number
+  /** 实际执行的迁移步骤，用于回传给用户确认 */
+  applied: string[]
+}
+
+/**
+ * 把任意历史版本的快照升级到当前版本。纯函数，不改入参。
+ * 与 validateSnapshot 分工：后者管「能不能导」（结构 + 版本窗口），
+ * 本函数管「导进来之后怎么升」。两者都过才允许真正写库。
+ */
+export function migrateSnapshot(raw: unknown): SnapshotMigrationResult {
+  const src = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  const rawVer = Number(src.version)
+  // 缺 version 的极早期文件按 v1 处理（v1 是首个发布版本，之前没有更早的形态）
+  let v = Number.isFinite(rawVer) && rawVer >= 1 ? Math.floor(rawVer) : 1
+  const from = v
+
+  let current = src
+  const applied: string[] = []
+  // 上界由 validateSnapshot 拦截（更未来的快照一律拒绝，不做「尽力而为」的降级导入）
+  while (v < SNAPSHOT_VERSION) {
+    const step = MIGRATIONS[v]
+    // 无对应步骤说明阶梯有缺口（升了 SNAPSHOT_VERSION 却忘了加迁移）。
+    // 此时停止升级并如实返回 to < SNAPSHOT_VERSION，由导入端拒绝，不能假装成功。
+    if (!step) break
+    current = step(current)
+    applied.push(`v${v} → v${v + 1}`)
+    v += 1
+  }
+  if (v >= SNAPSHOT_VERSION && Number(current.version) !== SNAPSHOT_VERSION) {
+    current = { ...current, version: SNAPSHOT_VERSION }
+  }
+  return { data: current as unknown as SnapshotFile, from, to: v, applied }
+}
+
+/**
  * 校验快照文件结构是否合法（纯函数，不改任何状态）。
  * 宽松校验：缺失的 proxies / rpa / extensions 视为空数组（向后兼容），
  * 仅对必填项（format / version / profiles[]）做强校验。
@@ -126,6 +186,11 @@ export function validateSnapshot(data: unknown): SnapshotValidation {
   const version = Number(d.version)
   if (!Number.isFinite(version) || version < 1) {
     errors.push('version 非法或缺失')
+  } else if (version > SNAPSHOT_VERSION) {
+    // 上界闸门：来自更新版本的快照一律拒绝，不做「尽力而为」的降级导入。
+    // 理由：若新版把某一段改名（如 proxies → proxyPool），本版本会把「缺失」当成
+    // 空数组 —— 代理池无声丢失，接口却返回成功。用户只能靠升级应用解决。
+    errors.push(`快照版本 ${version} 高于当前应用支持的 ${SNAPSHOT_VERSION}，请升级应用后再导入`)
   }
 
   const profiles = Array.isArray(d.profiles) ? (d.profiles as unknown[]) : null
@@ -140,6 +205,12 @@ export function validateSnapshot(data: unknown): SnapshotValidation {
       }
       const p = raw as Record<string, unknown>
       if (typeof p.name !== 'string' || !p.name) errors.push(`profiles[${i}] 缺少 name`)
+      // 环境条目版本超前：只告警不阻断 —— 单个条目不该让整次迁移失败。
+      // 但必须让用户看见，否则他以为环境被完整还原了。
+      const pv = Number(p.version)
+      if (Number.isFinite(pv) && pv > PROFILE_SNAPSHOT_VERSION) {
+        warnings.push(`profiles[${i}]「${p.name}」条目版本 ${pv} 高于当前支持的 ${PROFILE_SNAPSHOT_VERSION}，部分字段可能无法还原`)
+      }
       if (p.cookies != null && !Array.isArray(p.cookies)) errors.push(`profiles[${i}].cookies 应为数组`)
       else if (Array.isArray(p.cookies)) cookieCount += p.cookies.length
       if (p.accounts != null && !Array.isArray(p.accounts)) errors.push(`profiles[${i}].accounts 应为数组`)
