@@ -523,13 +523,37 @@ curl -X POST http://127.0.0.1:39100/api/rpa/import \
 把操作日志事件以 HTTP POST 实时推送到你自己的服务，用于运维机器人、审计存档、或联动外部系统。配置存于 `AppSettings.webhooks`（JSON 列，随设置一起持久化），前端设置页「Webhook 通知」分区增删。
 
 - **触发点（单一收敛）**：所有事件都从既有的操作日志入口触发——`writeLog(req, action, detail)`（`src/main/server.ts`，覆盖 HTTP 业务动作）、`saveSchedulerLog(teamId, userId, action, detail)`（定时调度）、`writeAgentLog({profileId, action, detail, actor})`（AI Agent 执行）。这保证「凡是写进操作日志的动作，都会同时外发 Webhook」，不会出现「日志有记录但 Webhook 没收到」。
-- **订阅与命中**：每条 Webhook 的 `events` 支持三种写法——`['*']` 或空数组 = 全部事件；精确字符串 = 仅该事件（如 `open_profile`）；关键词 = 事件名按 `_` 分词后包含该关键词即命中（如 `profile` 命中 `create_profile` / `open_profile` / `batch_delete_profile`，`proxy` 命中 `create_proxy` / `allocate_proxy`）。还支持 `*keyword*` 通配。
+- **订阅与命中**：每条 Webhook 的 `events` 支持三种写法——`['*']` 或空数组 = 全部事件；精确字符串 = 仅该事件（如 `open_profile`）；关键词 = 事件名按 `_` 分词后包含该关键词即命中（如 `profile` 命中 `create_profile` / `open_profile` / `batch_delete_profile`，`proxy` 命中 `create_proxy` / `allocate_proxy`）。还支持 `*keyword*` 通配。关键词匹配**单复数互通**：`cookie` 同时命中 `create_cookie` 与 `import_cookies`，`proxy` 同时命中 `create_proxy` 与 `import_proxies`（详见 1.8.1）。
+- **事件分组（设置页按组渲染）**：`WEBHOOK_EVENT_GROUPS` 把可选关键词按域分成 14 组（环境 / 代理 / 团队 / 账号 / Cookie / RPA / AI Agent / 登录 / 到期预警 / 健康检查 / 操作日志 / 扩展 / 空间快照 / CDP）。**分组没登记 = 功能等于没上线**——用户在该组下选不到任何选项，只能手填或选「全部」。新增带新动词的 webhook 事件时必须同步登记，否则该事件静默漏推。
 - **投递（fire-and-forget）**：`dispatchWebhook(event, ctx)` 遍历缓存中「启用且命中」的 Webhook，逐个 `dispatchWebhookEvent` 投递；**不 await、绝不抛错阻塞主流程**（失败静默忽略）。8 秒超时（`AbortController`）。
 - **签名**：设置了 `secret` 时，对原始请求体做 `HMAC-SHA256`，请求头带 `X-Roxy-Signature: sha256=<hex>`；接收端用同一密钥复算比对即可校验来源与完整性；`secret` 为空则不签名。
 - **请求头与 Payload**：头含 `X-Roxy-Event`（事件名）、`X-Roxy-Delivery`（唯一投递 ID，便于接收端去重）、`Content-Type: application/json`；Body 为 JSON `{ event, eventId, timestamp, teamId, actor: {uid,username,role}|null, detail }`。
 - **发送测试**：`POST /api/webhooks/test`（需登录）接收一条 Webhook 配置（未保存也可），立即单发一次并返回 `{ ok, status, error }`；设置页每条配置右侧「发送测试」按钮调用它，先验证地址 / 密钥再保存。
 - **性能**：Webhook 配置缓存在内存（`setCachedWebhooks`），`getSettings()` 每次读取设置时刷新、`PUT /settings` 保存后刷新，事件触发时直接读缓存、不查库。
-- **纯函数可单测**：`src/main/webhook.ts` 不含 express、不依赖 Electron；签名 / 事件匹配 / 投递均可用注入的 mock `fetch` 做离线往返测试（已用独立 HMAC 参考实现交叉验证）。
+- **纯函数可单测**：`src/main/webhook.ts` 不含 express、不依赖 Electron；签名 / 事件匹配 / 投递均可用注入的 mock `fetch` 做离线往返测试（已用独立 HMAC 参考实现交叉验证），事件匹配部分见 `tests/webhook.test.cjs`（18 项）。
+
+### 1.8.1 事件匹配的单复数归一
+
+订阅关键词与事件名的比较是「按 `_` 分词后精确包含」，而日志动作名里**单复数是混用的**：
+
+| 语义 | 单数写法 | 复数写法 |
+|---|---|---|
+| Cookie | `create_cookie` | `import_cookies` / `apply_cookies` / `clear_cookies` |
+| 代理 | `create_proxy` | `import_proxies` |
+| 环境 | `create_profile` | `import_profiles` |
+| 账号 | `create_account` | `import_accounts` |
+
+设置页的订阅选项按分组登记为**单数**关键词，于是订阅 `cookie` 永远收不到 `import_cookies`。
+
+**为什么这比普通 bug 更难发现**：它不报错、不影响其他订阅、没有任何提示。用户的体验是「我明明勾了 Cookie 通知，批量导入时就是收不到」，且极难归因——只能怀疑是不是自己记错了操作历史。这类静默漏推比崩溃更值得优先修。
+
+**修法：候选集，而非改写**。`singularCandidates(word)` 返回 `{原词, 去 s, ies→y}` 的小集合，两边取交集即命中。关键是**只增加候选、绝不改写原词**：
+
+- 最初实现用的是破坏性归一（`cookies` → `cookie` 直接改写），结果踩了英文形态的坑——`cookies` 恰好以 `ies` 结尾，被 `ies→y` 规则错改成 `cooky`，反而匹配不上。改成候选集后 `cookie` 与 `cookies` 无论谁单谁复都命中，原词始终保留。
+- 归一规则刻意保守：`rpa` / `consistency` / `2fa` 这类非复数词原样保留，不会被拆坏。`tests/webhook.test.cjs` 里有专门一条「原词必须完好」的断言锁死这一点。
+- 修在匹配层而不是给分组补 `cookies` 关键词，是因为日志动作会持续增加，靠枚举关键词必然再次漏掉；归一是一次性收口。
+
+**分组覆盖守卫**：新增一条测试遍历 `WEBHOOK_EVENT_GROUPS`，要求每组至少有一个关键词能命中真实事件名——防止出现「UI 上有个选项，怎么选都收不到东西」。当前 68 个日志动作**全部可被订阅**（修复前 47/68）。
 
 **接收端最小示例（Node + Express）**：
 
