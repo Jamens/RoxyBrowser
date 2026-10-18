@@ -9,6 +9,66 @@
 
 ---
 
+## 2026-10-19 · 清理：删 7 个零引用导出，其中 2 个是我自己刚加的死代码
+
+### 一、怎么找的
+
+写了个扫描器：收集 `src/` 下所有 `export function/const/class`，
+再到**全仓库**（含 `scripts/`、`tests/`、`*.md`）数字符引用，
+分别统计「定义文件内」与「文件外」的出现次数。
+
+关键是**分开统计**：只算外部引用会把同文件内的本地使用误判为死代码
+（我第一版扫描就这么错的，报出 141 个候选，其中大半是 `interface`/`type`
+——那些是 API 形状描述，本来就不该删）。
+
+### 二、删了什么
+
+| 导出 | 文件 | 情况 |
+|---|---|---|
+| `getSyncMode` | browserManager | 与在用的 `setSyncMode` 配对的 getter，无人调用 |
+| `getSyncTargets` | browserManager | 同上 |
+| `getActiveCdpPort` | cdpManager | 注释写着「用于展示端口偏移」，**该 UI 从未实现** |
+| `LOCALE_CODES` | countries | `locales.ts` 有自己的 `LOCALE_MAP`，这份列表是重复的 |
+| `isLocaleCode` | locales | 类型守卫，`normalizeLocale`（在用）已覆盖需求 |
+| `FIX_FIELD_LABELS` | fixBatch | **本轮我自己加的** |
+| `FIX_KEY_LABELS` | fixBatch | **本轮我自己加的** |
+
+### 三、关于我自己加的那两个
+
+做批量修复预演时，我顺手导出了「字段中文名」和「不一致项中文名」两张映射表，
+想着「UI 大概会用到」。结果预演弹窗最终直接展示原始 `field` 名和变更明细，
+**这两个表从出生到删除没有任何调用方**。
+
+已在原位置留注释说明，并把教训写进去：
+**先有用例再导出**——没有调用方的导出不只是死代码，
+它还会让读者误以为界面已经做了本地化。
+
+这和上一轮发现的失实文档是同一个病根：**把"打算做"当成"已做完"记录下来**。
+
+### 四、删前确认的三件事
+
+1. **不会造成只写状态**：`getSyncMode`/`getSyncTargets` 是模块级 state 的 getter。
+   删掉它们是否会让 `syncEnabled`/`syncTargets` 变成只写？查证：
+   两者在文件内第 619、631、636 行均有直接读取，**不依赖导出 getter**，故安全。
+2. **不会留下孤立依赖**：删 `isLocaleCode` 后 `LOCALE_MAP` 仍被 `findLocale` 使用；
+   删 `LOCALE_CODES` 后 `LocaleCode` 类型在 `CountryDef.language` 等处仍被引用。
+3. **连带清理**：删掉两个映射表后 `FixKey` 类型导入变为未使用，一并移除。
+
+### 五、有意保留的 2 个
+
+| 导出 | 保留理由 |
+|---|---|
+| `setWebhookFetch` | 注释明写「测试用：注入 mock fetch」，是有意的测试缝 |
+| `rateLimitBucketCount` | 注释明写「仅供单测 / 诊断」 |
+
+区别在于**是否声明了用途**：这两个注释说清了「这是给测试/诊断的基础设施」，
+而 `getActiveCdpPort` 描述的是一个**从未被实现的 UI 功能**——那是另一回事。
+
+`pnpm test` 35/35，`pnpm typecheck` 通过。全仓运行期导出从 368 → 361，
+零引用项从 9 → 2（且均为有意的测试/诊断缝）。
+
+---
+
 ## 2026-10-18 · 补测试：四个指纹核心模块零单测，其中一条文档记录是失实的
 
 补上 `proxyAllocator` / `timezone` / `webgpu` / `webaudio` / `canvasNoise` 五个模块的单测，
