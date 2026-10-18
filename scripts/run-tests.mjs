@@ -17,9 +17,10 @@ const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 
 /** 编译清单：把 shared/main 模块编到对应临时目录（.tmp_* 已被 .gitignore 忽略） */
 const COMPILES = [
-  { name: 'webglOsMatch', files: ['src/shared/webglOsMatch.ts'], out: '.tmp_hc' },
-  // countries / locales 是 healthcheck 的传递依赖，显式列出确保一并编进 .tmp_hc
-  { name: 'healthcheck', files: ['src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hc', extra: ['--lib', 'es2020,dom'] },
+  // countries / locales 是 healthcheck 的传递依赖；webglOsMatch.ts 被 healthcheck import，
+  // tsc 会跟随依赖一并产出，故并入同一条目（**不单独占 out 目录**——
+  // runner 编译前 rmSync(out)，两条目共用目录会让后编的删掉前一个的产物）。
+  { name: 'healthcheck', files: ['src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/webglOsMatch.ts'], out: '.tmp_hc', extra: ['--lib', 'es2020,dom'] },
   { name: 'trackers', files: ['src/shared/trackers.ts'], out: '.tmp_tr' },
   { name: 'envExpiry', files: ['src/shared/envExpiry.ts', 'src/shared/fingerprint.ts'], out: '.tmp_env' },
   { name: 'candidate4', files: ['src/shared/webgpu.ts', 'src/shared/canvasNoise.ts'], out: '.tmp_c4' },
@@ -45,6 +46,18 @@ const COMPILES = [
   { name: 'healthBaseline', files: ['src/shared/healthBaseline.ts'], out: '.tmp_hb' },
   // healthFix 依赖 healthcheck（uaOs）与 countries（时区/语言表）
   { name: 'healthFix', files: ['src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hf', extra: ['--lib', 'es2020,dom'] },
+  // 分配器本体：零依赖纯函数
+  { name: 'proxyAllocator', files: ['src/shared/proxyAllocator.ts'], out: '.tmp_pa' },
+  // 时区工具：零依赖，但依赖 Intl 时区数据库
+  { name: 'timezone', files: ['src/shared/timezone.ts'], out: '.tmp_tz' },
+  // WebGPU 指纹伪装：零依赖纯函数
+  { name: 'webgpu', files: ['src/shared/webgpu.ts'], out: '.tmp_gpu' },
+  // 音频指纹与 Canvas 噪声派生：零依赖纯函数。
+  // 两者**必须用不同 out 目录**：runner 编译前会 rmSync(out)，共用目录时后编的条目
+  // 会把前一个的产物删掉（webaudio 与 canvasNoise 互不相干，不会像 healthcheck→webglOsMatch
+  // 那样靠 tsc 跟随 import 顺带产出）。
+  { name: 'webaudio', files: ['src/shared/webaudio.ts'], out: '.tmp_wa' },
+  { name: 'canvasNoise', files: ['src/shared/canvasNoise.ts'], out: '.tmp_cn' },
   // 分配解释：依赖 proxyAllocator 的类型与结果结构
   { name: 'proxyAllocExplain', files: ['src/shared/proxyAllocExplain.ts', 'src/shared/proxyAllocator.ts'], out: '.tmp_px' },
   // 批量修复预演：依赖 healthFix（proposeFixes）与 healthcheck（checkConsistency）
@@ -87,6 +100,11 @@ const TESTS = [
   { name: 'healthBaseline', file: 'tests/healthBaseline.test.cjs' },
   { name: 'healthFix', file: 'tests/healthFix.test.cjs' },
   { name: 'fixBatch', file: 'tests/fixBatch.test.cjs' },
+  { name: 'proxyAllocator', file: 'tests/proxyAllocator.test.cjs' },
+  { name: 'timezone', file: 'tests/timezone.test.cjs' },
+  { name: 'webgpu', file: 'tests/webgpu.test.cjs' },
+  { name: 'webaudio', file: 'tests/webaudio.test.cjs' },
+  { name: 'canvasNoise', file: 'tests/canvasNoise.test.cjs' },
   { name: 'proxyAllocExplain', file: 'tests/proxyAllocExplain.test.cjs' },
   { name: 'snapshot', file: 'tests/snapshot.test.cjs' },
   { name: 'snapshotDiff', file: 'tests/snapshotDiff.test.cjs' },
@@ -141,6 +159,25 @@ const missingOuts = [...requiredOuts].filter((d) => !compiledOuts.has(d))
 if (missingOuts.length) {
   console.error(`\n编译清单缺项：${missingOuts.join(', ')}`)
   console.error('tests/ 引用了这些目录，但 COMPILES 里没有产出它们的条目。')
+  process.exit(1)
+}
+
+// 重复 out 目录自检：编译循环每次都会 rmSync(out) 再编，两条目共用同一目录时
+// **后编的会把前一个的产物删掉**，测试随即 MODULE_NOT_FOUND。
+// 唯一的安全例外是「后者 tsc 跟随 import 顺带产出前者」（如 healthcheck → webglOsMatch），
+// 这属于隐式耦合，故这里对共用目录一律报错，逼人显式写出依赖关系。
+const outOwners = new Map()
+for (const c of COMPILES) {
+  const owners = outOwners.get(c.out) || []
+  owners.push(c.name)
+  outOwners.set(c.out, owners)
+}
+const dupOuts = [...outOwners.entries()].filter(([, names]) => names.length > 1)
+if (dupOuts.length) {
+  console.error('\n编译清单存在重复 out 目录：')
+  for (const [dir, names] of dupOuts) console.error(`  ${dir} ← ${names.join(' + ')}`)
+  console.error('后编译的条目会清空该目录，导致前一条目的测试 MODULE_NOT_FOUND。')
+  console.error('请改为各自独立的 out 目录，或把依赖文件显式并入同一条目的 files。')
   process.exit(1)
 }
 
