@@ -446,7 +446,7 @@ const zhCN = {
   'webhook.enabled': '启用',
   'webhook.disabled': '停用',
   'webhook.events': '订阅事件',
-  'webhook.eventsExtra': '选择「全部事件」接收所有操作；或按分类订阅（命中规则：事件名含该关键词即触发，如 profile 匹配 create_profile / open_profile / batch_delete_profile）。',
+  'webhook.eventsExtra': '选择「全部事件」接收所有操作；或按分类订阅（命中规则：事件名按「_」分词后含该关键词即触发，单复数互通，如 profile 匹配 create_profile / import_profiles，cookie 匹配 import_cookies）。',
   'webhook.eventsPlaceholder': '选择要接收的事件（默认全部）',
   'webhook.test': '发送测试',
   'webhook.testOk': '测试投递成功（HTTP {status}）',
@@ -463,6 +463,10 @@ const zhCN = {
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
   'webhook.group.auth': '登录',
+  'webhook.group.log': '操作日志',
+  'webhook.group.extension': '扩展',
+  'webhook.group.snapshot': '空间快照',
+  'webhook.group.cdp': 'CDP 调试',
 
   // ---- 智能助手（全局悬浮）----
   'assistant.open': '智能助手',
@@ -942,7 +946,7 @@ const enUS: MessageDict = {
   'webhook.enabled': 'Enabled',
   'webhook.disabled': 'Disabled',
   'webhook.events': 'Subscribed events',
-  'webhook.eventsExtra': 'Choose "All events" to receive everything, or subscribe by category (match rule: fires when the event name contains the keyword, e.g. profile matches create_profile / open_profile / batch_delete_profile).',
+  'webhook.eventsExtra': 'Choose "All events" to receive everything, or subscribe by category (match rule: fires when a "_"-separated segment of the event name matches the keyword; singular/plural are interchangeable, e.g. profile matches create_profile / import_profiles, cookie matches import_cookies).',
   'webhook.eventsPlaceholder': 'Select events to receive (all by default)',
   'webhook.test': 'Send test',
   'webhook.testOk': 'Test delivery succeeded (HTTP {status})',
@@ -959,6 +963,10 @@ const enUS: MessageDict = {
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
   'webhook.group.auth': 'Auth',
+  'webhook.group.log': 'Operation Logs',
+  'webhook.group.extension': 'Extensions',
+  'webhook.group.snapshot': 'Workspace Snapshots',
+  'webhook.group.cdp': 'CDP Debugging',
 
   // ---- Assistant (global floating) ----
   'assistant.open': 'Assistant',
@@ -1435,7 +1443,7 @@ const jaJP: MessageDict = {
   'webhook.enabled': '有効',
   'webhook.disabled': '無効',
   'webhook.events': '購読するイベント',
-  'webhook.eventsExtra': '「すべてのイベント」で全通知、またはカテゴリごとに購読（一致ルール：イベント名にキーワードが含まれると発火。例：profile は create_profile / open_profile / batch_delete_profile に一致）。',
+  'webhook.eventsExtra': '「すべてのイベント」で全通知、またはカテゴリごとに購読（一致ルール：イベント名を「_」で分割した語がキーワードと一致すれば発火し、単数形・複数形は相互に一致。例：profile は create_profile / import_profiles に、cookie は import_cookies に一致）。',
   'webhook.eventsPlaceholder': '受信するイベントを選択（既定ですべて）',
   'webhook.test': 'テスト送信',
   'webhook.testOk': 'テスト配信に成功しました（HTTP {status}）',
@@ -1452,6 +1460,10 @@ const jaJP: MessageDict = {
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'AI Agent',
   'webhook.group.auth': 'ログイン',
+  'webhook.group.log': '操作ログ',
+  'webhook.group.extension': '拡張機能',
+  'webhook.group.snapshot': 'ワークスペーススナップショット',
+  'webhook.group.cdp': 'CDP デバッグ',
 
   // ---- スマートアシスタント（全体表示）----
   'assistant.open': 'スマートアシスタント',
@@ -1930,7 +1942,7 @@ const deDE: MessageDict = {
   'webhook.enabled': 'Aktiv',
   'webhook.disabled': 'Inaktiv',
   'webhook.events': 'Abonnierte Ereignisse',
-  'webhook.eventsExtra': '„Alle Ereignisse" empfängt alles, oder abonnieren Sie nach Kategorie (Trefferregel: Ereignis wird ausgelöst, wenn der Name das Schlüsselwort enthält, z. B. profile passt auf create_profile / open_profile / batch_delete_profile).',
+  'webhook.eventsExtra': '„Alle Ereignisse" empfängt alles, oder abonnieren Sie nach Kategorie (Trefferregel: ausgelöst, wenn ein durch "_" getrenntes Segment des Ereignisnamens dem Schlüsselwort entspricht; Singular/Plural sind austauschbar, z. B. profile passt auf create_profile / import_profiles, cookie passt auf import_cookies).',
   'webhook.eventsPlaceholder': 'Ereignisse zur Empfängerauswahl (standardmäßig alle)',
   'webhook.test': 'Test senden',
   'webhook.testOk': 'Testübermittlung erfolgreich (HTTP {status})',
@@ -1947,6 +1959,10 @@ const deDE: MessageDict = {
   'webhook.group.rpa': 'RPA',
   'webhook.group.agent': 'KI-Agent',
   'webhook.group.auth': 'Login',
+  'webhook.group.log': 'Vorgangsprotokolle',
+  'webhook.group.extension': 'Erweiterungen',
+  'webhook.group.snapshot': 'Workspace-Snapshots',
+  'webhook.group.cdp': 'CDP-Debugging',
 
   // ---- Assistent (global schwebend) ----
   'assistant.open': 'Assistent',

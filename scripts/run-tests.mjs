@@ -47,6 +47,8 @@ const COMPILES = [
   { name: 'healthFix', files: ['src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hf', extra: ['--lib', 'es2020,dom'] },
   // 快照：零 import 但含接口与类型断言，仍按约定先编再 require
   { name: 'snapshot', files: ['src/shared/snapshot.ts'], out: '.tmp_snap' },
+  // webhook 匹配引擎：零外部依赖（仅 node:crypto），文件头本就标注「便于离线单测」却一直零测试
+  { name: 'webhook', files: ['src/main/webhook.ts'], out: '.tmp_wh' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
@@ -79,6 +81,7 @@ const TESTS = [
   { name: 'healthBaseline', file: 'tests/healthBaseline.test.cjs' },
   { name: 'healthFix', file: 'tests/healthFix.test.cjs' },
   { name: 'snapshot', file: 'tests/snapshot.test.cjs' },
+  { name: 'webhook', file: 'tests/webhook.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
 ]
 

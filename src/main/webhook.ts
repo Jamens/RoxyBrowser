@@ -70,8 +70,46 @@ export function signWebhookBody(secret: string, body: string): string {
  * - events 为空或含 '*' → 全部命中
  * - 精确字符串命中（如 'open_profile'）
  * - 含 '*' 的通配（glob，如 '*profile*' 匹配任意含 profile 的事件名）
- * - 关键词命中：事件名按 '_' 分词后包含该关键词（如 'profile' 命中 create_profile / batch_delete_profile）
+ * - 关键词命中：事件名按 '_' 分词后包含该关键词（如 'profile' 命中 create_profile / batch_delete_profile），
+ *   且**做单复数归一**（见 normalizeSegment）
  */
+/**
+ * 取一个分词的「可能的单数形态」候选集，用于单复数匹配。
+ *
+ * 为什么需要：日志动作名里单复数混用——同一语义下既有单数（create_cookie）
+ * 也有复数（import_cookies / apply_cookies）。而设置页的订阅选项按分组登记为
+ * 单数关键词（cookie / proxy / profile / account）。分词比较是精确包含，
+ * 于是订阅 cookie 永远收不到 import_cookies —— 批量导入 Cookie 时一次都不推送。
+ *
+ * 这是**静默漏推**：不报错、不影响其他订阅，用户只会以为是自己记错了，极难归因。
+ * 修在匹配层而不是给分组补 'cookies' 关键词，是因为日志动作还会持续增加，
+ * 靠枚举关键词必然再次漏掉；归一是一次性把这类差异收口。
+ *
+ * 关键设计：**只增加候选，绝不改写原词**。
+ * 最初实现用的是「把 cookies 改写成 cookie」的破坏性归一，结果踩了英文形态的坑——
+ * cookies 恰好以 'ies' 结尾，被 'ies→y' 规则错改成 'cooky'，反而匹配不上了。
+ * 改为候选集后：cookie → {cookie}、cookies → {cookies, cookie, cookie(s→ies不适用)}
+ * 两边取交集即可命中，无论谁单谁复都成立，且原词始终保留、绝不会误伤。
+ *
+ * 候选集是**保守且有损可控**的：只多加一两个变体，不会把词拆坏
+ * （rpa → {rpa}、consistency → {consistency}、2fa → {2fa} 均原样保留）。
+ */
+function singularCandidates(word: string): string[] {
+  const w = word.toLowerCase()
+  const out = new Set<string>([w])
+  // -y 复数：policy → policies
+  if (w.length > 3 && w.endsWith('ies')) out.add(w.slice(0, -3) + 'y')
+  // 一般复数：cookie → cookies、profile → profiles
+  if (w.length > 2 && w.endsWith('s')) out.add(w.slice(0, -1))
+  return [...out]
+}
+
+/** 单个分词与订阅关键词是否匹配（两侧候选集有交集即命中） */
+function segmentMatches(seg: string, keyword: string): boolean {
+  const kws = singularCandidates(keyword)
+  return singularCandidates(seg).some((c) => kws.includes(c))
+}
+
 export function webhookShouldFire(wh: WebhookConfig, event: string): boolean {
   if (!wh.enabled) return false
   const evs = wh.events
@@ -93,8 +131,8 @@ export function webhookShouldFire(wh: WebhookConfig, event: string): boolean {
       )
       return re.test(event)
     }
-    // 关键词：事件名按 _ 分词后包含该关键词
-    return segs.includes(e)
+    // 关键词：事件名按 _ 分词后包含该关键词（单复数归一）
+    return segs.some((s) => segmentMatches(s, e))
   })
 }
 
