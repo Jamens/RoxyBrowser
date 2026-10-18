@@ -12,6 +12,7 @@ import {
   proxyPoolStatus
 } from '../proxyService'
 import { allocateProxies } from '../../shared/proxyAllocator'
+import { explainAllocation } from '../../shared/proxyAllocExplain'
 import type { AppSettings } from '../../shared/types'
 import { ownerScope } from '../authScope'
 import type { AuthedRequest } from '../authScope'
@@ -163,12 +164,26 @@ export function registerProxyRoutes(router: Router, deps: ProxyRouteDeps): void 
     const usage = await computeProxyUsage(ds, req.tid!)
     const allProxies = await proxyRepo.find({ where: { teamId: req.tid! } })
 
-    const result = allocateProxies(
-      ordered.map((p) => ({ id: p.id, name: p.name, status: p.status, proxyId: p.proxyId })),
-      allProxies.map((p) => ({ id: p.id, status: p.status, country: p.country, type: p.type, expiresAt: p.expiresAt })),
-      usage,
-      { country, type }
-    )
+    const allocEnvs = ordered.map((p) => ({ id: p.id, name: p.name, status: p.status, proxyId: p.proxyId }))
+    const allocProxies = allProxies.map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      country: p.country,
+      type: p.type,
+      expiresAt: p.expiresAt
+    }))
+    const result = allocateProxies(allocEnvs, allocProxies, usage, { country, type })
+    // 解释与分配同源：传的是**本次真实分配结果**，不在这里另算一遍
+    const explain = explainAllocation(allocEnvs, allocProxies, usage, result, { country, type })
+
+    // 预演（默认 false 以兼容既有调用；前端新流程会显式传 preview: true）：
+    // 只算不落库，把「池里有什么、谁分到了什么、为什么跳过」摊开给用户看。
+    // 分配前看不清后果，是这个功能此前最大的短板——代理绑错不会报错，
+    // 只会在用户真正用到同出口 IP 时才发现关联风险。
+    if (req.body?.preview === true) {
+      return res.json({ ...result, explain, applied: false })
+    }
 
     if (result.updates.length) {
       const saveMap = new Map(result.updates.map((u) => [u.id, u.proxyId]))
@@ -178,11 +193,12 @@ export function registerProxyRoutes(router: Router, deps: ProxyRouteDeps): void 
       await writeLog(
         req,
         'batch_allocate_proxy',
-        `智能分配代理：分配 ${result.assigned} 个、保留 ${result.kept} 个、跳过 ${result.skippedRunning + result.skippedNoProxy} 个`
+        `智能分配代理：分配 ${result.assigned} 个、保留 ${result.kept} 个、跳过 ${result.skippedRunning + result.skippedNoProxy} 个` +
+          (explain.pool.rejected.occupied ? `；${explain.pool.rejected.occupied} 个代理被未选中环境占用、无法抢占` : '')
       )
     }
 
-    res.json(result)
+    res.json({ ...result, explain, applied: true })
   })
 
   // IP 池统计：总数 / 可用 / 占用 / 过期 / 按地区分布

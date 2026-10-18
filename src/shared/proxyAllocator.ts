@@ -22,6 +22,8 @@ export interface AllocProxy {
   country?: string | null
   type?: string
   expiresAt?: Date | string | null
+  /** 代理名称：仅用于向用户解释「分到了哪个代理」，不参与分配判定 */
+  name?: string
 }
 
 export interface AllocItem {

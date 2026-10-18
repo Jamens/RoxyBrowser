@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert, Radio, DatePicker
+  Card, Table, Button, Input, InputNumber, Select, Space, Tag, Tooltip, Switch, Typography, Popconfirm, Modal, Form, Upload, Drawer, Empty, Progress, Alert, Radio, DatePicker, Collapse
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { useI18n } from '../i18n'
@@ -145,6 +145,33 @@ interface BatchHealthResult {
 }
 
 // ===== 智能代理分配：后端返回结构 =====
+interface AllocPoolItem {
+  id: number
+  name: string
+  usable: boolean
+  reasons: Array<'invalid' | 'expired' | 'countryFilter' | 'typeFilter' | 'occupied'>
+  detail: string
+  heldByCount?: number
+  heldBySelected?: number
+}
+interface AllocExplain {
+  pool: {
+    total: number
+    usable: number
+    rejected: Record<string, number>
+    items: AllocPoolItem[]
+  }
+  decisions: Array<{
+    id: number
+    name: string
+    action: 'assigned' | 'kept' | 'skipped'
+    fromProxy: string
+    toProxy: string
+    why: string
+    brokeShared?: boolean
+  }>
+  notes: string[]
+}
 interface BatchAllocResult {
   total: number
   assigned: number
@@ -154,6 +181,8 @@ interface BatchAllocResult {
   insufficient: boolean
   assignedProxyIds: number[]
   results: Array<{ id: number; name: string; action: 'assigned' | 'kept' | 'skipped'; proxyId?: number; reason?: string }>
+  explain?: AllocExplain
+  applied?: boolean
 }
 
 const Stat = ({ label, value, color }: { label: string; value: string; color?: string }) => (
@@ -279,7 +308,7 @@ export default function Environments() {
   const [allocCountry, setAllocCountry] = useState<string | undefined>()
   const [allocType, setAllocType] = useState<string | undefined>()
   const [allocLoading, setAllocLoading] = useState(false)
-  const [allocPhase, setAllocPhase] = useState<'filter' | 'result'>('filter')
+  const [allocPhase, setAllocPhase] = useState<'filter' | 'result' | 'done'>('filter')
   const [allocResult, setAllocResult] = useState<BatchAllocResult | null>(null)
   const [scanSites, setScanSites] = useState<ScanSiteItem[]>([])
   const [scanLoading, setScanLoading] = useState('')
@@ -503,6 +532,31 @@ export default function Environments() {
     setAllocPhase('filter')
     setAllocOpen(true)
   }
+  // 智能代理分配 · 第一步：预演（只算不落库）。
+  // 为什么必须先预演：代理绑错**不会报错**——环境照常打开、照常用，
+  // 只有在两个环境真的用了同一出口 IP 做关联操作时才暴露。
+  // 不先看清「谁分到了哪个、为什么有的没分到」，用户既无法判断该不该补代理，
+  // 也无法确认自己的环境有没有和别人共用出口。
+  const previewAllocProxy = async () => {
+    if (!selected.length) return
+    setAllocLoading(true)
+    try {
+      const data = await api.post<BatchAllocResult>('/api/profiles/batch-allocate-proxy', {
+        ids: selected.map(Number),
+        country: allocCountry || undefined,
+        type: allocType || undefined,
+        preview: true
+      })
+      setAllocResult(data)
+      setAllocPhase('result')
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setAllocLoading(false)
+    }
+  }
+
+  // 智能代理分配 · 第二步：确认后真正落库
   const runAllocProxy = async () => {
     if (!selected.length) return
     setAllocLoading(true)
@@ -513,7 +567,7 @@ export default function Environments() {
         type: allocType || undefined
       })
       setAllocResult(data)
-      setAllocPhase('result')
+      setAllocPhase('done')
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -2188,7 +2242,7 @@ export default function Environments() {
       <Modal
         title="智能分配代理（负载均衡 · 避免同代理复用）"
         open={allocOpen}
-        onCancel={allocPhase === 'result' ? closeAlloc : () => setAllocOpen(false)}
+        onCancel={allocPhase === 'filter' ? () => setAllocOpen(false) : closeAlloc}
         footer={null}
         width={680}
       >
@@ -2222,14 +2276,14 @@ export default function Environments() {
             <div style={{ textAlign: 'right' }}>
               <Space>
                 <Button onClick={() => setAllocOpen(false)}>取消</Button>
-                <Button type="primary" loading={allocLoading} onClick={runAllocProxy}>
-                  开始分配
+                <Button type="primary" loading={allocLoading} onClick={previewAllocProxy}>
+                  预演分配
                 </Button>
               </Space>
             </div>
           </div>
         )}
-        {allocPhase === 'result' && allocResult && (
+        {allocPhase !== 'filter' && allocResult && (
           <div>
             <div style={{ display: 'flex', gap: 24, marginBottom: 16, flexWrap: 'wrap' }}>
               <Stat label="已分配新代理" value={`${allocResult.assigned}`} color="#52c41a" />
@@ -2241,6 +2295,36 @@ export default function Environments() {
                 color={allocResult.skippedNoProxy ? '#ff4d4f' : '#333'}
               />
             </div>
+
+            {/* 池构成：回答「200 个代理凭什么只够分 12 个」 */}
+            {allocResult.explain && (
+              <Alert
+                type={allocResult.explain.pool.usable < allocResult.total ? 'warning' : 'info'}
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={
+                  <Space wrap size={[8, 8]}>
+                    <Tag color="blue">候选池共 {allocResult.explain.pool.total} 个</Tag>
+                    <Tag color="green">可用 {allocResult.explain.pool.usable} 个</Tag>
+                    {allocResult.explain.pool.rejected.invalid ? <Tag color="red">失效 {allocResult.explain.pool.rejected.invalid}</Tag> : null}
+                    {allocResult.explain.pool.rejected.expired ? <Tag color="red">过期 {allocResult.explain.pool.rejected.expired}</Tag> : null}
+                    {allocResult.explain.pool.rejected.countryFilter ? <Tag color="orange">国家不符 {allocResult.explain.pool.rejected.countryFilter}</Tag> : null}
+                    {allocResult.explain.pool.rejected.typeFilter ? <Tag color="orange">类型不符 {allocResult.explain.pool.rejected.typeFilter}</Tag> : null}
+                    {allocResult.explain.pool.rejected.occupied ? <Tag color="orange">被其他环境占用 {allocResult.explain.pool.rejected.occupied}</Tag> : null}
+                  </Space>
+                }
+                description={
+                  allocResult.explain.notes.length ? (
+                    <ul style={{ paddingLeft: 18, margin: 0 }}>
+                      {allocResult.explain.notes.map((n, i) => (
+                        <li key={i} style={{ marginBottom: 2 }}>{n}</li>
+                      ))}
+                    </ul>
+                  ) : undefined
+                }
+              />
+            )}
+
             {allocResult.insufficient && (
               <Alert
                 type="warning"
@@ -2249,34 +2333,90 @@ export default function Environments() {
                 message="空闲代理数量少于待分配环境，部分环境未分配（已避免同代理复用）。请先补充代理池。"
               />
             )}
-            <Table
-              size="small"
-              rowKey="id"
-              pagination={false}
-              dataSource={allocResult.results}
-              columns={[
-                { title: '环境', dataIndex: 'name', ellipsis: true },
-                {
-                  title: '结果',
-                  dataIndex: 'action',
-                  width: 110,
-                  render: (v: string) =>
-                    v === 'assigned' ? (
-                      <Tag color="success">已分配</Tag>
-                    ) : v === 'kept' ? (
-                      <Tag color="blue">保留</Tag>
-                    ) : (
-                      <Tag color="default">跳过</Tag>
-                    )
-                },
-                { title: '代理', dataIndex: 'proxyId', width: 90, render: (v?: number) => (v ? `#${v}` : '-') },
-                { title: '说明', dataIndex: 'reason', ellipsis: true }
-              ]}
-            />
+
+            {/* 逐环境决策：说清「谁分到了哪个」以及「原来的共用出口被拆开了」 */}
+            {allocResult.explain && (
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                dataSource={allocResult.explain.decisions}
+                style={{ marginBottom: 12 }}
+                columns={[
+                  { title: '环境', dataIndex: 'name', ellipsis: true, width: 130 },
+                  {
+                    title: '结果',
+                    dataIndex: 'action',
+                    width: 90,
+                    render: (v: string) =>
+                      v === 'assigned' ? <Tag color="success">已分配</Tag>
+                        : v === 'kept' ? <Tag color="blue">保留</Tag>
+                          : <Tag>跳过</Tag>
+                  },
+                  {
+                    title: '代理变化',
+                    width: 190,
+                    render: (_: unknown, r: AllocExplain['decisions'][number]) =>
+                      r.fromProxy && r.fromProxy !== r.toProxy ? (
+                        <span style={{ fontSize: 12 }}>
+                          {r.fromProxy} <Typography.Text type="secondary">→</Typography.Text> <b>{r.toProxy}</b>
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 12 }}>{r.toProxy || '—'}</span>
+                      )
+                  },
+                  { title: '为什么', dataIndex: 'why', ellipsis: true }
+                ]}
+              />
+            )}
+
+            <Collapse ghost size="small" items={[{
+              key: 'raw',
+              label: `原始分配结果（${allocResult.results.length}）`,
+              children: (
+                <Table
+                  size="small"
+                  rowKey="id"
+                  pagination={false}
+                  dataSource={allocResult.results}
+                  columns={[
+                    { title: '环境', dataIndex: 'name', ellipsis: true },
+                    {
+                      title: '结果',
+                      dataIndex: 'action',
+                      width: 110,
+                      render: (v: string) =>
+                        v === 'assigned' ? <Tag color="success">已分配</Tag>
+                          : v === 'kept' ? <Tag color="blue">保留</Tag>
+                            : <Tag>跳过</Tag>
+                    },
+                    { title: '代理 id', dataIndex: 'proxyId', width: 90, render: (v?: number) => (v ? `#${v}` : '-') },
+                    { title: '说明', dataIndex: 'reason', ellipsis: true }
+                  ]}
+                />
+              )
+            }]} />
+
             <div style={{ textAlign: 'right', marginTop: 16 }}>
-              <Button type="primary" onClick={closeAlloc}>
-                完成
-              </Button>
+              <Space>
+                {allocPhase === 'result' ? (
+                  <>
+                    <Button onClick={() => setAllocPhase('filter')}>改条件</Button>
+                    <Button
+                      type="primary"
+                      loading={allocLoading}
+                      disabled={!allocResult.assigned}
+                      onClick={runAllocProxy}
+                    >
+                      确认分配
+                    </Button>
+                  </>
+                ) : (
+                  <Button type="primary" onClick={closeAlloc}>
+                    完成
+                  </Button>
+                )}
+              </Space>
             </div>
           </div>
         )}

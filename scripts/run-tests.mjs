@@ -45,6 +45,8 @@ const COMPILES = [
   { name: 'healthBaseline', files: ['src/shared/healthBaseline.ts'], out: '.tmp_hb' },
   // healthFix 依赖 healthcheck（uaOs）与 countries（时区/语言表）
   { name: 'healthFix', files: ['src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_hf', extra: ['--lib', 'es2020,dom'] },
+  // 分配解释：依赖 proxyAllocator 的类型与结果结构
+  { name: 'proxyAllocExplain', files: ['src/shared/proxyAllocExplain.ts', 'src/shared/proxyAllocator.ts'], out: '.tmp_px' },
   // 批量修复预演：依赖 healthFix（proposeFixes）与 healthcheck（checkConsistency）
   { name: 'fixBatch', files: ['src/shared/fixBatch.ts', 'src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_fb', extra: ['--lib', 'es2020,dom'] },
   // 快照：零 import 但含接口与类型断言，仍按约定先编再 require
@@ -85,6 +87,7 @@ const TESTS = [
   { name: 'healthBaseline', file: 'tests/healthBaseline.test.cjs' },
   { name: 'healthFix', file: 'tests/healthFix.test.cjs' },
   { name: 'fixBatch', file: 'tests/fixBatch.test.cjs' },
+  { name: 'proxyAllocExplain', file: 'tests/proxyAllocExplain.test.cjs' },
   { name: 'snapshot', file: 'tests/snapshot.test.cjs' },
   { name: 'snapshotDiff', file: 'tests/snapshotDiff.test.cjs' },
   { name: 'webhook', file: 'tests/webhook.test.cjs' },
