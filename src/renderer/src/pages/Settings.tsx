@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
@@ -9,6 +9,7 @@ import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@share
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
 import { DEFAULT_CDP_PORT, type CdpInfo } from '@shared/cdp'
+import type { SnapshotDiff, ProxyDiffItem, ProfileDiffItem } from '@shared/snapshotDiff'
 import { useI18n, LOCALE_CHANGE_EVENT } from '../i18n'
 
 // 主题、自动时段、国家与语言同步进 localStorage，供渲染层 resolveDark / i18n 同步读取
@@ -40,6 +41,150 @@ function persistThemeLocals(s: AppSettings) {
   window.dispatchEvent(new Event(LOCALE_CHANGE_EVENT))
 }
 
+/**
+ * 快照导入预演的展示：把「这次导入会发生什么」摊开给用户看。
+ *
+ * 呈现原则：**先说会被跳过的，再说会新建的**。
+ * 用户点导入是为了拿到数据，而「哪些没拿到」远比「拿到了多少」更重要——
+ * 后者系统本来也会告诉他，前者只有这里会说。
+ * 故有冲突 / 丢失时用 warning 色，完全无损时才用 success 色。
+ */
+function SnapshotDiffView({ diff, warnings }: { diff: SnapshotDiff; warnings: string[] }) {
+  const { t } = useI18n()
+  const c = diff.counts
+  const risky = c.proxyConflict > 0 || c.extensionDropped > 0 || c.versionAhead > 0 || diff.notes.length > 0
+  const notes = [...new Set([...warnings, ...diff.notes])]
+
+  return (
+    <div>
+      <Alert
+        type={risky ? 'warning' : 'success'}
+        showIcon
+        style={{ marginBottom: 12 }}
+        message={
+          <Space wrap size={[8, 4]}>
+            <Tag color="blue">{t('snapshot.diffProfiles', { n: c.profileTotal })}</Tag>
+            <Tag color="green">{t('snapshot.diffProxyCreate', { n: c.proxyCreate })}</Tag>
+            {c.proxyReuse > 0 && <Tag>{t('snapshot.diffProxyReuse', { n: c.proxyReuse })}</Tag>}
+            {c.groupCreate > 0 && <Tag>{t('snapshot.diffGroupCreate', { n: c.groupCreate })}</Tag>}
+            {c.rpaTotal > 0 && <Tag color="purple">{t('snapshot.diffRpa', { n: c.rpaTotal })}</Tag>}
+          </Space>
+        }
+        description={
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {t('snapshot.diffVersion', { src: diff.sourceVersion, cur: diff.formatVersion })}
+            {diff.migrations.length > 0 ? ` · ${diff.migrations.join(' / ')}` : ''}
+            {diff.sourceTeam ? ` · ${t('snapshot.diffFromTeam', { team: diff.sourceTeam })}` : ''}
+          </Typography.Text>
+        }
+      />
+
+      {notes.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={t('snapshot.diffNotes')}
+          description={
+            <ul style={{ paddingLeft: 18, margin: 0, maxHeight: 180, overflow: 'auto' }}>
+              {notes.map((n, i) => (
+                <li key={i} style={{ marginBottom: 4 }}>{n}</li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+
+      {/* 明细默认折叠，避免几十行把关键信息淹没 */}
+      {diff.proxies.length > 0 && (
+        <Collapse ghost size="small" items={[{
+          key: 'p',
+          label: t('snapshot.diffProxyDetail', { n: diff.proxies.length }),
+          children: (
+            <Table<ProxyDiffItem>
+              size="small"
+              rowKey={(r, i) => r.name || String(r.reason || i)}
+              pagination={false}
+              dataSource={diff.proxies}
+              columns={[
+                { title: t('snapshot.diffColName'), dataIndex: 'name' },
+                {
+                  title: t('snapshot.diffColAction'),
+                  dataIndex: 'action',
+                  render: (a, r) => {
+                    if (a === 'create') return <Tag color="green">{t('snapshot.diffActCreate')}</Tag>
+                    if (a === 'reuse') return <Tag>{t('snapshot.diffActReuse')}</Tag>
+                    if (a === 'conflict') return <Tag color="orange">{t('snapshot.diffActConflict')}</Tag>
+                    return <Tag color="red">{t('snapshot.diffActInvalid')}{r.reason ? ` (${r.reason})` : ''}</Tag>
+                  }
+                },
+                {
+                  title: t('snapshot.diffColEndpoint'),
+                  render: (_, r) => (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {r.currentHost != null ? `${r.currentHost}:${r.currentPort}` : ''}
+                      {r.currentHost != null && r.incomingHost != null ? ' → ' : ''}
+                      {r.incomingHost != null ? `${r.incomingHost}:${r.incomingPort}` : ''}
+                    </Typography.Text>
+                  )
+                }
+              ]}
+            />
+          )
+        }]} />
+      )}
+
+      {diff.profiles.length > 0 && (
+        <Collapse ghost size="small" items={[{
+          key: 'e',
+          label: t('snapshot.diffProfileDetail', { n: diff.profiles.length }),
+          children: (
+            <Table<ProfileDiffItem>
+              size="small"
+              rowKey={(r, i) => `${r.name}-${i}`}
+              pagination={false}
+              dataSource={diff.profiles}
+              columns={[
+                { title: t('snapshot.diffColName'), dataIndex: 'name' },
+                {
+                  title: t('snapshot.diffColGroup'),
+                  render: (_, r) =>
+                    r.group ? (
+                      <Tag color={r.groupWillCreate ? 'green' : undefined}>
+                        {r.group}{r.groupWillCreate ? ` (${t('snapshot.diffNew')})` : ''}
+                      </Tag>
+                    ) : <Typography.Text type="secondary">—</Typography.Text>
+                },
+                {
+                  title: t('snapshot.diffColProxy'),
+                  render: (_, r) => {
+                    if (r.proxyAction === 'none') return <Typography.Text type="secondary">—</Typography.Text>
+                    const color = r.proxyAction === 'missing' ? 'red' : r.proxyAction === 'create' ? 'green' : undefined
+                    return <Tag color={color}>{r.proxy}</Tag>
+                  }
+                },
+                {
+                  title: t('snapshot.diffColExt'),
+                  render: (_, r) => {
+                    if (!r.extensions.length) return <Typography.Text type="secondary">—</Typography.Text>
+                    return (
+                      <span>
+                        {r.extensions.map((e, i) => (
+                          <Tag key={i} color={e.found ? undefined : 'red'}>{e.name}</Tag>
+                        ))}
+                      </span>
+                    )
+                  }
+                }
+              ]}
+            />
+          )
+        }]} />
+      )}
+    </div>
+  )
+}
+
 export default function Settings() {
   const { message } = useAppCtx()
   const [form] = Form.useForm<AppSettings>()
@@ -62,6 +207,16 @@ export default function Settings() {
   const [setupQr, setSetupQr] = useState('')
   const [setupCode, setSetupCode] = useState('')
   const [disableOpen, setDisableOpen] = useState(false)
+
+  // ===== 空间快照导入（两阶段：预演差异 → 确认后写库）=====
+  // pendingImport 非空即表示「差异已算好，等用户确认」，此时不写任何数据。
+  const [pendingImport, setPendingImport] = useState<{
+    file: File
+    data: Record<string, unknown>
+    diff: SnapshotDiff
+    warnings: string[]
+  } | null>(null)
+  const [importing, setImporting] = useState(false)
   const [disableCode, setDisableCode] = useState('')
 
   const loadTwoFa = useCallback(async () => {
@@ -337,15 +492,37 @@ export default function Settings() {
     }
   }
 
-  // 全空间快照：导入单个 JSON 文件，恢复到当前团队（代理按名复用，环境重新生成）
+  // 全空间快照导入：先预演差异、用户确认后再真正写库。
+  // 为什么要有预演：导入并非总是无损的——同名代理连接信息不同会被保留不覆盖、
+  // 环境引用的扩展在当前团队不存在会被丢弃、代理池缺项会让环境导入成「无代理」。
+  // 这些以前只能在导入**之后**从日志里零散看到，那时数据已经写进去了。
   const importSnapshot = async (file: File) => {
     try {
       const text = await readTextFile(file)
-      const data = JSON.parse(text)
-      const res = await api.post<{ profiles: number; proxiesCreated: number; rpaCreated: number; proxiesSkipped: number }>(
-        '/api/snapshot/import',
-        data
-      )
+      const data = JSON.parse(text) as Record<string, unknown>
+      const pre = await api.post<{ diff: SnapshotDiff; warnings?: string[] }>('/api/snapshot/preview', data)
+      const d = pre.diff
+      setPendingImport({ file, data, diff: d, warnings: pre.warnings || [] })
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  // 用户在预览弹窗里点了「确认导入」
+  const confirmImport = async () => {
+    if (!pendingImport) return
+    const { data, diff } = pendingImport
+    setImporting(true)
+    try {
+      const res = await api.post<{
+        profiles: number
+        proxiesCreated: number
+        rpaCreated: number
+        proxiesSkipped: number
+        groupsCreated: number
+        warnings?: string[]
+        diff?: SnapshotDiff
+      }>('/api/snapshot/import', data)
       message.success(
         t('snapshot.importSuccess', {
           profiles: res.profiles,
@@ -353,8 +530,32 @@ export default function Settings() {
           rpa: res.rpaCreated
         })
       )
+      // 导入后如实地把「实际发生的情况」讲清楚，而不是只报三个成功数字：
+      // 用户最需要知道的正是这些被跳过的部分。
+      const notes = [...(res.warnings || []), ...(res.diff?.notes || [])]
+      if (res.proxiesSkipped > 0 || notes.length) {
+        Modal.info({
+          title: t('snapshot.importReport'),
+          content: (
+            <div style={{ maxHeight: 360, overflow: 'auto' }}>
+              <Typography.Paragraph style={{ marginBottom: 8 }}>
+                {t('snapshot.importSkipped', { proxies: res.proxiesSkipped, groups: res.groupsCreated })}
+              </Typography.Paragraph>
+              <ul style={{ paddingLeft: 18, margin: 0 }}>
+                {[...new Set(notes)].map((n, i) => (
+                  <li key={i} style={{ marginBottom: 4 }}>{n}</li>
+                ))}
+              </ul>
+            </div>
+          ),
+          okText: t('common.confirm')
+        })
+      }
+      setPendingImport(null)
     } catch (e) {
       message.error((e as Error).message)
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -1144,6 +1345,23 @@ ${cdpInfo.usage.puppeteer}`}
           {t('snapshot.importExtra')}
         </Typography.Paragraph>
       </Card>
+
+      {/* 快照导入预演：展示这次导入会发生什么，确认后才真正写库 */}
+      <Modal
+        open={!!pendingImport}
+        title={t('snapshot.previewTitle', { file: pendingImport?.file.name || '' })}
+        onCancel={() => setPendingImport(null)}
+        onOk={confirmImport}
+        okText={t('snapshot.previewConfirm')}
+        cancelText={t('common.cancel')}
+        confirmLoading={importing}
+        width={720}
+        destroyOnClose
+      >
+        {pendingImport && (
+          <SnapshotDiffView diff={pendingImport.diff} warnings={pendingImport.warnings} />
+        )}
+      </Modal>
 
       {/* 登录二次验证（2FA / TOTP） */}
       <Card title={<span><SafetyOutlined /> 登录二次验证（2FA / TOTP）</span>} style={{ marginTop: 16 }}>

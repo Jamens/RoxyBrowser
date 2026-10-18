@@ -2,7 +2,7 @@ import { Router, type Response, type NextFunction } from 'express'
 import { app } from 'electron'
 import type { DataSource } from 'typeorm'
 import { In } from 'typeorm'
-import { ProfileEntity, ProxyEntity, AccountEntity, GroupEntity, CookieEntity } from '../entities'
+import { ProfileEntity, ProxyEntity, AccountEntity, GroupEntity, CookieEntity, ExtensionEntity } from '../entities'
 import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
@@ -13,8 +13,10 @@ import {
   SNAPSHOT_VERSION,
   validateSnapshot,
   normalizeSnapshot,
-  migrateSnapshot
+  migrateSnapshot,
+  type SnapshotFile
 } from '../../shared/snapshot'
+import { diffSnapshot } from '../../shared/snapshotDiff'
 import {
   importProfileItems,
   importProxiesStructured,
@@ -33,6 +35,41 @@ export interface ProfileMigrateRouteDeps {
   getBridge: () => BrowserBridge | null
   authMiddleware: (req: AuthedRequest, res: Response, next: NextFunction) => void
   writeLog: (req: AuthedRequest, action: string, detail: string) => Promise<void>
+}
+
+/**
+ * 查询目标团队现状并计算导入差异。
+ *
+ * 之所以抽成独立函数：**预览接口与导入接口必须共用它**。
+ * 若两边各写一套判定，预览与实际行为一旦漂移，用户看到的「差异」就是假的——
+ * 而用户正是靠这个预览来决定是否导入，假的预览会直接导致误操作。
+ *
+ * 查询范围需与 importers 的 scopeOf 保持一致：owner/admin 看全部，其余仅本人创建，
+ * 否则预演会把「别人建的同名代理」当成不存在，误报冲突。
+ */
+async function buildSnapshotDiff(
+  mig: { data: SnapshotFile; from: number; applied: string[] },
+  ctx: { tid: number; uid?: number; role?: string },
+  getDs: () => DataSource
+) {
+  const data = normalizeSnapshot(mig.data)
+  // 与 exporters.scopeOf 同规则：owner/admin 不过滤，其余按 ownerId 隔离
+  const scope =
+    ctx.role === 'owner' || ctx.role === 'admin' ? {} : { ownerId: ctx.uid }
+  const [proxyList, groupList, extList] = await Promise.all([
+    getDs().getRepository(ProxyEntity).find({ where: { teamId: ctx.tid, ...scope } }),
+    getDs().getRepository(GroupEntity).find({ where: { teamId: ctx.tid, ...scope } }),
+    getDs().getRepository(ExtensionEntity).find({ where: { teamId: ctx.tid, ...scope } })
+  ])
+  return diffSnapshot(
+    data,
+    {
+      proxies: proxyList.map((p) => ({ name: p.name, host: p.host, port: Number(p.port) })),
+      groups: groupList.map((g) => g.name),
+      extensions: extList.map((e) => e.name)
+    },
+    { from: mig.from, applied: mig.applied }
+  )
 }
 
 /**
@@ -100,6 +137,27 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
     res.send(JSON.stringify(snap, null, 2))
   })
 
+  // 导入预演：**只读、不写库**。返回这次导入会发生什么（哪些新建/复用/连接冲突/
+  // 哪些扩展引用会丢），供设置页在确认前展示。
+  // 与 /snapshot/import 共用同一套校验 + 迁移 + 差异计算（buildSnapshotDiff），
+  // 保证「预览说的」与「导入做的」不会不一致——不一致的预览比没有预览更危险。
+  router.post('/snapshot/preview', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    try {
+      const v = validateSnapshot(req.body)
+      if (!v.ok) return res.status(400).json({ message: '快照文件不合法：' + v.errors.join('；'), detail: v })
+      const mig = migrateSnapshot(req.body)
+      if (mig.to !== SNAPSHOT_VERSION) {
+        return res.status(400).json({
+          message: `快照版本 ${mig.from} 无法迁移到当前版本 ${SNAPSHOT_VERSION}：缺少 v${mig.to} → v${mig.to + 1} 的迁移步骤`
+        })
+      }
+      const diff = await buildSnapshotDiff(mig, { tid: req.tid!, uid: req.uid, role: req.role }, getDs)
+      res.json({ ok: true, diff, warnings: v.warnings })
+    } catch (e) {
+      res.status(400).json({ message: `预览失败：${(e as Error).message}` })
+    }
+  })
+
   // 一键灌入：先恢复代理池（按名称复用），再导入环境（引用同名代理），最后导入 RPA。
   // 扩展为名称引用，目标缺同名扩展则自动丢弃引用（与单环境导入行为一致）。
   router.post('/snapshot/import', authMiddleware, async (req: AuthedRequest, res: Response) => {
@@ -114,6 +172,9 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
       })
     }
     const data = normalizeSnapshot(mig.data)
+    // 差异必须在写库**之前**算：一旦代理池先落地，本轮「将新建」的代理就会
+    // 变成「已存在」，算出来的结果全是「复用」，等于什么都没告诉用户。
+    const diff = await buildSnapshotDiff(mig, { tid: req.tid!, uid: req.uid, role: req.role }, getDs)
     const proxyRes = await importProxiesStructured(data.proxies, { tid: req.tid!, uid: req.uid, role: req.role })
     const profRes = await importProfileItems(data.profiles as unknown as Array<Record<string, unknown>>, {
       tid: req.tid!,
@@ -124,7 +185,8 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
     if (profRes.created === 0 && proxyRes.imported === 0 && rpaRes.created === 0) {
       return res.status(400).json({ message: '快照中没有可导入的内容' })
     }
-    // 迁移告警 + 版本信息一并回传：用户必须能看见「哪些条目没完全还原」
+    // 迁移告警 + 版本信息 + 预演差异一并回传：用户必须能看见
+    // 「哪些条目没完全还原」「哪些代理因连接信息不同被保留未覆盖」
     const warnings = [...v.warnings, ...proxyRes.warnings]
     await writeLog(
       req,
@@ -142,7 +204,8 @@ export function registerProfileMigrateRoutes(router: Router, deps: ProfileMigrat
       formatVersion: SNAPSHOT_VERSION,
       sourceVersion: mig.from,
       migrations: mig.applied,
-      warnings
+      warnings,
+      diff
     })
   })
 
