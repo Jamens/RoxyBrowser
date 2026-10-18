@@ -78,7 +78,8 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 
 - **内容范围**：环境（整环境结构，含指纹 / 分组 / 代理 / 账号 / Cookie / 扩展名引用）+ 代理池（结构化，保留国家 / 地区 / 到期等元信息）+ RPA 脚本 + 扩展元数据引用。
 - **导出**：`GET /api/snapshot/export` → 直接下载 `.json`（文件名含团队 id 与时间戳）。
-- **导入**：`POST /api/snapshot/import`，body 为快照 JSON → `{ profiles, proxiesCreated, proxiesSkipped, rpaCreated, extensionsReferenced, formatVersion, sourceVersion, migrations, warnings }`。
+- **导入**：`POST /api/snapshot/import`，body 为快照 JSON → `{ profiles, proxiesCreated, proxiesSkipped, rpaCreated, extensionsReferenced, formatVersion, sourceVersion, migrations, warnings, diff }`。
+- **导入前差异预演**（详见 1.3.2）：`POST /api/snapshot/preview` **只读不写库**，返回这次导入会发生什么；设置页先弹差异预览，用户确认后才真正导入。
 - **复用既有导入器**：导出 / 导入直接复用 `src/main/exporters.ts` 中「整环境迁移 / 代理批量 / RPA」各模块的既有逻辑，保证单模块迁移与整团队迁移同源、字段一致。
 - **导入顺序**：先恢复代理池（按名称复用，缺失则新建）→ 再导入环境（引用同名代理）→ 最后导入 RPA（定时配置重置为关闭）。扩展按名称重映射，目标缺同名扩展则忽略引用。
 - **校验**：导入前用 `validateSnapshot()`（`src/shared/snapshot.ts`，纯函数）严格校验 `format` / `version` / `profiles[]`，非法文件直接 400 拒绝，不污染数据库。
@@ -97,6 +98,28 @@ curl -X POST http://127.0.0.1:39100/api/profiles/12/duplicate-batch \
 - **条目级只告警**：单个条目的 `version` 超前只进 `warnings` 并带上环境名，不阻断整次迁移（一个条目不该让整包失败），但用户能看见哪些没完全还原。
 - **迁移阶梯** `MIGRATIONS` / `migrateSnapshot()`：键为来源版本，值为升到下一版的纯函数。当前只发布过 v1，阶梯为空，但**入口与保护常驻**——升不上去时如实返回 `to < SNAPSHOT_VERSION`，导入端 400 拒绝，绝不假装成功。
 - **可见性**：导入响应回传 `formatVersion` / `sourceVersion` / `migrations` / `warnings`；导出补齐 `appVersion`（此前字段声明了却从未赋值），便于排查「同一份快照在不同机器上行为不同」。
+
+### 1.3.2 导入前差异预演
+
+快照导入从来不是无损的。此前这些损耗只能在导入**之后**从日志 / 告警里零散看到，那时数据已经写进去了：
+
+| 情况 | 实际行为 | 用户何时才知道 |
+|---|---|---|
+| 同名代理连接信息不同 | 保留现有配置，不覆盖 | 导入后的 warning |
+| 环境引用的扩展当前团队没有 | 该引用被丢弃 | 导入后的 warning |
+| 环境引用的代理池里没有、且无 `proxyDetail` | **环境建成但没有代理**，不报错 | 几乎察觉不到 |
+| 条目版本超前 | 部分字段无法还原 | 导入后的 warning |
+
+其中第三种最危险：环境确实出现在列表里、看起来导入成功，但代理没了，要到用的时候才发现。
+
+**机制**：设置页选文件后先调 `POST /api/snapshot/preview`（**只读、不写库**），返回结构化差异；弹窗展示后用户点「确认导入」才真正调 `/snapshot/import`。
+
+- **判定口径必须与真实导入器一致**：`diffSnapshot()`（`src/shared/snapshotDiff.ts`，纯函数）逐条复刻 `importProxiesStructured`（同名即跳过 + 比对 `host:port`）与 `importProfileItems`（分组按名复用、代理先按名后按 `proxyDetail`、扩展按名重映射缺失即丢）的规则。**两边各写一套判定的话，预览会骗人——那比没有预览更危险**，因为用户正是靠它决定是否导入。
+- **差异必须在写库之前算**：一旦代理池先落地，本轮「将新建」的代理就变成「已存在」，算出来全是「复用」，等于什么都没告诉用户。
+- **同批次的代理新建要计入索引**：真实流程是「先建代理池、再导环境」，所以本次将新建的代理在预演里就必须算作可引用，否则会把正常情况误报成「代理将丢失」。
+- **查询范围与导入器同规则**：`owner` / `admin` 看全部、其余按 `ownerId` 隔离，否则会把「别人建的同名代理」当成不存在，误报冲突。
+- **呈现原则：先说会被跳过的，再说会新建的。** 「拿到了多少」系统本来也会告诉用户，「哪些没拿到」只有这里会说。有冲突 / 丢失时用 warning 色，完全无损才用 success 色。明细表格默认折叠，避免几十行淹没关键信息；同一缺失扩展被多环境引用时提示去重，不刷屏。
+- **导入后仍如实回报**：响应带 `diff`，前端在有跳过项时弹「导入结果」列出注意事项，而不是只报三个成功数字。
 
 ### 1.4 发布与自动更新
 
