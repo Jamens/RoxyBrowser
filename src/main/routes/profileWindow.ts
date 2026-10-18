@@ -10,6 +10,7 @@ import { getEnvExpiresAt } from '../../shared/envExpiry'
 import { buildHealthReport, healthItemLabel, checkConsistency, type HealthReport } from '../../shared/healthcheck'
 import { diffBaseline, regressedItems, regressedText, MIN_SAMPLES, type HealthBaseline } from '../../shared/healthBaseline'
 import { proposeFixes, mergePatches, fixSummary } from '../../shared/healthFix'
+import { effectiveKeysFor, planBatchFix, batchFixSummary, type BatchFixInput } from '../../shared/fixBatch'
 import { SCAN_SITES, getScanSite, type ScanResult } from '../fingerprintScan'
 import type { Fingerprint } from '../../shared/types'
 
@@ -153,7 +154,9 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
     const fpAll = p.fingerprint as unknown as Partial<Fingerprint>
     const consAll = checkConsistency(fpAll, pc)
     const allKeys = consAll.map((c) => c.key)
-    const effectiveKeys = keys.length === allKeys.length ? allKeys : allKeys.filter((k) => keys.includes(k))
+    // effectiveKeysFor 是共享实现（src/shared/fixBatch.ts），批量预演走同一份，
+    // 避免两边各写一套导致「单修说能修、批量说修不了」。
+    const effectiveKeys = effectiveKeysFor(allKeys, keys)
     const proposals = proposeFixes(fpAll, pc, effectiveKeys)
     const { patch, conflicts } = mergePatches(proposals)
     if (conflicts.length) {
@@ -177,6 +180,99 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       summary: fixSummary(proposals),
       before: pick(before, Object.keys(patch)),
       after: pick(next as unknown as Record<string, unknown>, Object.keys(patch))
+    })
+  })
+
+  // 批量一致性修复：先预演（只读），确认后再逐条执行。
+  // 与单环境路由共用 proposeFixes / effectiveKeysFor / planBatchFix，
+  // 因此批量与单个对同一个环境的结论必然一致——不一致会让用户怀疑工具坏了。
+  router.post('/profiles/batch-fix-consistency', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const ids: number[] = Array.isArray(req.body?.ids) ? (req.body.ids as unknown[]).map(Number).filter((n) => Number.isFinite(n) && n > 0) : []
+    if (!ids.length) return res.status(400).json({ message: '未指定要修复的环境' })
+    if (ids.length > 500) return res.status(400).json({ message: '单次最多修复 500 个环境，请分批操作' })
+    const keys: string[] = Array.isArray(req.body?.keys) ? (req.body.keys as string[]) : []
+    const preview = req.body?.preview !== false
+
+    const repo = getDs().getRepository(ProfileEntity)
+    const list = await repo.find({ where: { id: In(ids), ...ownerScope(req) } })
+    // 查到的环境要按请求顺序返回，否则 UI 表格行序与用户勾选顺序对不上
+    const byId = new Map(list.map((p) => [p.id, p]))
+    const ordered = ids.map((id) => byId.get(id)).filter((p): p is ProfileEntity => !!p)
+    const missing = ids.length - ordered.length
+    // 代理国家一次性查完，避免逐个环境查库（N+1）
+    const proxyIds = [...new Set(ordered.map((p) => p.proxyId).filter((x): x is number => typeof x === 'number'))]
+    const proxyCountryMap = new Map<number, string>()
+    if (proxyIds.length) {
+      const pxList = await getDs().getRepository(ProxyEntity).find({ where: { id: In(proxyIds) } })
+      for (const px of pxList) proxyCountryMap.set(px.id, px.country || '')
+    }
+
+    const inputs: BatchFixInput[] = ordered.map((p) => ({
+      id: p.id,
+      name: p.name,
+      fingerprint: p.fingerprint as unknown as Partial<Fingerprint>,
+      proxyCountry: p.proxyId ? proxyCountryMap.get(p.proxyId) || '' : '',
+      running: p.status === 'running',
+      deleted: !!p.deletedAt
+    }))
+    const plan = planBatchFix(inputs, (fp, pc) => checkConsistency(fp, pc), keys)
+
+    if (preview) {
+      return res.json({ ok: true, dryRun: true, plan, summary: batchFixSummary(plan), notFound: missing })
+    }
+
+    // ===== 实际执行：逐条 try/catch，一条失败不影响其余 =====
+    // 批量接口的价值是「一次处理多个」，遇一个失败就整批回滚会让用户什么都做不成。
+    const applied: Array<{ id: number; name: string; applied: string[]; summary: string }> = []
+    const failed: Array<{ id: number; name: string; reason: string }> = []
+    for (const item of plan.items) {
+      if (item.status !== 'fixable' || !item.changes.length) {
+        if (item.status !== 'fixable') failed.push({ id: item.id, name: item.name, reason: item.reason || '不可修' })
+        continue
+      }
+      try {
+        const p = byId.get(item.id)!
+        // 再次检查运行状态：预演到执行之间用户可能已经把窗口开起来了
+        const fresh = await repo.findOne({ where: { id: p.id, ...ownerScope(req) } })
+        if (!fresh) {
+          failed.push({ id: p.id, name: p.name, reason: '环境已不存在' })
+          continue
+        }
+        if (fresh.deletedAt) {
+          failed.push({ id: p.id, name: p.name, reason: '该环境已删除，请先从回收站恢复' })
+          continue
+        }
+        if (fresh.status === 'running') {
+          failed.push({ id: p.id, name: p.name, reason: '窗口正在运行，修复不会生效，请先关闭后重试' })
+          continue
+        }
+        const before = (fresh.fingerprint || {}) as Record<string, unknown>
+        const patch: Record<string, unknown> = {}
+        for (const c of item.changes) patch[c.field] = c.to
+        const next = normalizeFingerprint({ ...(before as Partial<Fingerprint>), ...patch } as Partial<Fingerprint>)
+        // tzOffset 必须与 timezone 同步：只改时区不改偏移会出现「时区是纽约、UTC 偏移还是 -480」这种一眼假的对撞
+        next.tzOffset = getTimezoneOffsetMinutes(next.timezone)
+        fresh.fingerprint = next as unknown as ProfileEntity['fingerprint']
+        await repo.save(fresh)
+        applied.push({ id: fresh.id, name: fresh.name, applied: Object.keys(patch), summary: item.summary })
+      } catch (e) {
+        failed.push({ id: item.id, name: item.name, reason: (e as Error).message })
+      }
+    }
+    const summaryText = batchFixSummary(plan)
+    await writeLog(
+      req,
+      'fix_consistency',
+      `批量修复一致性（${summaryText}）：成功 ${applied.length} 个、跳过或失败 ${failed.length} 个` +
+        (failed.length ? `；未处理：${failed.slice(0, 5).map((f) => `「${f.name}」${f.reason}`).join('；')}${failed.length > 5 ? ` 等 ${failed.length} 个` : ''}` : '')
+    )
+    res.json({
+      ok: true,
+      applied,
+      failed,
+      plan: { counts: plan.counts, notes: plan.notes },
+      notFound: missing,
+      summary: summaryText
     })
   })
 

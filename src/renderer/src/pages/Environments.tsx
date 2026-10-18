@@ -64,6 +64,17 @@ const CONSISTENCY_LABELS: Record<string, string> = {
 /** 伪装度配色：≥90 绿 / ≥70 黄 / 其余红 */
 const scoreColor = (s: number) => (s >= 90 ? '#52c41a' : s >= 70 ? '#faad14' : '#ff4d4f')
 
+/**
+ * 字段值转成一行可读文本，用于「改前 → 改后」对比。
+ * UA 有 100+ 字符，不截断会把表格撑爆；数组用逗号连接；
+ * null/undefined 显式标出——「从空变成某值」正是用户最该看见的变化。
+ */
+function fmtVal(v: unknown): string {
+  if (v === null || v === undefined || v === '') return '∅'
+  const s = Array.isArray(v) ? v.join(', ') : String(v)
+  return s.length > 46 ? s.slice(0, 46) + '…' : s
+}
+
 // ===== 批量体检总览：后端聚合数据结构 =====
 interface HealthFixProposal {
   key: 'tzVsProxy' | 'langVsTz' | 'uaVsOs'
@@ -75,6 +86,30 @@ interface HealthFixProposal {
 
 /** 单环境体检报告 = 后端 HealthReport + 可自动修复项 */
 type HealthReportWithFixes = HealthReport & { fixes?: HealthFixProposal[] }
+
+/** 批量修复预演 = 后端 BatchFixPlan（结构与 src/shared/fixBatch.ts 一致） */
+type BatchFixPlan = {
+  items: Array<{
+    id: number
+    name: string
+    status: 'fixable' | 'blocked' | 'skipped'
+    reason?: string
+    failedKeys: string[]
+    proposals: HealthFixProposal[]
+    unfixable: HealthFixProposal[]
+    changes: Array<{ field: string; from: unknown; to: unknown }>
+    summary: string
+  }>
+  counts: {
+    total: number
+    fixable: number
+    blocked: number
+    skipped: number
+    consistent: number
+    willChange: number
+  }
+  notes: string[]
+}
 
 interface BatchHealthItemStat {
   key: string
@@ -233,6 +268,13 @@ export default function Environments() {
   const [batchHealthOpen, setBatchHealthOpen] = useState(false)
   const [batchHealthLoading, setBatchHealthLoading] = useState(false)
   const [batchHealthData, setBatchHealthData] = useState<BatchHealthResult | null>(null)
+  // 批量修复一致性：先预演（只读），用户确认后再执行。
+  // 修之前必须让用户看到「哪些修得了、会改成什么、哪些修不了为什么」——
+  // 否则批量操作失败时用户只知道「成功 N 个」，既不知道为什么剩下的没动，
+  // 也不知道自己有没有误伤本来就自洽的环境。
+  const [batchFixOpen, setBatchFixOpen] = useState(false)
+  const [batchFixLoading, setBatchFixLoading] = useState(false)
+  const [batchFixPlan, setBatchFixPlan] = useState<BatchFixPlan | null>(null)
   const [allocOpen, setAllocOpen] = useState(false)
   const [allocCountry, setAllocCountry] = useState<string | undefined>()
   const [allocType, setAllocType] = useState<string | undefined>()
@@ -393,6 +435,62 @@ export default function Environments() {
       setBatchHealthOpen(false)
     } finally {
       setBatchHealthLoading(false)
+    }
+  }
+
+  // 批量修复一致性 · 第一步：预演（只读，不改任何数据）
+  const previewBatchFix = async () => {
+    if (!selected.length) return
+    setBatchFixLoading(true)
+    setBatchFixOpen(true)
+    setBatchFixPlan(null)
+    try {
+      const data = await api.post<{ plan: BatchFixPlan; summary: string }>('/api/profiles/batch-fix-consistency', {
+        ids: selected,
+        preview: true
+      })
+      setBatchFixPlan(data.plan)
+    } catch (e) {
+      message.error((e as Error).message)
+      setBatchFixOpen(false)
+    } finally {
+      setBatchFixLoading(false)
+    }
+  }
+
+  // 批量修复一致性 · 第二步：确认后真正执行
+  const runBatchFix = async () => {
+    if (!selected.length) return
+    setBatchFixLoading(true)
+    try {
+      const res = await api.post<{
+        applied: Array<{ id: number; name: string; applied: string[] }>
+        failed: Array<{ id: number; name: string; reason: string }>
+        notFound?: number
+      }>('/api/profiles/batch-fix-consistency', { ids: selected, preview: false })
+      message.success(t('env.batchFixDone', { n: res.applied.length }))
+      // 没处理成的必须逐条说明原因——只报「成功 N 个」等于让用户自己猜
+      if (res.failed.length) {
+        Modal.info({
+          title: t('env.batchFixSkippedTitle'),
+          okText: t('common.confirm'),
+          content: (
+            <ul style={{ maxHeight: 320, overflow: 'auto', paddingLeft: 18, margin: 0 }}>
+              {res.failed.map((f) => (
+                <li key={f.id} style={{ marginBottom: 4 }}>{f.name}：{f.reason}</li>
+              ))}
+            </ul>
+          )
+        })
+      }
+      setBatchFixOpen(false)
+      setBatchFixPlan(null)
+      // 指纹变了，列表里的一致性标记不再可信，重新拉数据
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    } finally {
+      setBatchFixLoading(false)
     }
   }
 
@@ -1349,6 +1447,16 @@ export default function Environments() {
               <Button icon={<SafetyCertificateOutlined />} loading={batchHealthLoading} onClick={runBatchHealth}>
                 批量体检 ({selected.length})
               </Button>
+              <Tooltip title={t('env.batchFixTip')}>
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={batchFixLoading}
+                  onClick={previewBatchFix}
+                  disabled={!selected.length}
+                >
+                  {t('env.batchFix')} ({selected.length})
+                </Button>
+              </Tooltip>
               <Button icon={<ClockCircleOutlined />} onClick={() => setExpiryModalOpen(true)}>
                 批量改到期时间 ({selected.length})
               </Button>
@@ -1815,6 +1923,89 @@ export default function Environments() {
           </div>
         )}
       </Drawer>
+
+      {/* 批量修复一致性预演：确认前把「会改什么 / 改不了什么」摊开。
+          没有字段变更时禁用确认按钮——点「修复」却什么都不发生只会让人以为功能坏了。 */}
+      <Modal
+        open={batchFixOpen}
+        title={t('env.batchFixTitle', { n: batchFixPlan?.counts.total ?? selected.length })}
+        onCancel={() => { setBatchFixOpen(false); setBatchFixPlan(null) }}
+        onOk={runBatchFix}
+        okText={t('snapshot.previewConfirm')}
+        cancelText={t('common.cancel')}
+        confirmLoading={batchFixLoading}
+        okButtonProps={{ disabled: !batchFixPlan || batchFixPlan.counts.willChange === 0 }}
+        width={760}
+        destroyOnClose
+      >
+        {batchFixLoading && !batchFixPlan ? (
+          <Typography.Paragraph type="secondary">{t('env.batchFixPreviewing')}</Typography.Paragraph>
+        ) : batchFixPlan ? (
+          <div>
+            <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
+              <Tag color="blue">{t('env.batchFixWillChange', { n: batchFixPlan.counts.willChange })}</Tag>
+              {batchFixPlan.counts.blocked > 0 && <Tag color="orange">{t('env.batchFixBlocked', { n: batchFixPlan.counts.blocked })}</Tag>}
+              {batchFixPlan.counts.skipped > 0 && <Tag>{t('env.batchFixSkipped', { n: batchFixPlan.counts.skipped })}</Tag>}
+              {batchFixPlan.counts.consistent > 0 && <Tag color="green">{t('env.batchFixConsistent', { n: batchFixPlan.counts.consistent })}</Tag>}
+            </Space>
+            {batchFixPlan.counts.willChange === 0 && (
+              <Alert type="info" showIcon style={{ marginBottom: 12 }} message={t('env.batchFixNothing')} />
+            )}
+            {batchFixPlan.notes.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                description={
+                  <ul style={{ paddingLeft: 18, margin: 0 }}>
+                    {batchFixPlan.notes.map((n, i) => (
+                      <li key={i} style={{ marginBottom: 4 }}>{n}</li>
+                    ))}
+                  </ul>
+                }
+              />
+            )}
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={false}
+              dataSource={batchFixPlan.items}
+              columns={[
+                { title: t('env.batchFixColName'), dataIndex: 'name', width: 160 },
+                {
+                  title: t('env.batchFixStatusFixable'),
+                  dataIndex: 'status',
+                  width: 100,
+                  render: (s: string) =>
+                    s === 'fixable' ? <Tag color="green">{t('env.batchFixStatusFixable')}</Tag>
+                      : s === 'blocked' ? <Tag color="orange">{t('env.batchFixStatusBlocked')}</Tag>
+                        : <Tag>{t('env.batchFixStatusSkipped')}</Tag>
+                },
+                {
+                  title: t('env.batchFixChanges'),
+                  render: (_: unknown, r: BatchFixPlan['items'][number]) => {
+                    if (!r.changes.length) {
+                      return <Typography.Text type="secondary">{r.reason || t('env.batchFixNoChanges')}</Typography.Text>
+                    }
+                    return (
+                      <div style={{ fontSize: 12 }}>
+                        {r.changes.map((c) => (
+                          <div key={c.field} style={{ marginBottom: 2 }}>
+                            <Typography.Text type="secondary">{c.field}</Typography.Text>
+                            <span style={{ margin: '0 4px' }}>{fmtVal(c.from)}</span>
+                            <Typography.Text type="secondary">→</Typography.Text>
+                            <span style={{ marginLeft: 4 }}>{fmtVal(c.to)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  }
+                }
+              ]}
+            />
+          </div>
+        ) : null}
+      </Modal>
 
       {/* 批量体检总览：系统级问题分布 + 逐环境报告（可展开明细） */}
       <Drawer
