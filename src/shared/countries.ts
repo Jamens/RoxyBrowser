@@ -15,9 +15,6 @@ export interface CountryDef {
   language: LocaleCode
 }
 
-/** 界面支持的语言 */
-export const LOCALE_CODES: LocaleCode[] = ['zh-CN', 'en-US', 'ja-JP', 'de-DE']
-
 export const COUNTRIES: CountryDef[] = [
   { code: 'CN', name: '中国', nameEn: 'China', timezone: 'Asia/Shanghai', language: 'zh-CN' },
   { code: 'US', name: '美国', nameEn: 'United States', timezone: 'America/New_York', language: 'en-US' },

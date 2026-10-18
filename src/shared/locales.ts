@@ -33,7 +33,3 @@ export function findLocale(code: string | undefined | null): LocaleDef | undefin
 export function normalizeLocale(code: string | undefined | null): LocaleCode | undefined {
   return findLocale(code)?.code
 }
-
-export function isLocaleCode(v: unknown): v is LocaleCode {
-  return typeof v === 'string' && LOCALE_MAP.has(v as LocaleCode)
-}

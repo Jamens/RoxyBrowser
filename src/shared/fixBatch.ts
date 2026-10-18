@@ -21,8 +21,7 @@ import {
   proposeFixes,
   mergePatches,
   fixSummary,
-  type FixProposal,
-  type FixKey
+  type FixProposal
 } from './healthFix'
 import type { Fingerprint } from './types'
 
@@ -287,17 +286,8 @@ export function batchFixSummary(plan: BatchFixPlan): string {
   return parts.join('，') || '没有可修复的环境'
 }
 
-/** 供 UI 展示「这个不一致项会怎么改」的字段中文名 */
-export const FIX_FIELD_LABELS: Record<string, string> = {
-  timezone: '时区',
-  languages: '语言',
-  userAgent: 'User Agent',
-  platform: 'navigator.platform'
-}
-
-/** 供 UI 展示的不一致项中文名 */
-export const FIX_KEY_LABELS: Record<FixKey, string> = {
-  tzVsProxy: '时区 ↔ 代理国家',
-  langVsTz: '语言 ↔ 时区国家',
-  uaVsOs: 'UA 平台 ↔ 设定系统'
-}
+// 曾经在这里导出了 FIX_FIELD_LABELS / FIX_KEY_LABELS（字段与不一致项的中文名），
+// 但预演弹窗最终直接展示原始 field 名（timezone / languages）与 changes 明细，
+// 这两个映射表无人使用，已删除。
+// 若将来要做「字段中文名」列，记得：**先有用例再导出**——
+// 没有调用方的导出等于死代码，还会让读者误以为界面已经做了本地化。

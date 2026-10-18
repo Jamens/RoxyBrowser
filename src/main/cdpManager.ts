@@ -128,11 +128,6 @@ export function setCdpPort(port: number): void {
   configuredPort = clampPort(port)
 }
 
-/** 读回实际生效的端口（用于展示「设置 39222 但实际用了 39223」这类偏移） */
-export function getActiveCdpPort(): number | null {
-  return activePort
-}
-
 /**
  * 在 app ready 后确定实际端口并落盘。
  *

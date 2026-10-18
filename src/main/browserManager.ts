@@ -108,15 +108,9 @@ const syncTargets = new Set<number>()
 export function setSyncMode(enabled: boolean) {
   syncEnabled = enabled
 }
-export function getSyncMode() {
-  return syncEnabled
-}
 export function setSyncTargets(ids: number[]) {
   syncTargets.clear()
   for (const id of ids || []) syncTargets.add(Number(id))
-}
-export function getSyncTargets(): number[] {
-  return [...syncTargets]
 }
 
 /**
