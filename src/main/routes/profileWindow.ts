@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { DataSource } from 'typeorm'
 import { In } from 'typeorm'
 import { ProfileEntity, ProxyEntity, CookieEntity, AccountEntity, TeamMemberEntity, TeamEntity, AppSettingsEntity } from '../entities'
-import { normalizeFingerprint, getTimezoneOffsetMinutes } from '../../shared/fingerprint'
+import { normalizeFingerprint, getTimezoneOffsetMinutes, normalizeBlockReason } from '../../shared/fingerprint'
 import { ownerScope, ownerAndWhere } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
@@ -136,10 +136,23 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
     // dryRun（默认）：只回提案不动数据，供前端预览「将要改哪些字段」
     if (req.body?.preview !== false) {
       const keys: string[] = Array.isArray(req.body?.keys) ? (req.body.keys as string[]) : []
+      // 指纹残缺时**如实报不可修**，不能只回提案——否则预览显示「将修复」、
+      // 点确认后却 400，用户会觉得界面在骗人（与批量路径的守卫保持同一口径）。
+      const blocked = normalizeBlockReason(p.fingerprint as unknown as Partial<Fingerprint>)
+      if (blocked) {
+        return res.json({
+          ok: true,
+          dryRun: true,
+          fixable: false,
+          reason: blocked,
+          proposals: [],
+          summary: blocked
+        })
+      }
       const proposals = keys.length
         ? proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, p.proxyId ? await proxyCountryOf(p.proxyId) : '', keys)
         : []
-      return res.json({ ok: true, dryRun: true, proposals, summary: fixSummary(proposals) })
+      return res.json({ ok: true, dryRun: true, fixable: true, proposals, summary: fixSummary(proposals) })
     }
     const keys: string[] = Array.isArray(req.body?.keys) ? (req.body.keys as string[]) : []
     if (!keys.length) return res.status(400).json({ message: '未指定要修复的一致性项' })
@@ -166,6 +179,12 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       return res.status(400).json({ message: `没有可自动修复的项。${fixSummary(proposals.filter((x) => !x.fixable))}` })
     }
     const before = (p.fingerprint || {}) as Record<string, unknown>
+    // 指纹残缺时**必须拒绝修复**：normalizeFingerprint 对 os 缺失/非法的输入
+    // 会返回一整套随机指纹，把 patch 连同原值一起丢掉——
+    // 实测过：某环境指纹被裁成 {timezone, languages}，修复后 os/UA/分辨率/字体全变随机值，
+    // 而接口仍回报「已修复 timezone、languages」。宁可修不了，也不能静默换掉用户的配置。
+    const blockReason = normalizeBlockReason(before as Partial<Fingerprint>)
+    if (blockReason) return res.status(400).json({ message: blockReason })
     const next = normalizeFingerprint({ ...(before as Partial<Fingerprint>), ...patch } as Partial<Fingerprint>)
     // tzOffset 与 timezone 必须同步：只改 timezone 不改偏移，
     // 会出现「时区是纽约、UTC 偏移还是 -480」这种一眼假的对撞。
@@ -249,6 +268,14 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
         const before = (fresh.fingerprint || {}) as Record<string, unknown>
         const patch: Record<string, unknown> = {}
         for (const c of item.changes) patch[c.field] = c.to
+        // 二次防线（预演阶段已在 planOne 拦过，这里防的是预演后指纹被外部改坏）。
+        // 不校验就会走到 normalizeFingerprint 的「os 非法 → 返回整份随机指纹」分支：
+        // patch 连同 before 一起被丢弃，接口却回报「已修复 timezone/languages」。
+        const blockReason = normalizeBlockReason(before as Partial<Fingerprint>)
+        if (blockReason) {
+          failed.push({ id: p.id, name: p.name, reason: blockReason })
+          continue
+        }
         const next = normalizeFingerprint({ ...(before as Partial<Fingerprint>), ...patch } as Partial<Fingerprint>)
         // tzOffset 必须与 timezone 同步：只改时区不改偏移会出现「时区是纽约、UTC 偏移还是 -480」这种一眼假的对撞
         next.tzOffset = getTimezoneOffsetMinutes(next.timezone)

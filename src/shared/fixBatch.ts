@@ -24,6 +24,7 @@ import {
   type FixProposal
 } from './healthFix'
 import type { Fingerprint } from './types'
+import { normalizeBlockReason } from './fingerprint'
 
 /** 批量预演所需的单个环境信息（主进程查库后传入） */
 export interface BatchFixInput {
@@ -148,7 +149,22 @@ export function planOne(
     }
   }
 
+  // 指纹残缺（os 缺失/非法）→ 不能修复。
+  // 必须在预演阶段就拦下：执行路径是 `normalizeFingerprint({...before, ...patch})`，
+  // 而它对 os 非法的输入会**返回一整套随机指纹、把 patch 连同 before 一起丢掉**。
+  // 若不在此拦下，预演会显示「将修复 timezone/languages」，
+  // 执行后用户却发现 os / UA / 分辨率等全被换掉，且接口回报仍是「已修复」。
   const fp = input.fingerprint
+  const blockReason = normalizeBlockReason(fp)
+  if (blockReason) {
+    return {
+      ...base,
+      status: 'blocked',
+      reason: blockReason,
+      summary: '指纹不完整，无法安全修复'
+    }
+  }
+
   const pc = input.proxyCountry || ''
   const cons = checkConsistency(fp, pc) || []
   // 只统计真正不通过（ok === false）的项。

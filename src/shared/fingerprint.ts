@@ -367,6 +367,48 @@ export function applyCoreVersion(fp: Fingerprint, major: number): Fingerprint {
 /** 可选内核版本列表（降序），供表单下拉使用 */
 export const CHROME_MAJORS = CHROME_VERSIONS.map((v) => v.major).sort((a, b) => b - a)
 
+/** 合法 OS 取值：与 Fingerprint.os 的类型定义一致 */
+const OS_KINDS: readonly string[] = ['windows', 'mac', 'android', 'ios']
+
+/**
+ * 这份指纹能否**在保留原值的前提下**被 normalizeFingerprint 归一。
+ *
+ * 存在的理由：normalizeFingerprint 对「不认得的输入」不是报错或原样返回，
+ * 而是**直接返回一整套随机指纹**。这对「新建环境 / 编辑表单加载」是对的设计
+ * （杜绝点击编辑一片空白），但对**增量修复**是灾难：
+ * 一致性修复走的是 `normalizeFingerprint({ ...before, ...patch })`，
+ * 一旦 before 的 os 缺失或非法，函数会把 patch 连同 before 一起丢掉，
+ * 返回一份全新的随机指纹——而接口仍回报「已修复 timezone / languages」。
+ *
+ * 实测过一次：某环境指纹被裁成 `{timezone, languages}`（无 os），
+ * 修复后 os / UA / 屏幕分辨率 / 字体等全部被换成随机值，用户毫无察觉。
+ * 所以增量修复必须先问一句「你会不会把我的数据整体换掉」。
+ *
+ * 本函数由 normalizeFingerprint 自己复用，避免两处判定各写一套而漂移。
+ */
+export function isNormalizableFingerprint(fp?: Partial<Fingerprint> | null): fp is Partial<Fingerprint> {
+  if (!fp || typeof fp !== 'object') return false
+  const os = (fp as { os?: unknown }).os
+  return typeof os === 'string' && OS_KINDS.includes(os)
+}
+
+/**
+ * 不能归一时的人话原因（供 UI / 接口展示）。
+ * 返回 null 表示可安全归一。
+ *
+ * 措辞要点：必须说清「会被整份替换成随机指纹」而非泛泛的「数据不完整」——
+ * 用户需要知道自己原本的配置会消失，才知道该去编辑弹窗补全系统类型。
+ */
+export function normalizeBlockReason(fp?: Partial<Fingerprint> | null): string | null {
+  if (isNormalizableFingerprint(fp)) return null
+  if (!fp || typeof fp !== 'object') return '环境指纹为空或格式不正确，无法安全修复'
+  const os = (fp as { os?: unknown }).os
+  if (typeof os !== 'string' || !os) {
+    return '该环境未设置系统类型（os 为空），无法安全修复：修复时会整份指纹被替换为随机值，请先在编辑弹窗中补全系统类型'
+  }
+  return `该环境的系统类型「${os}」不是受支持的取值（${OS_KINDS.join(' / ')}），无法安全修复：请先在编辑弹窗中修正系统类型`
+}
+
 /**
  * 把任意（可能不完整 / 旧版 / 缺字段）的指纹数据规整成完整且自洽的 Fingerprint。
  * - 空 / 非对象 / 缺 os：直接返回一套随机完整指纹，绝不抛错。
@@ -374,12 +416,16 @@ export const CHROME_MAJORS = CHROME_VERSIONS.map((v) => v.major).sort((a, b) => 
  *   按该 os 取确定字体集，保证渲染层 `fp.languages.join` / `fp.fonts.length` 不会因
  *   undefined 而崩溃（旧导出文件 / 历史数据常缺 fonts 等新字段）。
  * 设计要点：纯函数、零异常，用于导入落库前与编辑表单加载时，杜绝「点击编辑一片空白」。
+ *
+ * ⚠️ 调用方若只想**改动个别字段**（如一致性修复），必须先用
+ * `normalizeBlockReason()` 确认可归一，否则会连同原值一起被随机指纹替换。
+ * 原因见 `isNormalizableFingerprint` 的注释。
  */
 export function normalizeFingerprint(fp?: Partial<Fingerprint> | null): Fingerprint {
-  if (!fp || typeof fp !== 'object' || typeof fp.os !== 'string' || (fp.os !== 'windows' && fp.os !== 'mac' && fp.os !== 'android' && fp.os !== 'ios')) {
+  if (!isNormalizableFingerprint(fp)) {
     return defaultFingerprint()
   }
-  const os = fp.os
+  const os = (fp as { os: OSKind }).os
   const base = randomFingerprint(os as OSKind)
   const coreVersion =
     typeof fp.coreVersion === 'number' && fp.coreVersion > 0

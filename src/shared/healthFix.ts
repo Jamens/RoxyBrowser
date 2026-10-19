@@ -168,7 +168,16 @@ export function proposeFixes(
   if (has('uaVsOs')) {
     const target = (f.os || '') as OSKind
     const fromUa = uaOs(String(f.userAgent || ''))
-    if (fromUa === target) {
+    // os 为空时必须单独说清：模板插值会产出「目标系统是 ，UA 需绑定…」，
+    // 中间空一格读起来像渲染坏了；而且真实原因是「没填系统类型」，
+    // 不是「移动端 UA 造不出来」——后者会误导用户去改 UA。
+    if (!target) {
+      out.push({
+        key: 'uaVsOs',
+        fixable: false,
+        reason: '该环境未设置系统类型（os 为空），无法判断 UA 应该匹配哪个平台；请先在编辑弹窗中选择系统类型'
+      })
+    } else if (fromUa === target) {
       out.push({ key: 'uaVsOs', fixable: false, reason: 'UA 解析出的平台已与设定 OS 一致，可能是判定口径不一致' })
     } else if (target !== 'windows' && target !== 'mac') {
       // 移动端 UA 含具体设备型号（Pixel 8 / iPhone 15 Pro），无法凭空合成合法的 android/ios UA

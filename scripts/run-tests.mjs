@@ -60,8 +60,9 @@ const COMPILES = [
   { name: 'canvasNoise', files: ['src/shared/canvasNoise.ts'], out: '.tmp_cn' },
   // 分配解释：依赖 proxyAllocator 的类型与结果结构
   { name: 'proxyAllocExplain', files: ['src/shared/proxyAllocExplain.ts', 'src/shared/proxyAllocator.ts'], out: '.tmp_px' },
-  // 批量修复预演：依赖 healthFix（proposeFixes）与 healthcheck（checkConsistency）
-  { name: 'fixBatch', files: ['src/shared/fixBatch.ts', 'src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_fb', extra: ['--lib', 'es2020,dom'] },
+  // 批量修复预演：依赖 healthFix（proposeFixes）、healthcheck（checkConsistency）、
+  // fingerprint（normalizeBlockReason 守卫）及其传递依赖 trackers
+  { name: 'fixBatch', files: ['src/shared/fixBatch.ts', 'src/shared/healthFix.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/fingerprint.ts', 'src/shared/trackers.ts'], out: '.tmp_fb', extra: ['--lib', 'es2020,dom'] },
   // 快照：零 import 但含接口与类型断言，仍按约定先编再 require
   { name: 'snapshot', files: ['src/shared/snapshot.ts'], out: '.tmp_snap' },
   // 快照差异预演：依赖 snapshot.ts 的类型，故与它编到同一目录（测试 require 时路径需为 shared/）

@@ -335,3 +335,74 @@ t('无副作用：不修改传入对象', () => {
 })
 
 console.log(`\nfixBatch: ${pass} passed, ${fail} failed`)
+// ============ 指纹残缺守卫（真机验证发现的严重 bug 的回归测试）============
+//
+// 背景：`normalizeFingerprint` 对 os 缺失/非法的输入**返回一整套随机指纹**，
+// 而修复路径是 `normalizeFingerprint({...before, ...patch})` ——
+// 于是 patch 连同 before 一起被丢弃，接口却回报「已修复 timezone/languages」。
+// 真机实测过：某环境指纹被裁成 {timezone, languages}，修复后 os/UA/分辨率/字体
+// 全变随机值，用户毫无察觉。守卫必须让预演就说「修不了」。
+
+t('残缺指纹（无 os）被判 blocked，不出任何字段变更', () => {
+  const r = planOne(
+    { id: 1, name: '残缺', fingerprint: { timezone: 'Australia/Sydney' }, proxyCountry: 'United States' },
+    (fp, pc) => checkConsistency(fp, pc)
+  )
+  assert.strictEqual(r.status, 'blocked')
+  assert.deepStrictEqual(r.changes, [], '绝不能出变更项，否则执行时会被随机指纹替换')
+  assert.ok(r.reason.includes('未设置系统类型'), `原因应说明缺 os，实际：${r.reason}`)
+  assert.ok(r.reason.includes('整份指纹被替换为随机值'), '原因必须讲清后果，用户才知道要去补全')
+})
+
+t('非法 os（bogus）同样被拦', () => {
+  const r = planOne(
+    { id: 1, name: '非法os', fingerprint: { os: 'bogus', timezone: 'Asia/Tokyo' } },
+    (fp, pc) => checkConsistency(fp, pc)
+  )
+  assert.strictEqual(r.status, 'blocked')
+  assert.ok(r.reason.includes('不是受支持的取值'), `实际：${r.reason}`)
+})
+
+t('合法指纹不受守卫影响，仍能正常出方案（防「修过头」）', () => {
+  const r = planOne(
+    {
+      id: 1, name: '正常',
+      fingerprint: {
+        timezone: 'Australia/Sydney', languages: ['en-AU'], os: 'windows',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+      },
+      proxyCountry: 'United States'
+    },
+    (fp, pc) => checkConsistency(fp, pc)
+  )
+  assert.strictEqual(r.status, 'fixable')
+  assert.strictEqual(r.changes.length, 2, '时区 + 语言两项')
+})
+
+t('守卫早于「已自洽」判定：残缺但本来一致的指纹也应报 blocked', () => {
+  // 若守卫排在一致性检查之后，残缺指纹会先被判为「一致」而被静默放过——
+  // 那正是真机验证前的老问题。
+  const r = planOne({ id: 1, name: '残缺但一致', fingerprint: { timezone: 'Asia/Shanghai' } }, noProxy)
+  assert.strictEqual(r.status, 'blocked')
+})
+
+t('守卫早于「跳过」判定之外：运行中/已删除优先于 blocked', () => {
+  // 跳过规则优先级更高：窗口开着时用户首先要知道的是「关窗口」，而不是 os 问题
+  const r = planOne({ id: 1, name: 'x', fingerprint: { timezone: 'Asia/Tokyo' }, running: true }, noProxy)
+  assert.strictEqual(r.status, 'skipped')
+  const d = planOne({ id: 2, name: 'y', fingerprint: { timezone: 'Asia/Tokyo' }, deleted: true }, noProxy)
+  assert.strictEqual(d.status, 'skipped')
+})
+
+t('批量计数把残缺指纹计入 blocked 而非 consistent', () => {
+  const plan = planBatchFix(
+    [
+      { id: 1, name: '残缺', fingerprint: { timezone: 'Australia/Sydney' }, proxyCountry: 'United States' },
+      { id: 2, name: '正常', fingerprint: { timezone: 'Asia/Shanghai', languages: ['zh-CN'], os: 'windows', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0' } }
+    ],
+    (fp, pc) => checkConsistency(fp, pc)
+  )
+  assert.strictEqual(plan.counts.blocked, 1)
+  assert.strictEqual(plan.counts.consistent, 1)
+  assert.ok(plan.notes.some((n) => n.includes('系统类型')), `应聚合提示，实际：${plan.notes}`)
+})
