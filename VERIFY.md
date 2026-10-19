@@ -132,3 +132,120 @@ rm -rf .tmp_hc
 
 > 这两层验证覆盖候选④的「计算正确性」；「真实硬件回读值」仍需在带显卡的真机上按步骤 0–6 跑。
 
+
+---
+
+# 新增功能真机验证记录（2026-10-19）
+
+> 本次为「快照导入预演 / 一致性批量修复预演 / 代理分配可视化」三项功能的真机验证。
+> 环境：Electron 44.2.0 开发模式，MySQL（Docker `mysql:latest`），API `127.0.0.1:39100`，渲染进程 `localhost:5173`。
+
+## 1. 启动方式（含两个环境坑）
+
+```bash
+# 坑 1：本仓库要求 MySQL，默认 root/1234560；若密码被改过，可用 DB_USER/DB_PASS 覆盖
+# 坑 2：某些 Electron 宿主环境会设 ELECTRON_RUN_AS_NODE=1，会让 Electron 退化成纯 Node，
+#       主进程在 electron.ipcMain.on(...) 处直接崩（ipcMain 为 undefined）。
+#       启动前必须 unset：
+unset ELECTRON_RUN_AS_NODE
+DB_USER=<user> DB_PASS=<pass> pnpm dev
+```
+
+GUI 窗口打开失败**不影响** API 服务继续运行（`src/main/index.ts` 启动流程里有专门注释），
+所以无显示器环境也能验证接口。
+
+## 2. 已验证通过的功能
+
+### 2.1 代理分配预演（`POST /api/profiles/batch-allocate-proxy`，`preview: true`）
+
+| 场景 | 结果 |
+| --- | --- |
+| 6 个代理（3 可用 US + 1 JP + 1 失效 + 1 过期） | 池构成正确：可用 4，排除 `{"invalid":1,"expired":1}`，逐条列出原因 |
+| 加 `country: "United"` 筛选 | 可用降到 2，`countryFilter: 3`，建议正确提示「放宽筛选条件即可让它们进入可用池」 |
+| 池不足 | 2 个 assigned + 2 个 skipped，提示「可用代理 2 个，待分配环境 4 个，缺 2 个」 |
+| **预演只读性** | 预演后全部环境 `proxyId` 仍为 `NULL`，确认不写库 |
+| 真实分配（不带 `preview`） | `applied: true`，4 个环境分到互不相同的代理，日志记 `batch_allocate_proxy` |
+
+### 2.2 一致性批量修复预演（`POST /api/profiles/batch-fix-consistency`，`preview: true`）
+
+| 场景 | 结果 |
+| --- | --- |
+| 4 个本来自洽的环境 | `willChange: 0`，提示「本次没有任何字段会被修改，无需执行修复」 |
+| 时区与代理国家不符 | 正确算出 `timezone` + `languages` **两项**（改时区暴露的语言不一致也被一并处理，串行推演生效） |
+| 执行后复查 | 时区/语言已按预期落库，`fix_consistency` 日志含成功/跳过计数 |
+| 逐条失败不中断 | 代码路径覆盖（单个 try/catch），未构造失败样本 |
+
+### 2.3 快照导入预演（`POST /api/snapshot/preview`）
+
+| 场景 | 结果 |
+| --- | --- |
+| 同团队快照自导入 | 6 个代理全部 `reuse`，4 个环境，团队迁移提示准确 |
+| 同名代理但连接信息不同 | 判 `conflict`，提示「现有 10.0.0.1:8080，快照 10.1.1.1:1111，导入时保留现有配置」 |
+| **引用丢失且无 `proxyDetail`** | 判 `missing`，提示「将导入为无代理环境」——**这正是该功能要防的静默失败** |
+| 引用丢失但带 `proxyDetail` | 判 `create`，`profileProxyCreate: 1` |
+
+> 注意接口收 **JSON body**（不是 multipart 文件上传），字段名是 `proxy`（代理**名称**）而非 `proxyId`。
+
+## 3. 真机验证中发现的两个问题
+
+### 3.1 【严重】一致性修复在 `os` 缺失时会静默替换整份指纹
+
+`src/main/routes/profileWindow.ts` 第 169 行（单环境）与第 252 行（批量）：
+
+```ts
+const next = normalizeFingerprint({ ...(before as Partial<Fingerprint>), ...patch } as Partial<Fingerprint>)
+```
+
+而 `normalizeFingerprint` 的第一件事是：
+
+```ts
+if (!fp || typeof fp.os !== 'string' || (fp.os !== 'windows' && ...)) {
+  return defaultFingerprint()   // ← 整份随机指纹，传入的 patch 被全部丢弃
+}
+```
+
+**实测**：把环境 #3 的指纹砍成 `{timezone, languages}`（无 `os`）后执行修复：
+
+| | 修复前 | 接口报告 | 修复后实际 |
+| --- | --- | --- | --- |
+| timezone | Australia/Sydney | `timezone` | America/Los_Angeles ✓ |
+| os | undefined | （未提及） | **windows（随机）** |
+| userAgent | 无 | （未提及） | **有（随机）** |
+| 其余字段 | 无 | （未提及） | **整份随机指纹** |
+
+接口只回报 `applied: ["timezone","languages"]`，用户完全不知道整份指纹被换掉了。
+**触发条件**：指纹缺 `os` 或 `os` 非法（老数据、导入数据、被部分更新的数据）。
+
+**建议修法**（未实施，需确认）：修复前先校验 `before.os` 合法，不合法则**放弃该环境**并在
+`failed` 里说明「环境指纹不完整（缺少 os），无法安全修复」，而不是硬套 `normalizeFingerprint`。
+
+### 3.2 【文案】`os` 为空时不可修原因出现空段
+
+`src/shared/healthFix.ts` 的 `uaVsOs` 分支，当 `f.os` 为空时：
+
+> 目标系统是 ，UA 需绑定具体设备型号，无法自动生成；请在编辑里手动选择设备
+
+中间空一格。实测环境 #2（`os=undefined`）触达。同文件另一个分支（`fromUa === target`，
+两者均为空时相等）会输出「UA 解析出的平台已与设定 OS 一致，可能是判定口径不一致」，
+在 os/UA 双空的场景下同样费解。
+
+**建议**：`os` 为空时给出「该环境未设置系统类型，无法推断 UA」之类的明确文案。
+
+## 4. 本次验证改动的数据
+
+- 新增 6 个测试代理（`10.0.0.x` 段的假 IP，名称含「可用/失效/过期/国家不符」）
+- 环境 #2/#3 的指纹被修复流程改写（#3 因 3.1 的 bug 被整份随机化）
+- 数据库结构：`pnpm db:sync` 补了一列 `users.revokedDevices`（纯增量，无删除）
+- 备份：`/tmp/roxy_browser_backup_20261019.sql`（同步前，37KB）
+
+## 5. 复现用的脚本
+
+验证脚本已落在 `scripts/` 下，可重复执行：
+
+```bash
+TK=$(cat /tmp/roxy-token.txt) node scripts/verify-snapshot.cjs          # 快照预演（正常）
+TK=$(cat /tmp/roxy-token.txt) node scripts/verify-snapshot-conflict.cjs # 快照预演（冲突）
+TK=$(cat /tmp/roxy-token.txt) node scripts/verify-snapshot-danger.cjs   # 快照预演（引用丢失）
+```
+
+> 说明：`/tmp/roxy-token.txt` 由登录响应落盘得到；token 有效期 7 天，过期后重新登录即可。
