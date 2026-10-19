@@ -188,6 +188,8 @@ GUI 窗口打开失败**不影响** API 服务继续运行（`src/main/index.ts`
 
 ## 3. 真机验证中发现的两个问题
 
+> ✅ 3.1 与 3.2 均已于 2026-10-19 修复并复验，详见 CHANGELOG 对应条目。
+
 ### 3.1 【严重】一致性修复在 `os` 缺失时会静默替换整份指纹
 
 `src/main/routes/profileWindow.ts` 第 169 行（单环境）与第 252 行（批量）：
@@ -216,8 +218,11 @@ if (!fp || typeof fp.os !== 'string' || (fp.os !== 'windows' && ...)) {
 接口只回报 `applied: ["timezone","languages"]`，用户完全不知道整份指纹被换掉了。
 **触发条件**：指纹缺 `os` 或 `os` 非法（老数据、导入数据、被部分更新的数据）。
 
-**建议修法**（未实施，需确认）：修复前先校验 `before.os` 合法，不合法则**放弃该环境**并在
-`failed` 里说明「环境指纹不完整（缺少 os），无法安全修复」，而不是硬套 `normalizeFingerprint`。
+**修复状态**：✅ 已修（commit `6934013`）。新增 `isNormalizableFingerprint` /
+`normalizeBlockReason`（判定谓词由 `normalizeFingerprint` 自己复用，杜绝漂移），
+在增量修复的四处入口各加一道守卫：预演判 `blocked`、单环境执行 400、批量执行进 `failed`、
+单环境预演回 `fixable:false`。复验结果：残缺指纹预演 `blocked`/`willChange:0`、执行进 `failed`、
+**库里指纹原封不动**；合法指纹未被误伤。
 
 ### 3.2 【文案】`os` 为空时不可修原因出现空段
 
@@ -229,7 +234,9 @@ if (!fp || typeof fp.os !== 'string' || (fp.os !== 'windows' && ...)) {
 两者均为空时相等）会输出「UA 解析出的平台已与设定 OS 一致，可能是判定口径不一致」，
 在 os/UA 双空的场景下同样费解。
 
-**建议**：`os` 为空时给出「该环境未设置系统类型，无法推断 UA」之类的明确文案。
+**修复状态**：✅ 已修。新增 `os` 为空的前置分支：「该环境未设置系统类型（os 为空），
+无法判断 UA 应该匹配哪个平台；请先在编辑弹窗中选择系统类型」，同时覆盖 `os` 与
+`userAgent` 双空的场景。
 
 ## 4. 本次验证改动的数据
 
@@ -249,3 +256,14 @@ TK=$(cat /tmp/roxy-token.txt) node scripts/verify-snapshot-danger.cjs   # 快照
 ```
 
 > 说明：`/tmp/roxy-token.txt` 由登录响应落盘得到；token 有效期 7 天，过期后重新登录即可。
+
+## 6. 指纹残缺守卫的复验脚本（修复后）
+
+```bash
+TK=$(cat /tmp/roxy-token.txt) DBU=<user> DBP=<pass> node scripts/verify-fix-guard.cjs         # 残缺指纹：预演 blocked + 执行不改库
+TK=$(cat /tmp/roxy-token.txt) DBU=<user> DBP=<pass> node scripts/verify-fix-guard-400.cjs     # 残缺但可修：确认 400 命中的是守卫
+TK=$(cat /tmp/roxy-token.txt) DBU=<user> DBP=<pass> node scripts/verify-fix-guard-regress.cjs # 回归：合法指纹不被误伤
+```
+
+> ⚠️ 这三个脚本会**临时改写环境 #3 / #4 的指纹**，跑完会自动复原。
+> 脚本需 DB 账号具备 `SELECT/UPDATE profiles` 权限。
