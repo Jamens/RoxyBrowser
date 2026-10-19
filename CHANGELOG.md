@@ -2138,3 +2138,59 @@ MySQL `tinyint` 列（`sensitive`）经 TypeORM 取回的是**数字** `0`/`1`�
 - 设置页 `useEffect` 无限重渲染导致点击卡死（`5e394d1`）
 - 主题开关选中指示卡住（`27af752`）、合并 `useIsDark` 重复定时器为模块级单例（`6c891f9`）
 - 代理 IP 池表格在窗口最小宽度下字段挤压（`9eb1b9b`）
+
+---
+
+## 2026-10-19 · 修复：开发模式窗口白屏（标题正常、内容全空）
+
+### 现象
+
+`pnpm dev` 后窗口标题正常（`RoxyBrowser Clone — 指纹浏览器`），但内容整片白。
+主进程日志只有一行：
+
+```
+[roxy] 主窗口打开失败，本地 API 继续运行: ERR_FAILED (-2) loading 'http://localhost:5173'
+```
+
+### 排查过程（三次误判，最后靠隔离实验定位）
+
+| 猜测 | 验证方式 | 结果 |
+| --- | --- | --- |
+| dev server 没起来 | curl 5173 | ❌ HTTP 200，服务正常 |
+| IPv4/IPv6 不匹配 | socket 直连 127.0.0.1 / ::1 | ❌ 确实只绑了 ::1，但改成绑 IPv4 后**仍然 ERR_FAILED** |
+| 系统 HTTP 代理拦截 | 清掉 `HTTP_PROXY` 等 4 个变量重启 | ❌ 仍失败 |
+
+最终用**最小 Electron 主进程**（`scripts/probe-window-load.cjs`，只做「加载 URL 并回报」）加载
+**本地文件** `file://.../out/renderer/index.html`——完全不涉及网络——拿到关键证据：
+
+```
+[render-process-gone] {"reason":"crashed","exitCode":-2147483645}
+```
+
+`-2147483645` = `0x80000003` = **STATUS_BREAKPOINT**：渲染进程直接崩溃。
+加 `--no-sandbox` 后同一脚本立刻正常加载。**故与 dev server / 代理 / 端口均无关，
+是本机所处环境（容器 / 嵌套沙箱）里 Chromium 渲染进程沙箱起不来。**
+
+> 教训：前三次都在猜「网络层」，是因为 `ERR_FAILED` 这个报错**太笼统**——
+> 它只说「加载失败」，不区分「连不上」和「页面进程崩了」。
+> 定位这类问题的正确做法是**换一个更小的载体复现**（最小 Electron 脚本 + 本地文件），
+> 把变量降到零，而不是在原链路上反复调参。
+
+### 两处改动
+
+1. **`electron.vite.config.ts`**：`renderer.server.host: '127.0.0.1'`。
+   显式绑 IPv4 而非用 Vite 默认的 `localhost`（本机会解析成 `::1` 只绑 IPv6，
+   而 Chromium 解析 localhost 时优先试 IPv4，第一个候选被拒就整条失败）。
+   不用 `0.0.0.0`：会把 dev server 暴露到局域网。
+2. **`src/main/index.ts`**：新增 `ROXY_DISABLE_SANDBOX=1` 开关，**默认不关沙箱**。
+   关闭沙箱会降低安全性，因此只在显式设了该变量时才 `appendSwitch('no-sandbox')`，
+   日常开发与正式使用不受影响。同时给「主窗口打开失败」补了一句排查提示——
+   原先那行日志完全指不到真因。
+
+### 验证
+
+`pnpm typecheck` 通过；带 `ROXY_DISABLE_SANDBOX=1` 启动后不再出现
+「主窗口打开失败」，dev server 与 API 均正常。
+
+> 在本机（受限环境）用这个开关即可正常看到界面：
+> `ROXY_DISABLE_SANDBOX=1 pnpm dev`

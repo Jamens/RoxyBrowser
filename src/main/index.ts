@@ -208,6 +208,21 @@ async function createMainWindow() {
   setCdpPort(cfg.port)
 }
 
+// ===== 渲染进程沙箱：默认开启，仅显式要求时才关闭 =====
+// 某些受限环境（容器 / 嵌套沙箱 / CI）里 Chromium 的渲染进程沙箱无法初始化，
+// 会直接崩溃：render-process-gone reason=crashed、exitCode=0x80000003(STATUS_BREAKPOINT)，
+// 表现为「窗口标题正常、内容全白」，主进程日志是
+//   [roxy] 主窗口打开失败，本地 API 继续运行: ERR_FAILED (-2) loading '...'
+// 连 file:// 本地页面也一样崩，所以与 dev server / 代理 / 端口都无关。
+//
+// 关闭沙箱会降低安全性，因此**只在显式设了 ROXY_DISABLE_SANDBOX=1 时才关**，
+// 日常开发与正式使用不受影响。
+if (process.env.ROXY_DISABLE_SANDBOX === '1') {
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
+  console.warn('[roxy] 已按 ROXY_DISABLE_SANDBOX=1 关闭渲染进程沙箱（仅建议在受限环境临时使用）')
+}
+
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -253,6 +268,12 @@ if (!gotLock) {
       await createMainWindow()
     } catch (err) {
       console.error('[roxy] 主窗口打开失败，本地 API 继续运行:', (err as Error).message)
+      // ERR_FAILED 在受限环境里九成是渲染进程崩溃（沙箱起不来），
+      // 光看 loadURL 的报错完全指不到真因，这里补一句可操作的提示。
+      console.error(
+        '[roxy] 排查建议：若窗口标题正常但内容全白，多为渲染进程崩溃。' +
+          '本机若处于容器 / 嵌套沙箱 / CI 环境，可用 ROXY_DISABLE_SANDBOX=1 启动试一次。'
+      )
     }
 
     // 5. 自动更新（仅打包安装版启用；dev 态自动跳过，仅推送 { state: 'dev' }）

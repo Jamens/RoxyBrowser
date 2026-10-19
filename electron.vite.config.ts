@@ -25,6 +25,18 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    // 必须显式绑 IPv4 回环，不能用 Vite 默认的 'localhost'。
+    //
+    // 现象：窗口标题正常、内容全白。主进程日志是
+    //   [roxy] 主窗口打开失败，本地 API 继续运行: ERR_FAILED (-2) loading 'http://localhost:5173'
+    // 实测（本机）：Vite 只监听 [::1]:5173，127.0.0.1:5173 直接 ECONNREFUSED。
+    // 而 Chromium 解析 localhost 时优先试 IPv4，第一个候选被拒就整条失败
+    // （它不像 curl 那样会回退到下一个候选），于是 loadURL 抛 ERR_FAILED，
+    // 渲染进程拿到的是一个从没加载成功的空壳 → 白屏。
+    //
+    // 绑 127.0.0.1 后 IPv4 可用，Chromium 第一个候选就通。
+    // 不要改成 '0.0.0.0' / true：那会把 dev server 暴露到局域网。
+    server: { host: '127.0.0.1' },
     resolve: {
       alias: {
         '@': resolve(__dirname, 'src/renderer/src'),
