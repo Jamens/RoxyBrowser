@@ -68,6 +68,12 @@ export interface FingerprintProbe {
   audioAvailable: boolean
   /** Canvas 噪声一致性：相同内容画两遍 toDataURL 是否相等（false = 注入可被识别，详见 canvasNoise 项） */
   canvasStable?: boolean
+  /**
+   * 窗口内**实际可用**的 WebCrypto 新算法（Chrome 154 起默认提供）。
+   * 空数组 = 都不可用（伪装版本 < 154 时的预期状态）。
+   * 若非空而伪装版本 < 154，就是「特性超前」的矛盾信号。
+   */
+  cryptoNewAlgos?: string[]
   /** 编解码能力：canPlayType('audio/iamf')（Chrome 152+；当前 Electron Chromium 通常不支持） */
   audioCanIamf?: string
   /** 编解码能力：canPlayType('audio/ogg; codecs="opus"') */
@@ -443,6 +449,27 @@ export function buildHealthReport(
       actual: `iamf=${fmt(s(actual.audioCanIamf))} / opus=${fmt(s(actual.audioCanOpus))} / aac=${fmt(s(actual.audioCanAac))}`,
       ok: true,
       weight: 0
+    })
+  }
+
+  // ---- WebCrypto 新算法：与「伪装版本」对账 ----
+  // Chrome 154 起默认提供 ML-KEM / ML-DSA / X-Wing / ChaCha20-Poly1305。
+  // 伪装成 151/152/153 却能用它们 =「特性超前」矛盾，一行 generateKey 即可识破。
+  // 反向（伪装 154+ 但用不了）不算破绽——真实用户也可能遇到功能被禁用，
+  // 故只判「超前」这一侧。
+  {
+    const spoofMajor = Number(String(s(e.uaFullVersion)).split('.')[0] || 0)
+    const present = Array.isArray(actual.cryptoNewAlgos) ? actual.cryptoNewAlgos : []
+    const shouldHave = spoofMajor >= 154
+    const leaked = shouldHave ? [] : present
+    items.push({
+      key: 'webcryptoVersion',
+      expected: shouldHave
+        ? `伪装 Chrome ${spoofMajor}，应支持 WebCrypto 新算法（ML-KEM / ML-DSA 等）`
+        : `伪装 Chrome ${spoofMajor}，不应支持 WebCrypto 新算法（Chrome 154 才引入）`,
+      actual: present.length ? `可用：${present.join(', ')}` : '均不可用',
+      ok: leaked.length === 0,
+      weight: 6
     })
   }
 

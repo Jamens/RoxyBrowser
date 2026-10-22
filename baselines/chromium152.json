@@ -1,0 +1,57 @@
+{
+  "capturedAt": "2026-10-22T10:02:29.027Z",
+  "electron": null,
+  "chromium": null,
+  "profileId": 2,
+  "profileName": "测试",
+  "score": 100,
+  "actuals": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7325.30 Safari/537.36",
+    "platform": "MacIntel",
+    "languages": "ja-JP,ja,en-US,en",
+    "screen": "1600×900",
+    "timezone": "Asia/Tokyo",
+    "tzOffset": "-540",
+    "webgl": "WebGL 不可用",
+    "webglOsMatch": "合规",
+    "hardwareConcurrency": "16",
+    "deviceMemory": "4",
+    "doNotTrack": "unspecified",
+    "uaData": "macOS / mobile=false",
+    "touch": "0 / ontouchstart=false",
+    "canvasNoise": "on / 一致性OK",
+    "audioNoise": "on",
+    "webrtc": "disable",
+    "fonts": "on",
+    "fontOsConsistency": "合规",
+    "webgpu": "WebGPU 不可用",
+    "webgpuSubgroup": "WebGPU 不可用",
+    "audioProfile": "48000 / 0.010667 / 2",
+    "audioReduction": "-2.7749",
+    "audioCodecs": "iamf=no / opus=probably / aac=probably",
+    "eme": "Widevine=true ClearKey=true PlayReady=false initDataTypes=[cenc] video=0 audio=0",
+    "automation": "webdriver=false automationTraces=false",
+    "platformApis": "无矛盾（应有的缺失不计入）",
+    "mediaPrefs": "scheme=light reducedMotion=false"
+  },
+  "consistency": {
+    "tzVsProxy": {
+      "ok": true,
+      "skipped": true,
+      "actual": "—"
+    },
+    "langVsTz": {
+      "ok": true,
+      "skipped": false,
+      "actual": "ja-JP (JP)"
+    },
+    "uaVsOs": {
+      "ok": true,
+      "skipped": false,
+      "actual": "mac"
+    }
+  },
+  "note": "指纹基线快照：升级内核前采集，用于回归对比。采集方式见 scripts/capture-fingerprint-baseline.cjs",
+  "electronVersion": "Electron 44.2.0",
+  "chromiumVersion": "152.0.7977.76"
+}

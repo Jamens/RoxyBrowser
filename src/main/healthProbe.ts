@@ -206,6 +206,33 @@ const PROBE_SCRIPT = `(function(){
       }
     } catch (e) {}
 
+    // ---- WebCrypto 新算法（ML-KEM / ML-DSA / X-Wing / ChaCha20-Poly1305）----
+    // Chrome 154 起默认提供这批算法（151–153 是原始试验期）。
+    // 若环境伪装成 Chrome 151/152/153 却能用它们，就是「特性超前」的矛盾信号——
+    // 平台一行 generateKey 即可识破。这里如实采集，由体检按**伪装版本**对账。
+    var cryptoNewAlgos = [];
+    try {
+      var subtle = (globalThis.crypto && globalThis.crypto.subtle) || null;
+      if (subtle) {
+        var algoProbes = [
+          ['ML-KEM-768', {name:'ML-KEM-768'}],
+          ['ML-DSA-65', {name:'ML-DSA-65'}],
+          ['X-Wing', {name:'X-Wing'}],
+          ['ChaCha20-Poly1305', {name:'ChaCha20-Poly1305'}]
+        ];
+        for (var pi = 0; pi < algoProbes.length; pi++) {
+          try {
+            if (algoProbes[pi][0] === 'ChaCha20-Poly1305') {
+              subtle.importKey('raw', new Uint8Array(32), algoProbes[pi][1], false, ['encrypt']);
+            } else {
+              subtle.generateKey(algoProbes[pi][1], false, ['sign','verify','encrypt','decrypt','encapsulateKey','decapsulateKey','deriveKey','deriveBits']);
+            }
+            cryptoNewAlgos.push(algoProbes[pi][0]);
+          } catch (e2) {}
+        }
+      }
+    } catch (e) {}
+
     // 取值整体再包一层 try/catch：这段原本在外层 try 内（异常 -> {error}），
     // 搬进 .then() 后会脱离该保护，抛错将变成 rejected promise 而被上层误判成「窗口未运行」。
     return Promise.all([gpuP, emeP]).then(function () {
@@ -246,6 +273,7 @@ const PROBE_SCRIPT = `(function(){
         audioCanIamf: audioCanIamf,
         audioCanOpus: audioCanOpus,
         audioCanAac: audioCanAac,
+        cryptoNewAlgos: cryptoNewAlgos,
         audioSampleRate: aRate,
         audioBaseLatency: aBase,
         audioMaxChannelCount: aMax,

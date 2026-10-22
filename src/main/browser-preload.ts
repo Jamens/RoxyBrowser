@@ -292,6 +292,67 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     def(navigator, 'userAgentData', uad)
   }
 
+  // ===== WebCrypto 新算法：按**伪装版本**门控 =====
+  //
+  // 背景（升级 Electron 45 / Chromium 156 时实测发现）：
+  // Chromium **154 起默认**在 WebCrypto 里提供 ML-KEM-768/1024、ML-DSA-44/65/87、
+  // X-Wing 与 ChaCha20-Poly1305（Chrome 151–153 期间是原始试验，154 起默认开启）。
+  // 而本项目的 UA 最高只伪装到 Chrome 154，默认预设甚至在伪装 151/153。
+  //
+  // 于是产生一个**可被一行代码识破的矛盾**：
+  //   try { crypto.subtle.generateKey({name:'ML-KEM-768'}, false, [...]); /* 你不是 151 */ } catch {}
+  // 「声称自己是 Chrome 151，却能用 Chrome 154 才有的算法」——
+  // 这比 UA 版本落后本身更致命（真实用户的浏览器滞后很常见，但**特性超前**不可能）。
+  //
+  // 做法：把 crypto.subtle 的**算法入口**按伪装版本拦住。低于门槛的算法名一律按
+  // 「不支持」抛错（与浏览器对未知算法的行为一致），而不是静默不做事——
+  // 静默返回 undefined 的 Promise 反而更可疑。
+  //
+  // 门槛取 154：与 Chrome 官方时间线一致（154 起默认开启）。
+  const NEW_WEBCRYPTO_ALGO_MIN_CHROME = 154
+  // ML-KEM / ML-DSA / X-Wing 是后量子算法；ChaCha20-Poly1305 是同批进入 WebCrypto
+  // 的对称算法（同一份 WICG 草案）——一并门控，理由相同：**它们在旧版 Chrome 里不存在**。
+  const NEW_WEBCRYPTO_ALGOS = [
+    'ML-KEM-512', 'ML-KEM-768', 'ML-KEM-1024',
+    'ML-DSA-44', 'ML-DSA-65', 'ML-DSA-87',
+    'X-Wing', 'ChaCha20-Poly1305'
+  ]
+  {
+    const spoofMajor = Number(String(fp.uaFullVersion || '').split('.')[0] || 0)
+    const allowed = spoofMajor >= NEW_WEBCRYPTO_ALGO_MIN_CHROME
+    const subtle: any = (globalThis as any).crypto?.subtle
+    if (subtle && !allowed) {
+      const rejectBlocked = (algo: unknown): void => {
+        // 算法名可能直接是字符串，也可能是 { name: '...' } 对象
+        const name = typeof algo === 'string' ? algo : String((algo as any)?.name || '')
+        if (NEW_WEBCRYPTO_ALGOS.indexOf(name) < 0) return
+        // 与浏览器对"不支持的算法"保持同样的错误形态：DOMException NotSupportedError
+        throw new DOMException(`Unrecognized algorithm name: ${name}`, 'NotSupportedError')
+      }
+      const patch = (fnName: string) => {
+        const orig = subtle[fnName]
+        if (typeof orig !== 'function') return
+        try {
+          Object.defineProperty(subtle, fnName, {
+            value: function (this: any, ...args: any[]) {
+              // generateKey(algorithm, ...) / importKey(format, keyData, algorithm, ...)
+              // / deriveBits(algorithm, baseKey, ...) —— 算法参数位置不统一，逐个探测。
+              for (const a of args) {
+                if (a && typeof a === 'object' && !Array.isArray(a)) rejectBlocked(a)
+              }
+              return orig.apply(this, args)
+            },
+            configurable: true,
+            writable: true
+          })
+        } catch {
+          /* ignore */
+        }
+      }
+      ;['generateKey', 'importKey', 'deriveKey', 'deriveBits', 'encrypt', 'decrypt', 'sign', 'verify'].forEach(patch)
+    }
+  }
+
   // ===== screen =====
   def(window.screen, 'width', fp.screenWidth)
   def(window.screen, 'height', fp.screenHeight)

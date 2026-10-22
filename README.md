@@ -17,7 +17,7 @@
 
 | 层     | 技术                                                                             |
 | ------ | -------------------------------------------------------------------------------- |
-| 桌面壳 | Electron 44                                                                       |
+| 桌面壳 | Electron 45                                                                       |
 | 构建   | electron-vite 5 + Vite 7 + pnpm                                                  |
 | 前端   | React 19 + TypeScript + Ant Design 6 + React Router 6                            |
 | 后端   | Express + TypeORM（内嵌在 Electron 主进程，本地 API + 自动化 API）               |
@@ -626,7 +626,17 @@ src/
 2. **TypeORM + esbuild**：esbuild 不支持 `emitDecoratorMetadata`，因此所有 `@Column` 均**显式声明 `type`**（如 `type: 'varchar'`）。新增实体字段时请沿用该写法，否则会报 `Column type is not defined`。
 3. **列名**：未启用 snake_case 命名策略，数据库列名与属性名一致（如 `teamId`），QueryBuilder 里不可写 `team_id`。
 4. **`ELECTRON_RUN_AS_NODE`**：若当前终端设置了该环境变量，Electron 会以纯 Node 模式启动，`ipcMain` / `app` / `BrowserWindow` 全部不可用。症状很有迷惑性——**构建与启动日志都正常**（会出现 `[roxy] API 服务已启动`），随后报 `TypeError: Cannot read properties of undefined (reading 'on')` 而退出。启动前请 `unset ELECTRON_RUN_AS_NODE`（Windows PowerShell：`$env:ELECTRON_RUN_AS_NODE=$null`）。
-5. **`pnpm add` 中断会弄脏 node_modules**：pnpm 依赖安装被中断（如 electron postinstall 失败）后，可能留下断裂的 symlink，表现为 `Cannot find package 'electron-vite'`。可先执行 `node scripts/fix-pnpm-links.mjs` 就地重建（只处理 electron 相关包，不覆盖 typescript 等）；彻底解决请删掉 `node_modules` 后重装。
+5. **Electron 二进制下载慢/卡死**：二进制默认从 GitHub Releases 拉，国内常常连不上。
+   本项目已在 **`.npmrc`** 与 **`package.json` 的 `config.electron_mirror`** 两处配置了
+   npmmirror 镜像（两处都要：pnpm v11 不会把 `.npmrc` 的值传给依赖的 postinstall，
+   实测 `npm_config_electron_mirror` 为 null，而 `npm_package_config_electron_mirror` 才会被传）。
+   若仍然卡住，直接用镜像手动拉取：
+   ```bash
+   cd node_modules/.pnpm/electron@<版本>_*/node_modules/electron
+   ELECTRON_MIRROR="https://registry.npmmirror.com/-/binary/electron/" node install.js
+   ```
+
+6. **`pnpm add` 中断会弄脏 node_modules**：pnpm 依赖安装被中断（如 electron postinstall 失败）后，可能留下断裂的 symlink，表现为 `Cannot find package 'electron-vite'`。可先执行 `node scripts/fix-pnpm-links.mjs` 就地重建（只处理 electron 相关包，不覆盖 typescript 等）；彻底解决请删掉 `node_modules` 后重装。
 6. **`pnpm dev` 打不开窗口 / 启动即退**：按下面顺序排查（前两条最常见）：
    - **GPU 崩溃**：虚拟机、远程桌面、老显卡环境下 Chromium 会反复输出 `GPU process exited unexpectedly`，最终 `FATAL: GPU process isn't usable. Goodbye.` 直接终止应用。应用已默认关闭硬件加速（`src/main/index.ts`，可用 `ROXY_ENABLE_GPU=1` 打开）。
    - **依赖装坏了**：Windows 上 pnpm 建 junction **失败时不报错**——`pnpm install` 照样输出 `Done`，但顶层 `node_modules/<pkg>` 软链没建，表现为 `Cannot find module`、`Cannot find package`、`_lruCache is not a constructor` 或 typecheck 爆出上百条 `Property 'x' does not exist`（类型来自缺失的依赖包，退化成 any 后成员访问即报错）。**修复：删掉 `node_modules` 后在普通（非沙箱 / 受限）终端重新 `pnpm install`**，不要手工建软链补洞——多版本共存时（如 `@babel/runtime` 同时有 7.x 与 8.x）手工链接极易把 7.x 的依赖链到 8.x，报出 `Missing "./helpers/esm/..." specifier` 这类极难定位的错误。

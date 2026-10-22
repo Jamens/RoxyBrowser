@@ -9,6 +9,79 @@
 
 ---
 
+## 2026-10-19 · 内核升级：Electron 44 → 45（Chromium 152 → 156）+ 指纹基线回归
+
+### 一、升级前先建基线（把"我以为没变"变成"有对照的实验"）
+
+新增 `scripts/capture-fingerprint-baseline.cjs`（开环境窗口 → 跑体检 → 落盘 key→actual 全量映射）
+与 `scripts/diff-fingerprint-baseline.cjs`（逐项 diff）。
+
+**结果：27 个体检项实测值 0 变化，伪装度 100 → 100。**
+说明自研的指纹伪装**不依赖任何随内核变化的行为**。
+
+### 二、升级本身
+
+`electron` 44.2.0 → **45.0.0**，Chromium **152.0.7977.76 → 156.0.8078.48**（跨 4 个大版本，
+比原先预估的 154 还新；`releases.electronjs.org` 显示 45.0.0 正式版已是 Chromium 156）。
+
+顺带修掉一个**影响所有人 clone 的安装问题**：
+`.npmrc` 里的 `electron_mirror` 在 **pnpm v11 下不会传给生命周期脚本**
+（实测 `npm_config_electron_mirror` 为 null），导致 Electron 二进制从 GitHub 直连、
+在国内卡死 18 分钟。@electron/get 的查找顺序里第 4 位是
+`npm_package_config_electron_mirror`（来自 `package.json` 的 `config`）——
+实测**这个会被传**。故把镜像同时写进 `package.json` 的 `config`。
+验证：改完后 `pnpm rebuild electron` 从 18 分钟卡死 → **6 秒完成**。
+
+### 三、升级引入了一个新的指纹矛盾（本次最关键的发现）
+
+Chromium **154 起默认**在 WebCrypto 里提供 ML-KEM-768/1024、ML-DSA-44/65/87、
+X-Wing、ChaCha20-Poly1305（151–153 是原始试验期）。
+
+而本项目 UA 最高只伪装到 Chrome 154，默认预设甚至在伪装 151。于是产生矛盾：
+
+```js
+try { crypto.subtle.generateKey({name:'ML-KEM-768'}, false, [...]); /* 你不是 151 */ } catch {}
+```
+
+「声称自己是 Chrome 151，却能用 Chrome 154 才有的算法」——
+**这比 UA 版本落后本身致命得多**（真实用户浏览器滞后很常见，但**特性超前**不可能）。
+升级前（Chromium 152 < 154）不存在这个矛盾，**是升级带来的**。
+
+修法（两处）：
+1. **preload 门控**：按**伪装版本**拦截 crypto.subtle 的算法入口，
+   低于 154 的算法名按「不支持」抛 `DOMException NotSupportedError`
+   （与浏览器对未知算法的行为一致；静默返回 undefined 反而更可疑）。
+2. **体检新增 `webcryptoVersion` 项**：如实采集窗口内实际可用的新算法，
+   与伪装版本对账——伪装 < 154 却能用 → 判红。**只判"超前"这一侧**，
+   反向（伪装新版却用不了）不算破绽，真实用户也可能遇到功能被禁用。
+
+真机复验：门控生效时体检报「均不可用」✅；
+消融（拆掉门控）后立刻报出「可用：ML-KEM-768, ML-DSA-65, X-Wing, ChaCha20-Poly1305」并转红
+（伪装度 100 → 96），证明这一项不是"永远绿"的假检查。
+
+单测 `tests/webcryptoVersion.test.cjs` 7 项，锁住两侧语义（含"不误报"的三种情形）。
+
+### 四、顺带修掉一个潜伏 27 天的严重 bug
+
+升级前要先让环境体检能跑通才能采基线，一跑就发现：**环境体检（伪装度评分）一直失败**。
+根因是 `PROBE_SCRIPT`（注入浏览器的 JS，在源码里是**模板字符串**）
+被写进了 TypeScript 语法（`var x: string[] = []` 与 `(nav as any).xxx`）——
+**tsc 不检查它、eslint 不 lint 它、任何离线单测也碰不到它**，整个工具链对它完全失明。
+
+引入于 2026-09-25 的 EME 伪装提交，**已静默失效 27 天**。
+修法：去掉 3 处 TS 语法 + `collectProbe` 的空 catch 改为带回真实错误
++ **新增语法守卫测试**（`tests/probeScript.test.cjs`，逐字符扫描抽脚本 → `new Function` 真实解析）。
+
+### 五、状态与遗留
+
+`pnpm test` **38/38**，`pnpm typecheck` 通过。
+
+**遗留（环境限制，非代码问题）**：本机无 GPU，WebGL / WebGPU 在窗口内均不可用，
+故这两项——**恰恰是内核变化最敏感的**（151 曾调整 WebGL 输出规则）——**未被基线覆盖**，
+须在有 GPU 的机器上复验。
+
+---
+
 ## 2026-10-19 · feat: 代理出口 IP 漂移告警——静默的关联风险终于会喊了
 
 ### 一、问题：出口轮换 = 环境静默失配

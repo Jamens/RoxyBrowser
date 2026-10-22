@@ -220,7 +220,17 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
 
 - **桌面 + 移动端**：支持 Windows / macOS / Android / iOS 四种形态。UA-CH（`navigator.userAgentData`）全平台接管——`brands` / `platform`（Windows / macOS / Android）/ `mobile` 与 `getHighEntropyValues` 高熵字段均与 UA 严格一致；移动端额外注入触摸能力（`maxTouchPoints`、`ontouchstart`）、`devicePixelRatio`；iOS 按 Safari 形态（移除 `userAgentData`），环境窗口按手机尺寸打开。
 - **指纹预设库**：内置十余套「验证过的指纹组合」（如 `Windows 11 · Chrome 154 · 德国`、`Pixel 8 · Android 14 · 美东`、`iPhone 15 Pro · iOS 17.5 · 美西`），各字段之间保证一致（UA ↔ 平台 ↔ GPU ↔ 屏幕 ↔ 时区语言），一键套用，避免手工拼出互相矛盾的指纹。
-- **内核版本切换（Chrome 大版本）**：指纹表单「内核版本 (Chrome)」下拉可选 **150–154** 任一版本——仅替换 UA 串里的 Chrome 大版本号（如 `Chrome/129.0.6668.100`），同步更新 `uaFullVersion` 与 UA-CH 客户端提示（`navigator.userAgentData`），让同一套设备指纹在不同时期表现为不同浏览器版本（对标官方「内核版本」切换）。iOS 走 Safari/WebKit，不走此路径（下拉自动隐藏）。
+- **WebCrypto 新算法按伪装版本门控**：Chromium **154 起默认**在 WebCrypto 提供
+  ML-KEM-768/1024、ML-DSA-44/65/87、X-Wing、ChaCha20-Poly1305（151–153 是原始试验期）。
+  宿主内核升到 Chromium 156 后，若环境伪装成 Chrome 151/152/153 却能用这些算法，
+  就是「特性超前」的矛盾信号——平台一行 `crypto.subtle.generateKey` 即可识破
+  （真实用户浏览器滞后很常见，但**特性超前**不可能）。
+  故 preload 按**伪装版本**拦截 crypto.subtle 的算法入口：低于 154 的算法名
+  按「不支持」抛 `DOMException NotSupportedError`（与浏览器对未知算法的行为一致）。
+  体检另有 `webcryptoVersion` 项如实采集并与伪装版本对账，**只判「超前」这一侧**
+  （反向不算破绽，真实用户也可能遇到功能被禁用）。
+
+- **内核版本切换（Chrome 大版本）**：指纹表单「内核版本 (Chrome)」下拉可选 **150–154** 任一版本（宿主内核为 Electron 45 / Chromium 156；伪装版本低于宿主是正常的，真实用户浏览器也常滞后）——仅替换 UA 串里的 Chrome 大版本号（如 `Chrome/129.0.6668.100`），同步更新 `uaFullVersion` 与 UA-CH 客户端提示（`navigator.userAgentData`），让同一套设备指纹在不同时期表现为不同浏览器版本（对标官方「内核版本」切换）。iOS 走 Safari/WebKit，不走此路径（下拉自动隐藏）。
   - 切换由 `applyCoreVersion()`（`src/shared/fingerprint.ts`）实现：正则会把 UA 里的 `Chrome/[\d.]+` 整体替换，保持操作系统 / 平台 / 设备型号等其余字段不变，因此不会出现「Chrome 132 的 UA 却配着 Chrome 127 的 UA-CH」这类不自洽。
   - `POST /api/fingerprint/random` 支持 `body.coreVersion` 透传——随机指纹时即尊重所选内核；`normalizeFingerprint`（旧数据/缺字段规整）、`presetFingerprint`（预设套用）、克隆工厂（`deriveJitteredFingerprint`）均会正确保留或推导该字段，存储层无新增迁移需求（`Fingerprint.coreVersion` 为普通可选数字列）。
 
