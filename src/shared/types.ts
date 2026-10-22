@@ -155,6 +155,14 @@ export interface ProxyDTO {
   // IP 池衍生字段（列表接口附带，非持久列）
   usageCount?: number
   poolStatus?: 'available' | 'in-use' | 'expired' | 'invalid' | 'unknown'
+  /**
+   * 与本代理出口国家对不上的环境（列表接口附带，非持久列）。
+   *
+   * 出口 IP 漂移后代理国家会变，而已绑定环境的时区仍按旧国家生成 →
+   * 这些环境即处于「时区与出口失配」状态，平台侧容易识别为关联异常。
+   * 空数组表示无错位。此处口径与体检 `tzVsProxy` 一致。
+   */
+  misalignedProfiles?: { id: number; name: string; timezone: string; expectedTimezone: string }[]
   lastCheckAt: string | null
   createdAt: string
 }

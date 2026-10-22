@@ -13,6 +13,7 @@ import {
 } from '../proxyService'
 import { allocateProxies } from '../../shared/proxyAllocator'
 import { explainAllocation } from '../../shared/proxyAllocExplain'
+import { describeExitIpChange, findMisalignedProfiles } from '../../shared/proxyDrift'
 import type { AppSettings } from '../../shared/types'
 import { ownerScope } from '../authScope'
 import type { AuthedRequest } from '../authScope'
@@ -44,10 +45,26 @@ export function registerProxyRoutes(router: Router, deps: ProxyRouteDeps): void 
     const list = await repo.find({ where: ownerScope(req), order: { id: 'DESC' } })
     const usage = await computeProxyUsage(getDs(), req.tid!)
     const now = Date.now()
+    // 与代理出口国家对不上的环境（派生计算，不落库）。
+    // 出口 IP 漂移后，代理国家变了而环境时区没跟着变 → 这里的数就是"待处理量"。
+    // 判定口径与体检 tzVsProxy 一致，避免列表说"一致"而体检说"不一致"。
+    const profileRepo = getDs().getRepository(ProfileEntity)
+    const profiles = (await profileRepo.find({ where: { teamId: req.tid!, isTemplate: false } })).map((x) => ({
+      id: x.id,
+      name: x.name,
+      proxyId: x.proxyId,
+      timezone: String((x.fingerprint as unknown as { timezone?: string })?.timezone || '')
+    }))
     res.json(
       list.map((p) => {
         const cnt = usage.get(p.id) || 0
-        return { ...p, usageCount: cnt, poolStatus: proxyPoolStatus(p, cnt, now) }
+        const misaligned = findMisalignedProfiles({ id: p.id, country: p.country }, profiles)
+        return {
+          ...p,
+          usageCount: cnt,
+          poolStatus: proxyPoolStatus(p, cnt, now),
+          misalignedProfiles: misaligned
+        }
       })
     )
   })
@@ -107,8 +124,22 @@ export function registerProxyRoutes(router: Router, deps: ProxyRouteDeps): void 
     if (!p) return res.status(404).json({ message: '代理不存在' })
     const settings = await getSettings()
     const result = await checkProxy(p, (settings.proxyCheckTimeout as number) * 1000)
-    applyProxyCheckResult(p, result)
+    // 覆盖之前先比对：出口 IP 变了就是"出口漂移"，必须当场告诉用户
+    const change = applyProxyCheckResult(p, result)
     await repo.save(p)
+    if (change) {
+      const profileRepo = getDs().getRepository(ProfileEntity)
+      const profiles = (await profileRepo.find({ where: { teamId: req.tid!, isTemplate: false } })).map((x) => ({
+        id: x.id,
+        name: x.name,
+        proxyId: x.proxyId,
+        timezone: String((x.fingerprint as unknown as { timezone?: string })?.timezone || '')
+      }))
+      const affected = findMisalignedProfiles({ id: p.id, country: change.newCountry }, profiles)
+      const detail = describeExitIpChange(change, p.name, affected)
+      await writeLog(req, 'proxy_exit_ip_changed', detail)
+      return res.json({ ...p, exitIpChanged: change, misalignedProfiles: affected, message: detail })
+    }
     res.json(p)
   })
 

@@ -41,6 +41,29 @@ export function findCountry(code: string | undefined | null): CountryDef | undef
   return COUNTRY_MAP.get(String(code).toUpperCase())
 }
 
+/**
+ * 按 **代码 / 中文名 / 英文名** 模糊匹配国家（大小写不敏感）。
+ *
+ * ## 为什么需要这个函数
+ *
+ * `findCountry` 只认**代码**（走 COUNTRY_MAP），但代理检测拿到的 `country` 是
+ * ip-api 返回的**英文名**（"United States"），两者根本对不上——
+ * 直接拿 `findCountry(p.country)` 查永远查不到，会让「出口失配」判定恒为空。
+ *
+ * `healthFix` 的 `resolveProxyCountry` 早就需要这个宽松匹配（它要靠代理国家反推时区），
+ * 但当时写成了**私有函数**，别处无从复用——于是每个「按代理国家反查」的地方
+ * 都会各写一套匹配规则，最后口径必然漂移
+ * （体检说"不一致"、代理列表说"一致"，用户只会怀疑工具坏了）。
+ *
+ * 现改为共享实现：`healthFix` 与 `proxyDrift` 都走它，判定口径只有一处。
+ */
+export function findCountryLoose(raw: string | undefined | null): CountryDef | undefined {
+  const s = String(raw || '').trim()
+  if (!s) return undefined
+  const lower = s.toLowerCase()
+  return COUNTRIES.find((c) => [c.code, c.name, c.nameEn].some((n) => String(n).toLowerCase() === lower))
+}
+
 /** 取国家对应的 IANA 时区，未知国家回落 Asia/Shanghai */
 export function countryTimezone(code: string | undefined | null): string {
   return findCountry(code)?.timezone || 'Asia/Shanghai'

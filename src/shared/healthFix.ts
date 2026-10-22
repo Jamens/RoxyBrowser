@@ -20,7 +20,7 @@
 // 故仅支持 windows ↔ mac 的双向替换（该段替换是 uaOs 解析的严格反向），其余明确返回不可修。
 
 import type { Fingerprint, OSKind } from './types'
-import { countryTimezone, countryLanguage, findCountry, COUNTRIES } from './countries'
+import { countryTimezone, countryLanguage, findCountryLoose, COUNTRIES } from './countries'
 import { uaOs } from './healthcheck'
 
 export type FixKey = 'tzVsProxy' | 'langVsTz' | 'uaVsOs'
@@ -78,12 +78,15 @@ function replaceUaPlatform(ua: string, target: OSKind): string | null {
 }
 
 /** 把代理国家名（ip-api 英文名 / 中文名 / 国码）解析成 CountryDef */
+/**
+ * 代理国家 → 国家定义。
+ *
+ * 代理检测存的是 ip-api 的**英文名**（"United States"），不是代码，
+ * 故必须用宽松匹配（代码 / 中文名 / 英文名）。
+ * 与 `shared/proxyDrift.ts` 共用同一个实现，避免两处口径漂移。
+ */
 function resolveProxyCountry(raw: string | null | undefined) {
-  const s = String(raw || '').trim()
-  if (!s) return undefined
-  return COUNTRIES.find((c) =>
-    [c.code, c.name, c.nameEn].some((n) => n.toLowerCase() === s.toLowerCase())
-  )
+  return findCountryLoose(raw)
 }
 
 /**

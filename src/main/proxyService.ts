@@ -4,6 +4,7 @@ import { HttpProxyAgent } from 'http-proxy-agent'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { SocksProxyAgent } from 'socks-proxy-agent'
 import { ProfileEntity, ProxyEntity } from './entities'
+import { detectExitIpChange, type ExitIpChange } from '../shared/proxyDrift'
 
 /**
  * 代理检测 / 分配的**服务层**，从 server.ts 抽离。
@@ -129,7 +130,18 @@ export async function checkProxy(
 }
 
 /** 把检测结果写回代理实体（检测端点与巡检共用，保证落库字段完全一致） */
-export function applyProxyCheckResult(p: ProxyEntity, result: Awaited<ReturnType<typeof checkProxy>>): void {
+/**
+ *
+ * @returns 若本次检测发现**出口 IP 漂移**（出口节点换了），返回漂移详情；否则返回 null。
+ *   调用方据此写日志 / 发 webhook —— 此前这里直接覆盖 `exitIp` 与 `country`，
+ *   漂移被完全吞掉，用户无从知晓环境已与出口失配。详见 `shared/proxyDrift.ts`。
+ */
+export function applyProxyCheckResult(
+  p: ProxyEntity,
+  result: Awaited<ReturnType<typeof checkProxy>>
+): ExitIpChange | null {
+  // 必须在覆盖之前比对——覆盖后旧值就没了
+  const change = detectExitIpChange(p, result)
   p.status = result.ok ? 'active' : 'invalid'
   p.latency = result.ok ? result.latency : null
   p.country = result.country
@@ -139,6 +151,7 @@ export function applyProxyCheckResult(p: ProxyEntity, result: Awaited<ReturnType
   p.exitIp = result.exitIp
   p.anonymity = result.anonymity
   p.lastCheckAt = new Date()
+  return change
 }
 
 /** 统计每个代理被多少个环境绑定（proxyId 计数） */

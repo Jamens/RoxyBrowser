@@ -53,6 +53,12 @@ import {
   AssistantSkillEntity
 } from './entities'
 import { getEnvExpiresAt } from '../shared/envExpiry'
+import {
+  detectExitIpChange,
+  describeExitIpChange,
+  findMisalignedProfiles,
+  type ExitIpChange
+} from '../shared/proxyDrift'
 import { scanExpiring, expiryAlertText, expiryWarnKey } from '../shared/expiryAlert'
 import { substituteSteps } from '../shared/rpa'
 import type { AppSettings, OSKind, RpaStep, WebhookConfig } from '../shared/types'
@@ -67,7 +73,7 @@ import { registerLogRoutes } from './routes/logs'
 import { registerProxyRoutes } from './routes/proxies'
 // 代理检测 / 分配的业务逻辑已抽到 proxyService（不依赖 AppDataSource，DataSource 由调用方传入），
 // 这样 routes/proxies 与本文件都能直接 import，不必反向引用形成循环依赖。
-import { allocateProxy, checkProxy, ApiError } from './proxyService'
+import { allocateProxy, checkProxy, applyProxyCheckResult, ApiError } from './proxyService'
 import { registerCookieRoutes } from './routes/cookies'
 import { registerAccountRoutes } from './routes/accounts'
 import { registerTeamRoutes } from './routes/team'
@@ -685,19 +691,15 @@ async function runProxyCheckAll(): Promise<void> {
   const settings = await getSettings()
   const timeout = (settings.proxyCheckTimeout as number) * 1000
   const failed: ProxyEntity[] = []
+  /** 本轮检测到的出口漂移：代理 id → 漂移详情 */
+  const drifts = new Map<number, ExitIpChange>()
   for (const p of list) {
     try {
       const result = await checkProxy(p, timeout)
       bumpFailureCount(proxyFailureCounts, p.id, result.ok)
-      p.status = result.ok ? 'active' : 'invalid'
-      p.latency = result.ok ? result.latency : null
-      p.country = result.country
-      p.region = result.region
-      p.city = result.city
-      p.isp = result.isp
-      p.exitIp = result.exitIp
-      p.anonymity = result.anonymity
-      p.lastCheckAt = new Date()
+      // 覆盖之前先比对：出口 IP 变了要立刻告知用户，不能静默吞掉
+      const change = applyProxyCheckResult(p, result)
+      if (change) drifts.set(p.id, change)
       await repo.save(p)
       if (!result.ok) failed.push(p)
     } catch (e) {
@@ -708,6 +710,30 @@ async function runProxyCheckAll(): Promise<void> {
     }
   }
   console.log(`[roxy] 定时巡检完成，共检测 ${list.length} 个代理，失效 ${failed.length} 个`)
+
+  // ===== 出口 IP 漂移告警 =====
+  // 代理 IP 池会轮换出口 IP。一旦某个代理的出口从美国换成德国，库里 country 会被
+  // 改成 Germany，但已绑定环境的时区/语言/GEO 仍按旧国家生成 → 环境变成
+  //「时区纽约 + 出口德国」，平台侧一眼看出关联异常，而界面上毫无提示。
+  // 这里把漂移写进操作日志（并由 writeSystemLog 统一触发 webhook），
+  // 让用户**当场**知道，而不是等到某天偶然跑体检才发现环境已经失配。
+  if (drifts.size > 0) {
+    const profileRepo = AppDataSource.getRepository(ProfileEntity)
+    const profiles = (await profileRepo.find({ where: { isTemplate: false } })).map((p) => ({
+      id: p.id,
+      name: p.name,
+      proxyId: p.proxyId,
+      timezone: String((p.fingerprint as unknown as { timezone?: string })?.timezone || '')
+    }))
+    for (const p of list) {
+      const change = drifts.get(p.id)
+      if (!change) continue
+      const affected = findMisalignedProfiles({ id: p.id, country: change.newCountry }, profiles)
+      const detail = describeExitIpChange(change, p.name, affected)
+      console.warn(`[roxy] ${detail}`)
+      await writeSystemLog(p.teamId, 'proxy_exit_ip_changed', detail)
+    }
+  }
 
   try {
     await healProxies(failed, settings)

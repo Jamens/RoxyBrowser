@@ -30,6 +30,8 @@ const COMPILES = [
   { name: 'secretCrypto', files: ['src/shared/secretCrypto.ts', 'src/main/secretKey.ts'], out: '.tmp_sc' },
   { name: 'cdp', files: ['src/shared/cdp.ts'], out: '.tmp_cdp' },
   { name: 'proxyHeal', files: ['src/shared/proxyHeal.ts'], out: '.tmp_ph' },
+  // 代理出口 IP 漂移检测：依赖 countries（宽松国家匹配）+ locales
+  { name: 'proxyDrift', files: ['src/shared/proxyDrift.ts', 'src/shared/countries.ts', 'src/shared/locales.ts'], out: '.tmp_pd' },
   { name: 'sessionRevoke', files: ['src/shared/sessionRevoke.ts'], out: '.tmp_sr' },
   { name: 'rateLimit', files: ['src/shared/rateLimit.ts'], out: '.tmp_rl' },
   { name: 'logArchive', files: ['src/shared/logArchive.ts'], out: '.tmp_la' },
@@ -87,6 +89,7 @@ const TESTS = [
   { name: 'secretCrypto', file: 'tests/secretCrypto.test.cjs' },
   { name: 'cdp', file: 'tests/cdp.test.cjs' },
   { name: 'proxyHeal', file: 'tests/proxyHeal.test.cjs' },
+  { name: 'proxyDrift', file: 'tests/proxyDrift.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
   { name: 'rateLimit', file: 'tests/rateLimit.test.cjs' },
   { name: 'logArchive', file: 'tests/logArchive.test.cjs' },

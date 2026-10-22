@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card, Table, Button, Space, Tag, Popconfirm, Modal, Form, Input, Select, InputNumber, Typography, Upload,
-  Row, Col, Statistic, DatePicker, Alert
+  Row, Col, Statistic, DatePicker, Alert, Tooltip
 } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { useDeepLinkFocus } from '../hooks/useDeepLinkFocus'
@@ -186,8 +186,14 @@ export default function Proxies() {
   const check = async (id: number) => {
     setChecking(id)
     try {
-      const p = await api.post<ProxyDTO>(`/api/proxies/${id}/check`)
-      if (p.status === 'active')
+      const p = await api.post<ProxyDTO & { message?: string; misalignedProfiles?: ProxyDTO['misalignedProfiles'] }>(
+        `/api/proxies/${id}/check`
+      )
+      // 出口 IP 漂移优先报：它是「看起来正常、实际已失配」的情况，
+      // 报「代理可用」会让用户以为没事，白白错过一次关联风险。
+      if (p.misalignedProfiles !== undefined && (p as { exitIpChanged?: unknown }).exitIpChanged) {
+        message.warning(p.message || '出口 IP 已变更，请检查受影响环境')
+      } else if (p.status === 'active')
         message.success(
           `代理可用 · 出口 ${p.exitIp} · ${p.country || '-'}${p.region ? '/' + p.region : ''}${p.isp ? ' · ' + p.isp : ''} · ${p.latency}ms`
         )
@@ -264,6 +270,36 @@ export default function Proxies() {
       dataIndex: 'poolStatus',
       width: 90,
       render: (v, r) => poolStatusTag(v, r.status)
+    },
+    {
+      // 出口失配：代理出口国家变了，但绑定环境的时区还按旧国家生成。
+      // 这类环境在平台侧容易被判为关联异常，所以必须显眼。
+      title: '出口失配',
+      dataIndex: 'misalignedProfiles',
+      width: 150,
+      render: (v) => {
+        const list = (v as ProxyDTO['misalignedProfiles']) || []
+        if (list.length === 0) return <Typography.Text type="secondary">-</Typography.Text>
+        return (
+          <Tooltip
+            title={
+              <div>
+                <div>以下环境时区与本代理出口国家不一致：</div>
+                {list.map((x) => (
+                  <div key={x.id}>
+                    #{x.id} {x.name}（{x.timezone} → 应为 {x.expectedTimezone}）
+                  </div>
+                ))}
+                <div style={{ marginTop: 4 }}>可在「环境管理」中用一致性修复批量校正。</div>
+              </div>
+            }
+          >
+            <Tag color="red" style={{ cursor: 'help' }}>
+              {list.length} 个环境失配
+            </Tag>
+          </Tooltip>
+        )
+      }
     },
     { title: '用量', dataIndex: 'usageCount', width: 90, ellipsis: true, render: (v) => (v ? `${v} 环境` : '-') },
     {
