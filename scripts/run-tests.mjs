@@ -90,6 +90,9 @@ const TESTS = [
   { name: 'cdp', file: 'tests/cdp.test.cjs' },
   { name: 'proxyHeal', file: 'tests/proxyHeal.test.cjs' },
   { name: 'proxyDrift', file: 'tests/proxyDrift.test.cjs' },
+  // 探针脚本语法守卫：模板字符串里的 JS 对 tsc/eslint 完全失明，
+  // 历史上曾因此让「环境体检」静默失效 27 天。纯读源码，无需编译。
+  { name: 'probeScript', file: 'tests/probeScript.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
   { name: 'rateLimit', file: 'tests/rateLimit.test.cjs' },
   { name: 'logArchive', file: 'tests/logArchive.test.cjs' },

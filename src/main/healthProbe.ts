@@ -97,10 +97,10 @@ const PROBE_SCRIPT = `(function(){
     // 与 WebGPU 同理：异步探测须带超时，且 .then() 内要补回 try/catch，
     // 否则脱离外层保护后异常会被上层误判成「窗口未运行」。
     var emeApiPresent = false, emeWidevine = false, emeClearKey = false, emePlayReady = false
-    var emeInitDataTypes: string[] = [], emeVideoCaps = 0, emeAudioCaps = 0
+    var emeInitDataTypes = [], emeVideoCaps = 0, emeAudioCaps = 0
     var emeP = Promise.resolve()
     try {
-      var rEme = (nav as any).requestMediaKeySystemAccess
+      var rEme = nav.requestMediaKeySystemAccess
       if (typeof rEme === 'function') {
         emeApiPresent = true
         var emeCfg = [{ initDataTypes: ['cenc'] }]
@@ -160,7 +160,7 @@ const PROBE_SCRIPT = `(function(){
     // 本仓库 preload 已覆写 window.matchMedia，故此处读到的是 fp 驱动的稳定值。
     var prefersColorScheme = 'light', prefersReducedMotion = false
     try {
-      var mq = (window as any).matchMedia
+      var mq = window.matchMedia
       if (typeof mq === 'function') {
         if (mq('(prefers-color-scheme: dark)').matches) prefersColorScheme = 'dark'
         else if (mq('(prefers-color-scheme: light)').matches) prefersColorScheme = 'light'
@@ -284,7 +284,15 @@ export async function collectProbe(win: BrowserWindow): Promise<FingerprintProbe
     const r = (await win.webContents.executeJavaScript(PROBE_SCRIPT)) as FingerprintProbe
     if (!r || typeof r !== 'object') return null
     return r
-  } catch {
-    return null
+  } catch (e) {
+    // 不再静默吞掉。原先这里是个空 `catch {}`，一旦探针执行失败就返回 null，
+    // 路由据此回「环境窗口未运行，请打开后再体检」——而真实原因可能是
+    // 渲染进程崩溃、探针脚本抛错、页面正在导航……全被这句提示掩盖，
+    // 排查时完全指不到真因。
+    // 现在把原始错误带回（路由已有 `actual.error` 分支会透出给用户），
+    // 同时打日志便于主进程侧追查。
+    const msg = (e as Error)?.message || String(e)
+    console.error('[roxy] 指纹探针执行失败:', msg)
+    return { error: msg } as FingerprintProbe
   }
 }
