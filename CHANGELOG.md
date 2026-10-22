@@ -1362,7 +1362,7 @@ MySQL `tinyint` 列（`sensitive`）经 TypeORM 取回的是**数字** `0`/`1`�
 
 ### 新增
 
-- **环境到期管理（候选③，对标竞品订阅到期，去计费本地化版）**（`src/shared/envExpiry.ts` + `src/main/server.ts` + `src/renderer/src/components/ProfileForm.tsx` + `src/renderer/src/pages/Environments.tsx`，提交 `dab1a1c`）：环境可设置可选到期时间，到期后无法打开、列表给出预警，实现轻量「生命周期管理」。
+- **环境到期管理（候选③，对标官方订阅到期，去计费本地化版）**（`src/shared/envExpiry.ts` + `src/main/server.ts` + `src/renderer/src/components/ProfileForm.tsx` + `src/renderer/src/pages/Environments.tsx`，提交 `dab1a1c`）：环境可设置可选到期时间，到期后无法打开、列表给出预警，实现轻量「生命周期管理」。
   - 遵守项目规则 #24 **不新增数据库列**：到期时间承载于 `ProfileEntity.fingerprint` 这一 JSON 列内（键 `expiresAt`，ISO 字符串），经 `getEnvExpiresAt` / `withEnvExpiresAt` 两个纯函数读写，前后端共用。
   - 服务端 `mapProfile` 透出 `expiresAt`；`/profiles/:id/open` 与批量打开两处拦截已过期环境，返回友好提示「请在编辑中延长或清空到期时间」。
   - 前端环境编辑抽屉新增「到期时间」DatePicker（可选，留空 = 长期有效）；环境列表新增「到期」列，复用 `expiryWarn` / `expiryLabel` 显示「已过期 N 天 / 剩 N 天」预警 Tag（与代理到期样式一致）。
@@ -1551,7 +1551,7 @@ MySQL `tinyint` 列（`sensitive`）经 TypeORM 取回的是**数字** `0`/`1`�
 
 ### 新增
 
-- **内核版本切换范围升级 127–132 → 150–154**（`src/shared/fingerprint.ts`）：`CHROME_VERSIONS` 改为 150/151/152/153/154，并把内置 9 套 Chrome 系预设的 UA（`Chrome/xxx`、`uaFullVersion`）与 6 套预设名（如 `Windows 11 · Chrome 154 · 德国`）批量同步到 `154.0.7521.60`，对标竞品 RoxyChrome 154 内核。预设其余字段（平台 / GPU / 屏幕 / 时区语言）保持自洽不变。
+- **内核版本切换范围升级 127–132 → 150–154**（`src/shared/fingerprint.ts`）：`CHROME_VERSIONS` 改为 150/151/152/153/154，并把内置 9 套 Chrome 系预设的 UA（`Chrome/xxx`、`uaFullVersion`）与 6 套预设名（如 `Windows 11 · Chrome 154 · 德国`）批量同步到 `154.0.7521.60`，对标官方 RoxyChrome 154 内核。预设其余字段（平台 / GPU / 屏幕 / 时区语言）保持自洽不变。
 - **HTTP 安全警告伪装**（`src/main/browser-preload.ts` + `src/shared/types.ts` + `src/renderer/src/components/ProfileForm.tsx`）：新增 `httpWarning` 字段（默认开启），环境窗口导航到明文 `http://` 站点时在页面顶部注入固定红色警告条，提示连接未加密、存在被窃听 / 篡改风险；`localhost` / `127.0.0.1` / `[::1]` 与 `file://` 不触发；监听 `DOMContentLoaded` / `popstate` / `hashchange` / `click` 重新评估当前 URL。表单「追踪器屏蔽」下方新增「HTTP 安全警告」开关。
 - `httpWarning` 贯穿 `Fingerprint` 类型与全部 builder funnel（`randomFingerprint` 三分支、`presetFingerprint`、`normalizeFingerprint`、`deriveJitteredFingerprint`），legacy 老指纹无该字段时兜底为 `true`。
 

@@ -175,7 +175,7 @@ curl -X POST http://127.0.0.1:39100/api/snapshot/import \
 
 ### 1.7 环境生命周期（到期时间 · 预警 · 批量续期）
 
-环境可设到期时间（到期后**拒绝开窗**，对标竞品的订阅到期），到期时间承载于
+环境可设到期时间（到期后**拒绝开窗**，对标官方的订阅到期），到期时间承载于
 `fingerprint.expiresAt`（项目规则 #24：不新增数据库列），支持离线单测。
 
 #### 到期预警（主动告知，不靠用户想起来去问）
@@ -730,7 +730,7 @@ app.listen(4000)
 
 #### 7.12.4 指纹深度补齐 2.0（Battery / plugins / SpeechSynthesis / WebRTC 代理模式）
 
-对标竞品 changelog 与检测站高频采集维度，在既有指纹体系上补齐四个常被忽略、却会暴露「自动化」或「语言 / 系统矛盾」的维度（`05643bd`）：
+对标官方 changelog 与检测站高频采集维度，在既有指纹体系上补齐四个常被忽略、却会暴露「自动化」或「语言 / 系统矛盾」的维度（`05643bd`）：
 
 - **Battery API**：`navigator.getBattery()` 返回按环境种子派生的稳定电池状态（未满则充电中、chargingTime 为正；满电则不充电、dischargingTime=Infinity），避免 CreepJS 等采集到宿主机真实电池。仅在宿主原生有该 API 时覆写。
 - **plugins / mimeTypes**：按真实 Chrome 默认形态补 `Chrome PDF Plugin` + `application/pdf`，并设置 `Plugin` / `PluginArray` / `MimeType` / `MimeTypeArray` 对应原型，使 `instanceof` / `toString` 与真实 Chrome 一致，消除「plugins 为空」信号。
