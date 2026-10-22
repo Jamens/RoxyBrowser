@@ -69,6 +69,23 @@ async function main() {
     console.log('  ' + k.padEnd(22) + ' = ' + String(v).slice(0, 95))
   })
 
+  // 覆盖缺口**必须显式说出来**：无 GPU 环境下 webgl / webgpu 只会报「不可用」，
+  // 而这两项恰是内核变化最敏感的（Chrome 151 调过 WebGL 输出规则、152 加了 WebGPU 子群）。
+  // 若不提示，产出的基线会被误当成「已覆盖全部维度」，白白丢掉一次复验机会。
+  // 判定要精确：只有「因硬件缺失而测不到」的项才算覆盖缺口。
+  // webcryptoVersion 的取值是「均不可用」——那是**门控生效的正确结果**（探到了、
+  // 结论是这些算法不可见），不是「没测到」，不能混进缺口清单。
+  const unavailable = Object.entries(actuals)
+    .filter(([k, v]) => k !== 'webcryptoVersion')
+    .filter(([, v]) => /^(WebGL|WebGPU)/.test(String(v)) && /不可用/.test(String(v)))
+    .map(([k]) => k)
+  if (unavailable.length) {
+    console.log('\n⚠️ 覆盖缺口：以下项在本机不可用，本次基线**未覆盖**它们')
+    unavailable.forEach((k) => console.log('   · ' + k))
+    console.log('   这些维度恰是内核变化最敏感的，须在**有独立显卡**的机器上补采，')
+    console.log('   再用 diff-fingerprint-baseline.cjs 与本基线对比。')
+  }
+
   // 关窗
   await fetch(BASE + '/profiles/' + target.id + '/close', { method: 'POST', headers: H })
   console.log('\n已关窗')

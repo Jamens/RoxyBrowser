@@ -267,3 +267,139 @@ TK=$(cat /tmp/roxy-token.txt) DBU=<user> DBP=<pass> node scripts/verify-fix-guar
 
 > ⚠️ 这三个脚本会**临时改写环境 #3 / #4 的指纹**，跑完会自动复原。
 > 脚本需 DB 账号具备 `SELECT/UPDATE profiles` 权限。
+
+---
+
+# 指纹基线与内核升级回归（Electron 45 / Chromium 156）
+
+> 用途：**升级 Chromium 内核前后，用同一套探针逐项对比窗口内的实测值**，
+> 把"我以为内核变化不影响我们"变成"有对照的实验"。
+> 2026-10-19 那次升级（44.2.0 → 45.0.0，Chromium 152 → 156）就是靠它做的。
+
+## 1. 为什么必须先建基线
+
+指纹浏览器是**自研注入**：canvas 噪声、WebAudio 特征、WebGL 参数、UA-CH 全是我们在
+preload 里改写的。Chromium 一旦升级，**内核自己的输出会变**——而我们的伪装是基于
+"某个版本的 Chrome 长什么样"写死的。内核变了而伪装没跟上，不会报错、不会崩，
+只会**悄悄变得不像那个版本**——这是最危险的一类问题。
+
+所以顺序必须是：
+
+```
+1. 旧内核下采基线  →  2. 升内核  →  3. 新内核下再采一次  →  4. 逐项 diff
+```
+
+反过来（先升后比）就变成了"升完只看有没有崩"，而恰恰是**没崩的那些变化**最要命。
+
+## 2. 采集基线
+
+```bash
+# 1) 起服务（受限环境需加两个开关，见下）
+unset ELECTRON_RUN_AS_NODE
+ROXY_DISABLE_SANDBOX=1 pnpm dev
+
+# 2) 采一份快照（脚本会自己开环境窗口 → 跑体检 → 落盘 → 关窗）
+TK=$(cat /tmp/roxy-token.txt) node scripts/capture-fingerprint-baseline.cjs baselines/<名称>.json
+```
+
+快照内容是体检报告的 **`key → actual` 全量映射**（不是白名单挑出来的字段——
+体检项的 key 会随版本增删，用白名单一漏就静默丢失变化），
+外加伪装度与一致性项的判定结果。
+
+> 采集需要**环境窗口处于运行态**（脚本会自动开窗，9 秒后开始体检）。
+> 若提示「窗口已在运行中」，说明上一次采集没关干净——脚本会自动复用该窗口。
+
+## 3. 对比两份基线
+
+```bash
+node scripts/diff-fingerprint-baseline.cjs baselines/chromium152.json baselines/chromium156.json
+```
+
+输出分四段：**变化项**（逐条列出 A/B 两值）、**新增项**、**消失项**、**一致性项变化**。
+
+判读要点：
+
+- **变化项里出现 `webgl` / `webgpu` / `audioProfile` / `canvasNoise`** → 必须逐条判断
+  是"内核变了我们该跟上"还是"内核变了但这维度与版本无关"；
+- **消失项**（A 有 B 无）→ 多半是体检项被改名或删除，不是内核行为变化，先查代码；
+- **一致性项变化** → 比实测值变化更严重，说明环境的自洽性被内核影响了。
+
+## 4. 现有的基线快照
+
+| 文件 | 内核 | 采集于 | 伪装度 | 体检项数 |
+| --- | --- | --- | --- | --- |
+| `baselines/chromium152.json` | Electron 44.2.0 / Chromium 152.0.7977.76 | 2026-10-22 | 100 | 27 |
+| `baselines/chromium156.json` | Electron 45.0.0 / Chromium 156.0.8078.48 | 2026-10-22 | 100 | 28 |
+
+**本次对比结论：27 个共有项实测值 0 变化，伪装度 100 → 100。**
+唯一差异是 156 基线多一项 `webcryptoVersion`（值「均不可用」）——
+该项是后来新增的体检项（见第 6 节），152 基线采集时尚不存在。
+
+> 152 基线**无法**用当前代码重采（内核已升），故两份基线的体检项集合本就可能不完全一致。
+> 对比时「新增/消失项」先看是不是体检项本身增删，再判断是否内核行为变化。
+
+## 5. ⚠️ 无 GPU 环境下的覆盖缺口
+
+采集基线需要有显卡的机器。在**无 GPU**环境（如容器 / 远程桌面 / 虚拟机）里，
+窗口内 `webgl` 与 `webgpu` 都会报「不可用」——**这两项恰恰是内核变化最敏感的**
+（Chrome 151 调整过 WebGL 输出规则、152 引入 WebGPU 子群控制）。
+
+于是本机采到的基线里，这两项实际是**没覆盖**的：
+
+```
+webgl    = WebGL 不可用
+webgpu   = WebGPU 不可用
+```
+
+**补测办法**（不需要改任何代码）：
+
+1. 换一台有独立显卡的机器（Windows / macOS 均可），按第 2 节采一份；
+2. 与 `baselines/chromium156.json` 对比：
+   ```bash
+   node scripts/diff-fingerprint-baseline.cjs baselines/chromium156.json baselines/<有GPU机器>.json
+   ```
+3. 重点看 `webgl` / `webgpu` / `webglOsMatch` 三项。
+
+> 注意：无 GPU 环境下 `canvasNoise` / `audioProfile` 等项**是有效的**
+> （Canvas 2D 与 WebAudio 走 CPU 软件渲染，不依赖 GPU），
+> 所以本机基线对这两类仍然有参考价值，只是 WebGL / WebGPU 两项缺失。
+
+## 6. 升级内核时的额外检查项：WebCrypto 版本一致性
+
+Chromium **154 起默认**在 WebCrypto 提供 ML-KEM-768/1024、ML-DSA-44/65/87、X-Wing、
+ChaCha20-Poly1305（151–153 是原始试验期）。
+
+内核升级后若环境伪装成 Chrome 151/152/153 却能用这些算法，就是**「特性超前」矛盾**——
+平台一行 `crypto.subtle.generateKey` 即可识破（真实用户浏览器滞后很常见，
+但特性超前不可能）。
+
+本项目已做两道防线：
+
+1. **preload 门控**：按伪装版本拦截 `crypto.subtle` 的算法入口，低于 154 的算法名
+   按「不支持」抛 `DOMException NotSupportedError`；
+2. **体检 `webcryptoVersion` 项**：如实采集窗口内实际可用的新算法并与伪装版本对账，
+   **只判「超前」这一侧**（伪装新版却用不了不算破绽，真实用户也可能遇到功能被禁用）。
+
+复验：
+
+```bash
+TK=$(cat /tmp/roxy-token.txt) node scripts/verify-webcrypto-gate.cjs
+```
+
+或在环境窗口的 DevTools 里直接试：
+
+```js
+try { crypto.subtle.generateKey({name:'ML-KEM-768'}, false, ['encapsulateKey','decapsulateKey']); console.log('矛盾：伪装低版本却能用') }
+catch (e) { console.log('正常：已按版本隐藏 →', e.name) }
+```
+
+## 7. 受限环境下的两个启动开关
+
+某些宿主环境（容器 / 嵌套沙箱 / CI）里，本项目会遇到两个问题：
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 主进程崩在 `electron.ipcMain.on(...)` | 宿主设了 `ELECTRON_RUN_AS_NODE=1`，Electron 退化成纯 Node | 启动前 `unset ELECTRON_RUN_AS_NODE` |
+| 窗口标题正常但内容全白 | 渲染进程沙箱起不来（`render-process-gone` / `0x80000003`） | 启动时加 `ROXY_DISABLE_SANDBOX=1` |
+
+两者都不涉及业务代码，只是宿主环境的限制。

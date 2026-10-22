@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-10-22T11:17:04.650Z",
+  "capturedAt": "2026-10-22T11:34:05.071Z",
   "electron": null,
   "chromium": null,
   "profileId": 2,
@@ -29,6 +29,7 @@
     "audioProfile": "48000 / 0.010667 / 2",
     "audioReduction": "-2.7749",
     "audioCodecs": "iamf=no / opus=probably / aac=probably",
+    "webcryptoVersion": "均不可用",
     "eme": "Widevine=true ClearKey=true PlayReady=false initDataTypes=[cenc] video=0 audio=0",
     "automation": "webdriver=false automationTraces=false",
     "platformApis": "无矛盾（应有的缺失不计入）",
@@ -51,7 +52,7 @@
       "actual": "mac"
     }
   },
-  "note": "指纹基线快照：升级内核前采集，用于回归对比。采集方式见 scripts/capture-fingerprint-baseline.cjs",
+  "note": "指纹基线快照：升级内核后采集，用于回归对比。采集方式见 scripts/capture-fingerprint-baseline.cjs",
   "electronVersion": "Electron 45.0.0",
   "chromiumVersion": "156.0.8078.48"
 }
