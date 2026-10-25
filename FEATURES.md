@@ -243,7 +243,7 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
 | 屏幕       | `screen.width/height/availWidth/availHeight`（移动端含 `devicePixelRatio`）             |
 | 硬件       | `hardwareConcurrency`、`deviceMemory`                                                   |
 | 触摸       | 移动端 `maxTouchPoints=5`、`'ontouchstart' in window`                                   |
-| Canvas     | `toDataURL` / `getImageData` 注入**确定性噪声**（同环境稳定、异环境不同）               |
+| Canvas     | **幂等烘焙式确定性噪声**：噪声下沉画布后备存储，全读路径（`toDataURL`/`toBlob`/`getImageData`/OffscreenCanvas `convertToBlob`/`transferToImageBitmap`/`createImageBitmap`）同源一致；种子 = f(环境种子, 画布宽高)，同环境稳定、异环境不同 |
 | WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
@@ -281,7 +281,7 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
 | EME / Widevine | 4 | `navigator.requestMediaKeySystemAccess` 探测 Widevine/ClearKey + CENC 能力（iOS 期望无 EME） |
   | 字体防泄漏 | 5 | `document.fonts.check` 是否被改写 |
 
-- **噪声 / 防护类不看配置、看注入是否真挂上**：通过判断原型方法是否被改写来实测——原生方法的 `toString()` 含 `[native code]`，被 JS 覆盖后是普通函数源码。因此能发现「配置存了但注入没生效」这类问题。
+- **噪声 / 防护类不看配置、看注入是否真挂上**：判据为 preload 挂载的不可枚举暗记 `__roxyPatched`（逐项记录 canvas / audio / fonts / webgl / webrtc / uaCh / timezone 的注入结果）；暗记缺失（旧版 preload）时回退源码判据。之所以不能用「源码是否含 `[native code]`」：补丁函数的 `toString` 统一伪装为原生形态（防 browserscan d0 测谎），源码判据会全量误报「未注入」。
 - **一致性红绿灯**（关联高危信号，不计入伪装度分）：
 
   | 检查项 | 含义 |
