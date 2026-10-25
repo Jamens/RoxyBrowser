@@ -9,6 +9,41 @@
 
 ---
 
+## 2026-10-25 · 补丁原生性与语言头对齐：browserscan 检测满分收尾（a82208a）
+
+承接同日的 Canvas/Audio 噪声重构（471a483）——该修复后 browserscan 六项检查
+仍有两项固定扣分（UserAgent -10% / 语言 -10%）。逆向确认两处根因都在
+**补丁自身**而非服务端判定，均与指纹配置无关：
+
+1. **Vr() 客户端门闩**（`DsSMVnXV.js`）：`sL(navigator,'userAgent')` 同时读
+   原型与实例两个属性描述符，要求 getter 的 `toString()` 含 `[native code]`。
+   `def`/`cover`/`hide` 的 getter 原是裸箭头函数，toString 报 `"() => value"`，
+   一行穿帮 → `isUACorrect` 恒假。修复：getter 一律走 `patchNative` 登记
+   （toString 报 `function get <key>() { [native code] }`）并对齐原生 name；
+   同族暴露（plugins/mimeTypes 数组的 item/namedItem/索引/迭代器、
+   `BaseAudioContext.sampleRate` getter、`fontFamily` setter）一并登记。
+2. **语言两层不一致**：preload 只改 JS 层 `navigator.languages`，
+   `Accept-Language` 请求头仍按 OS 真实 locale 发送，服务端回显头与 JS 层
+   列表对不上即判 false。修复：`browserManager` 按 `fp.languages` 覆写请求头
+   （q 值递减），两层严格一致。
+
+排查中固化的机制结论与陷阱：
+
+- **Sec-CH-UA\* 系列头不可覆写**：Chromium 网络栈在 `onBeforeSendHeaders`
+  之后按引擎真实版本重算该系列头，覆写被静默丢弃；
+- **服务端版本判据取 payload 的 clientHints**（uaCh 补丁已使三层一致），
+  preset 的 Chrome 大版本无需改动；
+- **`webPreferences.preload` 传数组会被 Electron 静默忽略**（无报错、无日志），
+  探针脚本曾全部因此未加载指纹补丁——必须是字符串路径。
+
+验证：真实 Electron 端到端探针（生产构建产物 + 复刻生产 header 逻辑）
+browserscan **100% 满分**——七元组 `[1,1,1,1,"154.0.0.0","11",0]`、语言 `[1]`、
+37 项补丁点原生性自检零暴露；40/40 离线单测、tsc、build 通过。
+回归守卫：`tests/preloadPatchNative.test.cjs`（44389a8，vm 沙箱行为级 +
+源码级双闸门，已做变异验证）。
+
+---
+
 ## 2026-10-25 · Canvas/Audio 噪声重构：修复 browserscan.net 检测百分百不通过（471a483）
 
 外部反馈：指纹在 browserscan.net 的真实性检测中「百分百通过不了」。逆向其检测脚本

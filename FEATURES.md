@@ -234,11 +234,16 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
   - 切换由 `applyCoreVersion()`（`src/shared/fingerprint.ts`）实现：正则会把 UA 里的 `Chrome/[\d.]+` 整体替换，保持操作系统 / 平台 / 设备型号等其余字段不变，因此不会出现「Chrome 132 的 UA 却配着 Chrome 127 的 UA-CH」这类不自洽。
   - `POST /api/fingerprint/random` 支持 `body.coreVersion` 透传——随机指纹时即尊重所选内核；`normalizeFingerprint`（旧数据/缺字段规整）、`presetFingerprint`（预设套用）、克隆工厂（`deriveJitteredFingerprint`）均会正确保留或推导该字段，存储层无新增迁移需求（`Fingerprint.coreVersion` 为普通可选数字列）。
 
+- **外部检测站对抗（browserscan.net 100% 满分）**：补丁的 `toString` 形态与请求头必须经得起「测谎」——
+  - **getter/setter 原生性登记**：`def` / `cover` / `hide` 等帮助函数定义的属性访问器一律走 `patchNative` 登记（`toString()` 报 `function get <key>() { [native code] }`，name 对齐原生形态）。browserscan 的门闩 `sL()` 会同时读原型与实例两个属性描述符，裸箭头 getter（toString 报 `"() => value"`）一行穿帮即把 `isUACorrect` 判死——与服务端怎么判无关的纯客户端硬伤。同族暴露（plugins/mimeTypes 数组的 item/namedItem/索引/迭代器、`sampleRate` getter、`fontFamily` setter）一并登记；回归守卫见 `tests/preloadPatchNative.test.cjs`（vm 沙箱行为级 + 源码级双闸门）。
+  - **语言两层对齐**：`Accept-Language` 请求头由主进程（`browserManager.ts`）按 `fp.languages` 覆写（q 值递减），与 JS 层 `navigator.languages` 严格一致；两层列表对不上即被判「语言不符」。
+  - **已知不可覆写**：`Sec-CH-UA*` 系列头——Chromium 网络栈在 `onBeforeSendHeaders` 之后按引擎真实版本重算该系列头，覆写被静默丢弃；服务端版本判据取 payload 的 clientHints（uaCh 补丁已使 jsUA/header/clientHints 三层一致），故 preset 的 Chrome 大版本无需改动。
+
 | 维度       | 实现方式                                                                                |
 | ---------- | --------------------------------------------------------------------------------------- |
 | User Agent | 请求头 + `navigator.userAgent` + `navigator.userAgentData`（含 `getHighEntropyValues`） |
 | 平台       | `navigator.platform`、UA 品牌与平台版本                                                 |
-| 语言       | `navigator.language` / `navigator.languages`                                            |
+| 语言       | `navigator.language` / `navigator.languages`（JS 层）+ `Accept-Language` 请求头（网络层，主进程按 `fp.languages` 覆写，两层严格一致） |
 | 时区       | `Date.prototype.getTimezoneOffset` + `Intl.DateTimeFormat.resolvedOptions()`            |
 | 屏幕       | `screen.width/height/availWidth/availHeight`（移动端含 `devicePixelRatio`）             |
 | 硬件       | `hardwareConcurrency`、`deviceMemory`                                                   |
@@ -1444,6 +1449,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" http://127.0.0.1:39100/api/notifi
 指纹注入、RPA 回放、多窗口同步回声抑制均已通过**真实 Electron 窗口**端到端验证（非仅接口 / 路由层探活）：
 
 - **指纹注入真值回读**：桌面 / 移动两套环境分别校验 UA、`platform`、`languages`、`hardwareConcurrency`、`deviceMemory`、`screen`、`timezone` / `tzOffset`、`userAgentData`（UA-CH 的 `platform` 与 `mobile`）、WebGL Vendor / Renderer、Canvas 噪声、触摸与 `devicePixelRatio`，全部与设定一致。
+- **browserscan.net 真实性检测 100%**：真实 Electron 窗口端到端探针（生产构建产物 + 复刻生产 header 逻辑）七项判据全过——七元组 `[1,1,1,1,"154.0.0.0","11",0]`（UA/OS/浏览器版本/浏览器身份）、语言 `[1]`、Canvas 噪声三性、37 项补丁点 `toString` 原生性自检零暴露。过程中坐实两个调试陷阱：`webPreferences.preload` 传数组会被 Electron 静默忽略（探针补丁全部未加载）；`Sec-CH-UA*` 头在 `onBeforeSendHeaders` 之后被网络栈按引擎真实版本重算（覆写无效）。
 - **RPA 回放真实驱动页面**：`sync-apply` 下发的 `click` / `input` 能真实命中按钮、写入输入框。
 - **回声抑制**：回放期间不会把自身合成事件回发为 `sync-event`。
 
