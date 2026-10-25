@@ -455,6 +455,25 @@ const zhCN = {
   'update.error': '更新检查失败',
   'update.dev': '开发模式不检查更新',
 
+  // ---- 通知中心（应用内铃铛 + 桌面弹窗） ----
+  'notif.title': '通知',
+  'notif.empty': '暂无通知',
+  'notif.viewAll': '查看全部日志',
+  'notif.cat.proxy_drift': '代理出口 IP 漂移',
+  'notif.cat.proxy_heal': '代理自动换绑',
+  'notif.cat.expiry': '到期预警',
+  'notif.cat.security': '安全告警',
+  'notif.cat.rpa': '定时任务失败',
+  'notif.setting.section': '桌面通知',
+  'notif.setting.desc': '系统事件（代理漂移、自动换绑、到期预警、登录锁定、定时任务失败）除在应用内铃铛记录外，还可推送操作系统通知中心。关闭弹窗不影响铃铛记录。',
+  'notif.setting.enable': '开启桌面通知',
+  'notif.setting.enableExtra': '弹窗点击后可直接带到应用前台；应用主窗口处于聚焦时自动跳过（此时看铃铛即可，不再叠加系统噪音）。同一事件 60 秒内只弹一次，防止巡检批量命中时刷屏。',
+  'notif.setting.events': '推送分类',
+  'notif.setting.eventsExtra': '只推送勾选的分类；全部取消即完全静音（应用内铃铛仍记录全部事件）。',
+  'notif.setting.test': '发送测试',
+  'notif.setting.testOk': '已发送，请查看系统通知中心',
+  'notif.setting.testFail': '发送失败：{error}',
+
   // ---- Webhook 通知 ----
   'cdp.section': '调试端口（CDP）',
   'cdp.desc': '开启后可用 Playwright / Puppeteer 等外部工具接管环境窗口。本项目的环境窗口是同一个 Chromium 内的多标签，因此共用一个调试端口，工具连上后按 target 区分环境。',
@@ -997,6 +1016,25 @@ const enUS: MessageDict = {
   'update.error': 'Update check failed',
   'update.dev': 'Update check disabled in dev mode',
 
+  // ---- Notification center (in-app bell + desktop toasts) ----
+  'notif.title': 'Notifications',
+  'notif.empty': 'No notifications',
+  'notif.viewAll': 'View all logs',
+  'notif.cat.proxy_drift': 'Proxy exit IP drift',
+  'notif.cat.proxy_heal': 'Proxy auto-rebind',
+  'notif.cat.expiry': 'Expiry alert',
+  'notif.cat.security': 'Security alert',
+  'notif.cat.rpa': 'Scheduled task failed',
+  'notif.setting.section': 'Desktop notifications',
+  'notif.setting.desc': 'System events (proxy drift, auto-rebind, expiry alerts, login lockouts, scheduled task failures) are recorded in the in-app bell and can also be pushed to the OS notification center. Turning off toasts does not affect the bell.',
+  'notif.setting.enable': 'Enable desktop notifications',
+  'notif.setting.enableExtra': 'Clicking a toast brings the app to the front. Toasts are skipped while the main window is focused (the bell already covers that case). The same event is toasted at most once per 60 seconds to avoid flooding during batch inspections.',
+  'notif.setting.events': 'Pushed categories',
+  'notif.setting.eventsExtra': 'Only checked categories are pushed; clearing all of them fully mutes toasts (the in-app bell still records every event).',
+  'notif.setting.test': 'Send test',
+  'notif.setting.testOk': 'Sent — check your system notification center',
+  'notif.setting.testFail': 'Failed to send: {error}',
+
   // ---- Webhook 通知 ----
   'cdp.section': 'Debug port (CDP)',
   'cdp.desc': 'Once enabled, external tools such as Playwright / Puppeteer can take over environment windows. In this app all environment windows share one Chromium instance, so they share a single debug port; tools distinguish environments by target.',
@@ -1537,6 +1575,25 @@ const jaJP: MessageDict = {
   'update.installNow': '今すぐ再起動してインストール',
   'update.error': '更新の確認に失敗しました',
   'update.dev': '開発モードでは更新を確認しません',
+
+  // ---- 通知センター（アプリ内ベル + デスクトップ通知） ----
+  'notif.title': '通知',
+  'notif.empty': '通知はありません',
+  'notif.viewAll': 'すべてのログを見る',
+  'notif.cat.proxy_drift': 'プロキシ出口 IP 漂流',
+  'notif.cat.proxy_heal': 'プロキシ自動張り替え',
+  'notif.cat.expiry': '期限警告',
+  'notif.cat.security': 'セキュリティ警告',
+  'notif.cat.rpa': '定期タスク失敗',
+  'notif.setting.section': 'デスクトップ通知',
+  'notif.setting.desc': 'システムイベント（プロキシ漂流・自動張り替え・期限警告・ログインロック・定期タスク失敗）はアプリ内ベルに記録され、あわせて OS の通知センターへ push できます。デスクトップ通知を切ってもベルの記録には影響しません。',
+  'notif.setting.enable': 'デスクトップ通知を有効化',
+  'notif.setting.enableExtra': '通知をクリックするとアプリが前面に出ます。メインウィンドウにフォーカス中はスキップされます（ベルで確認できるため）。同一イベントは 60 秒に 1 回まで——まとめて検出された時の通知爆撃を防ぎます。',
+  'notif.setting.events': 'push する分類',
+  'notif.setting.eventsExtra': 'チェックした分類のみ push。全解除で完全に静音します（アプリ内ベルには全イベントが記録されます）。',
+  'notif.setting.test': 'テスト送信',
+  'notif.setting.testOk': '送信しました。OS の通知センターを確認してください',
+  'notif.setting.testFail': '送信失敗：{error}',
 
   // ---- Webhook 通知 ----
 'cdp.section': 'デバッグポート（CDP）',
@@ -2079,6 +2136,25 @@ const deDE: MessageDict = {
   'update.installNow': 'Jetzt neu starten & installieren',
   'update.error': 'Update-Prüfung fehlgeschlagen',
   'update.dev': 'Im Entwicklungsmodus keine Update-Prüfung',
+
+  // ---- Benachrichtigungscenter (In-App-Glocke + Desktop-Toasts) ----
+  'notif.title': 'Benachrichtigungen',
+  'notif.empty': 'Keine Benachrichtigungen',
+  'notif.viewAll': 'Alle Protokolle anzeigen',
+  'notif.cat.proxy_drift': 'Proxy-Exit-IP-Drift',
+  'notif.cat.proxy_heal': 'Proxy-Auto-Neubindung',
+  'notif.cat.expiry': 'Ablaufwarnung',
+  'notif.cat.security': 'Sicherheitswarnung',
+  'notif.cat.rpa': 'Geplante Aufgabe fehlgeschlagen',
+  'notif.setting.section': 'Desktop-Benachrichtigungen',
+  'notif.setting.desc': 'Systemereignisse (Proxy-Drift, Auto-Neubindung, Ablaufwarnungen, Login-Sperren, fehlgeschlagene geplante Aufgaben) werden in der In-App-Glocke protokolliert und können zusätzlich an das OS-Benachrichtigungscenter gesendet werden. Das Ausschalten der Toasts beeinflusst die Glocke nicht.',
+  'notif.setting.enable': 'Desktop-Benachrichtigungen aktivieren',
+  'notif.setting.enableExtra': 'Ein Klick auf einen Toast holt die App in den Vordergrund. Toasts werden übersprungen, während das Hauptfenster fokussiert ist (die Glocke deckt diesen Fall ab). Dasselbe Ereignis wird höchstens einmal pro 60 Sekunden gemeldet, um Fluten bei Batch-Prüfungen zu vermeiden.',
+  'notif.setting.events': 'Gemeldete Kategorien',
+  'notif.setting.eventsExtra': 'Nur markierte Kategorien werden gemeldet; das Abwählen aller Kategorien schaltet Toasts vollständig stumm (die In-App-Glocke protokolliert weiterhin alle Ereignisse).',
+  'notif.setting.test': 'Test senden',
+  'notif.setting.testOk': 'Gesendet – prüfe das Benachrichtigungscenter des Systems',
+  'notif.setting.testFail': 'Senden fehlgeschlagen: {error}',
 
   // ---- Webhook 通知 ----
 'cdp.section': 'Debug-Port (CDP)',

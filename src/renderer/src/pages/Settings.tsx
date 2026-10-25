@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse, Checkbox } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
 import { api, API_BASE, getToken } from '../api'
 import { readTextFile } from '../utils/download'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, WEBHOOK_EVENT_GROUPS, type AppSettings, type AiAutoTask, type UpdaterStatus, type WebhookConfig } from '@shared/types'
+import { NOTIFY_CATEGORIES } from '@shared/notifications'
 import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@shared/countries'
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
@@ -198,6 +199,21 @@ export default function Settings() {
   // SMTP 测试
   const [testSmtpEmail, setTestSmtpEmail] = useState('')
   const [testingSmtp, setTestingSmtp] = useState(false)
+
+  // 桌面通知测试（立即弹一条系统通知，与表单是否已保存无关）
+  const [testingNotify, setTestingNotify] = useState(false)
+  const sendNotifyTest = async () => {
+    setTestingNotify(true)
+    try {
+      const r = await api.post<{ ok: boolean; error?: string }>('/api/notifications/test')
+      if (r.ok) message.success(t('notif.setting.testOk'))
+      else message.error(t('notif.setting.testFail', { error: r.error || '' }))
+    } catch (e) {
+      message.error(t('notif.setting.testFail', { error: (e as Error).message }))
+    } finally {
+      setTestingNotify(false)
+    }
+  }
 
   // ===== 登录二次验证（2FA / TOTP）=====
   const [twoFaEnabled, setTwoFaEnabled] = useState(false)
@@ -1195,6 +1211,34 @@ export default function Settings() {
             </>
           )}
         </Form.List>
+
+        <Divider>{t('notif.setting.section')}</Divider>
+        <Typography.Paragraph type="secondary">{t('notif.setting.desc')}</Typography.Paragraph>
+        <Form.Item
+          name="desktopNotifyEnabled"
+          label={t('notif.setting.enable')}
+          extra={t('notif.setting.enableExtra')}
+          valuePropName="checked"
+        >
+          <Switch />
+        </Form.Item>
+        {/* 关闭总开关时隐藏分类勾选：露出一个不生效的配置只会让人误以为已订阅 */}
+        <Form.Item noStyle shouldUpdate={(prev, cur) => prev.desktopNotifyEnabled !== cur.desktopNotifyEnabled}>
+          {({ getFieldValue }) =>
+            getFieldValue('desktopNotifyEnabled') ? (
+              <Form.Item name="desktopNotifyEvents" label={t('notif.setting.events')} extra={t('notif.setting.eventsExtra')}>
+                <Checkbox.Group
+                  options={NOTIFY_CATEGORIES.map((c) => ({ value: c, label: t(`notif.cat.${c}`) }))}
+                />
+              </Form.Item>
+            ) : null
+          }
+        </Form.Item>
+        <Form.Item>
+          <Button icon={<NotificationOutlined />} loading={testingNotify} onClick={() => void sendNotifyTest()}>
+            {t('notif.setting.test')}
+          </Button>
+        </Form.Item>
 
         <Form.Item>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>

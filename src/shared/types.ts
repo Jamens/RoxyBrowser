@@ -1,6 +1,8 @@
 // 共享类型定义（主进程 / 渲染进程共用）
 import type { LocaleCode } from './locales'
 import { DEFAULT_MAX_CONCURRENT_WINDOWS } from './windowLimit'
+import type { NotifyCategory } from './notifications'
+import { NOTIFY_DEFAULT_EVENTS } from './notifications'
 
 export type OSKind = 'windows' | 'mac' | 'android' | 'ios'
 export type WebRTCMode = 'disable' | 'real' | 'proxy'
@@ -550,6 +552,14 @@ export interface AppSettings {
   aiAutoTasks: AiAutoTask[]
   // Webhook 通知订阅列表（操作日志事件触发外发 POST）
   webhooks: WebhookConfig[]
+  // 桌面通知（操作系统通知中心弹窗）总开关。关闭后应用内铃铛仍记录全部事件，
+  // 只是不再弹系统弹窗——「主动触达」与「可回溯」是两层，分开控制。
+  desktopNotifyEnabled: boolean
+  // 桌面弹窗订阅的分类（见 shared/notifications.ts 的 NotifyCategory）。
+  // 与 webhooks 的 events 不同：这里**显式清空 = 全不订**（用户主动静音），
+  // 而字段缺失（升级用户的老设置）= 默认全部分类。两种语义不能混，
+  // 归一化口径统一收口在 normalizeNotifyEvents。
+  desktopNotifyEvents: NotifyCategory[]
   // 邮件 SMTP 配置（用于邮箱邀请成员）。字段全空表示未配置，邀请功能不可用。
   smtp: SmtpSettings
 }
@@ -629,6 +639,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   snapshotBackupIntervalH: 24,
   aiAutoTasks: [],
   webhooks: [],
+  desktopNotifyEnabled: true,
+  desktopNotifyEvents: NOTIFY_DEFAULT_EVENTS,
   smtp: {
     host: '',
     port: 465,

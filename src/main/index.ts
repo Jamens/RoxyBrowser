@@ -5,6 +5,7 @@ import { bootstrap, setBrowserBridge, setSyncToggle, setWindowsProvider, getSett
 import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows, setTrayDisplay, getWindow, probeFingerprint, captureScreenshot, scanSite } from './browserManager'
 import { AgentRunner } from './agent/runner'
 import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, setCdpPort } from './cdpManager'
+import { setNotifyWindowHooks } from './notify'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -260,6 +261,13 @@ if (!gotLock) {
 
     // 3. 托盘（支持关闭到后台常驻）
     createTray(apiBase)
+
+    // 3.5 桌面通知的窗口交互钩子：弹窗被点击时把主窗口带到前台。
+    // 放在窗口创建之前也无妨——窗口不存在时点击只会走到 createMainWindow 分支。
+    setNotifyWindowHooks({
+      focus: () => showMainWindow(),
+      isFocused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused()
+    })
 
     // 4. 打开主窗口
     //    注意：GUI 窗口打开失败（如无显示器环境）不影响本地 API / 自动化接口继续运行，

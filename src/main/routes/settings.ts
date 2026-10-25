@@ -7,6 +7,7 @@ import { clampPort } from '../../shared/cdp'
 import { getCdpInfo, readCdpConfig, writeCdpConfig, type CdpConfig } from '../cdpManager'
 import { normalizeCountry } from '../../shared/countries'
 import { normalizeLocale } from '../../shared/locales'
+import { normalizeNotifyEvents } from '../../shared/notifications'
 import type { AppSettings, SearchEngine, WebhookConfig } from '../../shared/types'
 // 仅类型导入：编译期完全擦除，不会与 server.ts 形成运行时循环依赖
 import type { AuthedRequest } from '../authScope'
@@ -86,6 +87,15 @@ export function registerSettingsRoutes(router: Router, deps: SettingsRouteDeps):
     merged.language = language
     // 搜索引擎同样走白名单：脏值会让起始页拼出错误的搜索 URL
     merged.searchEngine = normalizeSearchEngine(merged.searchEngine) || defaultSettings.searchEngine
+    // 桌面通知订阅分类归一化：滤掉未知分类。注意与 webhooks 的 events 不同——
+    // 这里**显式传空数组 = 用户主动静音**，必须保留为空，不能回落默认值
+    // （否则用户取消全部勾选后保存，下次进来又全亮了）。
+    if (Array.isArray(merged.desktopNotifyEvents)) {
+      merged.desktopNotifyEvents = normalizeNotifyEvents(merged.desktopNotifyEvents)
+    } else if (merged.desktopNotifyEvents !== undefined) {
+      // 传了非数组（null / 字符串等脏值）→ 删除该字段，读取时按默认全部分类
+      delete merged.desktopNotifyEvents
+    }
     // AI Agent 子对象深合并默认值：UI 仅暴露部分字段，避免未展示字段被覆盖成 undefined
     if (merged.aiAgent && typeof merged.aiAgent === 'object') {
       merged.aiAgent = { ...defaultSettings.aiAgent, ...(merged.aiAgent as Record<string, unknown>) }

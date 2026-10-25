@@ -73,7 +73,9 @@ const COMPILES = [
   { name: 'webhook', files: ['src/main/webhook.ts'], out: '.tmp_wh' },
   // cookieText 通过 `import type` 引用 CookieEntity，tsc 仍会把 entities.ts 拉进类型检查
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
-  { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] }
+  { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] },
+  // 通知中心共享逻辑：零 import 纯函数（白名单 / 订阅语义 / 元信息自洽）
+  { name: 'notifications', files: ['src/shared/notifications.ts'], out: '.tmp_nt' }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -118,7 +120,8 @@ const TESTS = [
   { name: 'snapshot', file: 'tests/snapshot.test.cjs' },
   { name: 'snapshotDiff', file: 'tests/snapshotDiff.test.cjs' },
   { name: 'webhook', file: 'tests/webhook.test.cjs' },
-  { name: 'cookieText', file: 'tests/cookieText.test.cjs' }
+  { name: 'cookieText', file: 'tests/cookieText.test.cjs' },
+  { name: 'notifications', file: 'tests/notifications.test.cjs' }
 ]
 
 function run(bin, args, label) {

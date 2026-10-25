@@ -29,6 +29,7 @@ import {
 } from '../shared/proxyHeal'
 import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
+import { dispatchDesktopNotification, refreshNotifyConfig } from './notify'
 import mysql from 'mysql2/promise'
 import { DataSource, IsNull } from 'typeorm'
 import type { AddressInfo } from 'net'
@@ -70,6 +71,7 @@ import { buildSnapshot } from './exporters'
 import { renderAcceptInvitePage } from './acceptInvitePage'
 import { runLogArchive } from './logArchiver'
 import { registerLogRoutes } from './routes/logs'
+import { registerNotificationRoutes } from './routes/notifications'
 import { registerProxyRoutes } from './routes/proxies'
 // 代理检测 / 分配的业务逻辑已抽到 proxyService（不依赖 AppDataSource，DataSource 由调用方传入），
 // 这样 routes/proxies 与本文件都能直接 import，不必反向引用形成循环依赖。
@@ -409,6 +411,8 @@ async function writeLog(req: AuthedRequest, action: string, detail: unknown) {
     actor: { uid: req.uid ?? 0, username: actorName, role: req.role || 'member' },
     detail
   })
+  // 触发桌面通知（应用内铃铛另有 GET /notifications 视图，两层互不影响）
+  dispatchDesktopNotification(action, { teamId: req.tid, detail })
 }
 
 /**
@@ -450,6 +454,7 @@ export async function writeAgentLog(input: {
         : null,
       detail: input.detail
     })
+    dispatchDesktopNotification(input.action, { teamId, detail: input.detail })
   } catch (e) {
     console.error('[agent-log] 写入失败:', e instanceof Error ? e.message : e)
   }
@@ -560,6 +565,8 @@ export async function getSettings(): Promise<AppSettings> {
   const decrypted = decryptSettingsSecrets(settings as unknown as Record<string, unknown>) as unknown as AppSettings
   // 每次读取设置都刷新 webhook 内存缓存（启动 / PUT /settings 后自动生效，无需单独查库）
   setCachedWebhooks(Array.isArray(decrypted.webhooks) ? decrypted.webhooks : [])
+  // 桌面通知配置同路刷新：开关 / 订阅分类改了，下一个事件立即按新配置弹窗
+  refreshNotifyConfig(decrypted)
   return decrypted
 }
 
@@ -614,6 +621,7 @@ async function writeSystemLog(teamId: number, action: string, detail: string): P
     })
   )
   dispatchWebhook(action, { teamId, actor: null, detail })
+  dispatchDesktopNotification(action, { teamId, detail })
 }
 
 /** 把实体转成纯函数判定用的最小结构 */
@@ -924,6 +932,7 @@ async function saveSchedulerLog(teamId: number, userId: number | null, action: s
       actor: userId ? { uid: userId, username: 'scheduler', role: 'member' } : null,
       detail
     })
+    dispatchDesktopNotification(action, { teamId, detail })
   } catch {
     /* 日志失败不影响调度 */
   }
@@ -1147,6 +1156,11 @@ function buildApiRouter(): express.Router {
   // 路由实现已抽到 src/main/routes/logs.ts（server.ts 过大，按域逐步拆分）。
   // getDs 传函数而非值：AppDataSource 是运行时赋值的 export let，按值捕获会拿到 undefined。
   registerLogRoutes(router, { getDs: () => AppDataSource, authMiddleware, writeLog })
+
+  // ===== 通知中心 =====
+  // 应用内铃铛的数据源 + 桌面弹窗测试，见 routes/notifications.ts。
+  // 不建表：通知是 operation_logs 的过滤视图，白名单与 shared/notifications.ts 同源。
+  registerNotificationRoutes(router, { getDs: () => AppDataSource, authMiddleware })
 
   // 账号中心域（列表 / 增删改 / 批量关联环境 / 批量导入导出）见 routes/accounts.ts。
   // 密码可见性口径（明文只给管理员、改密码也只给管理员）就写在该文件的注释里，

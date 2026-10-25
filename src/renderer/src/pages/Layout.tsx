@@ -24,6 +24,7 @@ import {
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { api, getToken, clearToken, setToken, ApiError } from '../api'
 import ThemeSwitch from '../components/ThemeSwitch'
+import NotificationBell from '../components/NotificationBell'
 import SystemStats from '../components/SystemStats'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { useIsDark } from '../theme'
@@ -189,6 +190,7 @@ export default function AppLayout() {
           }}
         >
           <SystemStats isDark={isDark} />
+          <NotificationBell />
           <ThemeSwitch />
           {teams.length > 0 && (
             <Dropdown
