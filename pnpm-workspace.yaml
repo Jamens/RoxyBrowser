@@ -1,4 +1,11 @@
 packages: [ '.' ]
+# 本机 Windows 未开开发者模式、当前用户无管理员权限：符号链接（symlink）创建会失败。
+# pnpm 12 的默认 isolated 布局在 Windows 上走符号链接，失败时**不报错**，只是静默不建链接——
+# node_modules 根级与 .pnpm 内部依赖链接全部缺失，表现为 tsc / express / @types 一律
+# MODULE_NOT_FOUND。hoisted 布局用真实目录拷贝（hardlink/copy），不需要符号链接权限。
+# （pnpm 12 起 node-linker 只从本文件读取，.npmrc 里的同名条目会被忽略；
+#   若日后在已开开发者模式的机器上开发，可删掉本行恢复 isolated。）
+nodeLinker: hoisted
 allowBuilds:
   electron: true
   electron-winstaller: true
