@@ -95,6 +95,10 @@ const TESTS = [
   // 探针脚本语法守卫：模板字符串里的 JS 对 tsc/eslint 完全失明，
   // 历史上曾因此让「环境体检」静默失效 27 天。纯读源码，无需编译。
   { name: 'probeScript', file: 'tests/probeScript.test.cjs' },
+  // preload getter 原生性守卫：browserscan「UserAgent 不同」-10% 的根因是
+  // def/cover/hide 用裸箭头函数做 getter（toString 不过 [native code] 测谎）。
+  // 行为级（vm 沙箱真实执行四件套）+ 源码级（同族补丁静态断言）双闸门。
+  { name: 'preloadPatchNative', file: 'tests/preloadPatchNative.test.cjs' },
   // WebCrypto 版本一致性：Chromium 154+ 才有 ML-KEM/ML-DSA，伪装低版本却能用 = 指纹矛盾
   { name: 'webcryptoVersion', file: 'tests/webcryptoVersion.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
