@@ -101,7 +101,19 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
 
   const def = (obj: any, key: string, value: any) => {
     try {
-      Object.defineProperty(obj, key, { get: () => value, configurable: true, enumerable: true })
+      // getter 必须过「原生测谎」：browserscan 的 sL() 会同时读原型与实例两个描述符，
+      // 要求 getter.toString() 含 [native code]。裸箭头函数 toString 报 "() => value"，
+      // 一行穿帮 → isUACorrect 直接被客户端门闩判死（与服务端判定无关）。
+      // 因此 getter 一律走 patchNative 登记（toString 报 "function get <key>() { [native code] }"），
+      // name 也对齐原生形态（原生 getter 的 name 为 "get <key>"）。
+      const nativeName = `get ${key}`
+      const getter = patchNative(() => value, nativeName)
+      try {
+        Object.defineProperty(getter, 'name', { value: nativeName, configurable: true })
+      } catch {
+        /* ignore */
+      }
+      Object.defineProperty(obj, key, { get: getter, configurable: true, enumerable: true })
     } catch {
       /* ignore */
     }
@@ -112,9 +124,17 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   // 都在原型（如 Navigator.prototype）上，而 delete **只能删除自身属性**：
   // 对原型属性执行 delete 会返回 true 却什么也不删，是彻底的静默失效。
   // 这里改为在实例上定义一个返回 undefined 的 own getter，读取即得到 undefined。
+  // getter 同样走 patchNative 登记：与 def 同理，裸箭头函数的 toString 会暴露补丁痕迹。
   const hide = (obj: any, key: string) => {
     try {
-      Object.defineProperty(obj, key, { get: () => undefined, configurable: true, enumerable: false })
+      const nativeName = `get ${key}`
+      const getter = patchNative(() => undefined, nativeName)
+      try {
+        Object.defineProperty(getter, 'name', { value: nativeName, configurable: true })
+      } catch {
+        /* ignore */
+      }
+      Object.defineProperty(obj, key, { get: getter, configurable: true, enumerable: false })
     } catch {
       /* ignore */
     }
@@ -123,9 +143,17 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   // 覆盖属性但保持**不可枚举**：用于「在原生实例上改写个别字段」的场景。
   // 原生对象（如 GPUAdapterInfo）的 Object.keys() 通常是空的，
   // 若用 def（enumerable: true）改写，keys 会凭空多出键，一行检测即暴露。
+  // getter 同样走 patchNative 登记（同 def 的测谎防护）。
   const cover = (obj: any, key: string, value: any) => {
     try {
-      Object.defineProperty(obj, key, { get: () => value, configurable: true, enumerable: false })
+      const nativeName = `get ${key}`
+      const getter = patchNative(() => value, nativeName)
+      try {
+        Object.defineProperty(getter, 'name', { value: nativeName, configurable: true })
+      } catch {
+        /* ignore */
+      }
+      Object.defineProperty(obj, key, { get: getter, configurable: true, enumerable: false })
     } catch {
       /* ignore */
     }
@@ -498,19 +526,27 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
       if (PluginProto) Object.setPrototypeOf(pluginObj, PluginProto)
       mimeObj.enabledPlugin = pluginObj
       pluginObj.mimeTypes = [mimeObj]
-      pluginObj.item = (i: number) => (i === 0 ? mimeObj : null)
-      pluginObj.namedItem = (n: string) => (n === 'application/pdf' ? mimeObj : null)
+      pluginObj.item = patchNative((i: number) => (i === 0 ? mimeObj : null), 'item')
+      pluginObj.namedItem = patchNative((n: string) => (n === 'application/pdf' ? mimeObj : null), 'namedItem')
       const mimeArr: any = { length: 1 }
-      Object.defineProperty(mimeArr, 0, { get: () => mimeObj, enumerable: false, configurable: true })
-      mimeArr.item = (i: number) => (i === 0 ? mimeObj : null)
-      mimeArr.namedItem = (n: string) => (n === 'application/pdf' ? mimeObj : null)
-      Object.defineProperty(mimeArr, Symbol.iterator, { value: function* () { yield mimeObj }, enumerable: false, configurable: true })
+      Object.defineProperty(mimeArr, 0, {
+        get: patchNative(() => mimeObj, 'get 0'), enumerable: false, configurable: true
+      })
+      mimeArr.item = patchNative((i: number) => (i === 0 ? mimeObj : null), 'item')
+      mimeArr.namedItem = patchNative((n: string) => (n === 'application/pdf' ? mimeObj : null), 'namedItem')
+      Object.defineProperty(mimeArr, Symbol.iterator, {
+        value: patchNative(function* () { yield mimeObj }, 'values'), enumerable: false, configurable: true
+      })
       if (MimeTypeArrayProto) Object.setPrototypeOf(mimeArr, MimeTypeArrayProto)
       const pluginArr: any = { length: 1 }
-      Object.defineProperty(pluginArr, 0, { get: () => pluginObj, enumerable: false, configurable: true })
-      pluginArr.item = (i: number) => (i === 0 ? pluginObj : null)
-      pluginArr.namedItem = (n: string) => (n === 'Chrome PDF Plugin' ? pluginObj : null)
-      Object.defineProperty(pluginArr, Symbol.iterator, { value: function* () { yield pluginObj }, enumerable: false, configurable: true })
+      Object.defineProperty(pluginArr, 0, {
+        get: patchNative(() => pluginObj, 'get 0'), enumerable: false, configurable: true
+      })
+      pluginArr.item = patchNative((i: number) => (i === 0 ? pluginObj : null), 'item')
+      pluginArr.namedItem = patchNative((n: string) => (n === 'Chrome PDF Plugin' ? pluginObj : null), 'namedItem')
+      Object.defineProperty(pluginArr, Symbol.iterator, {
+        value: patchNative(function* () { yield pluginObj }, 'values'), enumerable: false, configurable: true
+      })
       if (PluginArrayProto) Object.setPrototypeOf(pluginArr, PluginArrayProto)
       def(navigator, 'plugins', pluginArr)
       def(navigator, 'mimeTypes', mimeArr)
@@ -943,9 +979,9 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
       const origGet = d && d.get
       if (d && origGet && d.configurable) {
         Object.defineProperty((BaseAudioContext as any).prototype, 'sampleRate', {
-          get(this: any) {
+          get: patchNative(function (this: any) {
             return this instanceof OfflineAudioContext ? origGet.call(this) : ap.sampleRate
-          },
+          }, 'get sampleRate'),
           configurable: true,
           enumerable: true
         })
@@ -1109,14 +1145,14 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
           configurable: true,
           enumerable: famDesc.enumerable,
           get: famDesc.get,
-          set(v: string) {
+          set: patchNative(function (this: any, v: string) {
             try {
               const mapped = mapFontFamily('10px ' + (v == null ? '' : String(v)))
               origFamSet.call(this, familyOf(mapped))
             } catch {
               origFamSet.call(this, v)
             }
-          }
+          }, 'set fontFamily')
         })
       }
       const origSetProperty = CSSProto.setProperty

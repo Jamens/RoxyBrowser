@@ -319,6 +319,27 @@ export async function openWindow(profileId: number): Promise<void> {
   const ses = session.fromPartition(partitionName(profileId))
   ses.setUserAgent(fp.userAgent)
 
+  // ===== Accept-Language 与 JS 层语言对齐 =====
+  // preload 只改 JS 层 navigator.languages；请求头仍按真实 OS locale 发送。
+  // 两层语言列表不一致会被真实性检测抓到（browserscan「语言不符」-10%：
+  // 它把 navigator.languages 与服务端收到的 Accept-Language 头对比）。
+  // 这里按 fp.languages 覆写 Accept-Language，q 值递减、格式与 Chromium 原生一致
+  // （首项无 q，其余 0.9/0.8…；下限钳到 0.1，避免 q=0 被解读为「不接受」）。
+  //
+  // 不在此覆写 Sec-CH-UA*：Chromium 网络栈会在 onBeforeSendHeaders **之后**
+  // 按引擎真实版本重算该系列头，覆写无效（实测被丢弃）。UA-CH 的 JS 层一致性
+  // 由 preload 的 userAgentData 补丁保证，检测站以 JS 层读取的 clientHints 为准。
+  if (Array.isArray(fp.languages) && fp.languages.length > 0) {
+    const acceptLang = fp.languages
+      .map((l, i) => (i === 0 ? l : `${l};q=${Math.max(0.1, 1 - i * 0.1).toFixed(1)}`))
+      .join(',')
+    ses.webRequest.onBeforeSendHeaders({ urls: ['*://*/*'] }, (details, cb) => {
+      const headers = { ...details.requestHeaders }
+      headers['Accept-Language'] = acceptLang
+      cb({ requestHeaders: headers })
+    })
+  }
+
   // ===== 追踪器屏蔽 =====
   // 命中已知分析 / 广告 / 埋点域名直接 cancel，避免反复调研竞品时被对方的埋点、
   // Cookie 或第三方脚本识别出来甚至反监控。
