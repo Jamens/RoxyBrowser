@@ -35,7 +35,12 @@ export interface FingerprintProbe {
   webglRenderer: string
   /** WebGL 上下文是否可用（无 GPU / 禁用软件光栅化的环境下创建不了，上面两项为空） */
   webglAvailable: boolean
-  /** 以下为「注入是否生效」的开关型探测：函数被改写 / 能力被禁用 */
+  /**
+   * 以下为「注入是否生效」的开关型探测：函数被改写 / 能力被禁用。
+   * 判据来源（healthProbe）：preload 的不可枚举暗记 __roxyPatched 优先
+   * （补丁函数 toString 统一伪装 [native code]，源码判据已失效），
+   * 暗记缺失（旧版 preload）时回退「源码不含 [native code]」。
+   */
   canvasPatched: boolean
   audioPatched: boolean
   webrtcDisabled: boolean

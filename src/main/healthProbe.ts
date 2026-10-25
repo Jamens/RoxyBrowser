@@ -23,14 +23,23 @@ const PROBE_SCRIPT = `(function(){
     } catch (e) {}
 
     // 判断原型方法是否被我们的 preload 改写：
-    // 原生方法的 toString() 含 [native code]，被 JS 覆盖后是普通函数源码。
-    function patched(fn) {
+    // 旧版 preload 无 toString 伪装，源码判据（原生 toString 含 [native code]）有效；
+    // 但新版 preload 把所有补丁函数登记进 patchedFns 表、toString 一律报 [native code]
+    // （browserscan d0 测谎要求），源码判据会全量误报「未注入」。
+    // 因此改为暗记优先：preload 挂载不可枚举的 __roxyPatched 逐项记录注入结果，
+    // 暗记缺失（旧版 preload / 预加载失败）时回退源码判据。
+    var roxyPatched = null;
+    try { roxyPatched = window.__roxyPatched || null; } catch (e) {}
+    function patched(fn, key) {
+      if (roxyPatched && key) {
+        try { if (key in roxyPatched) return !!roxyPatched[key]; } catch (e) {}
+      }
       try { return typeof fn === 'function' && String(fn).indexOf('[native code]') === -1; }
       catch (e) { return false; }
     }
 
     var fontsGuarded = false;
-    try { fontsGuarded = !!(document.fonts && typeof document.fonts.check === 'function' && patched(document.fonts.check)); }
+    try { fontsGuarded = !!(document.fonts && typeof document.fonts.check === 'function' && patched(document.fonts.check, 'fonts')); }
     catch (e) {}
 
     var langs = [];
@@ -258,8 +267,8 @@ const PROBE_SCRIPT = `(function(){
         webglVendor: String(vendor),
         webglRenderer: String(renderer),
         webglAvailable: glAvailable,
-        canvasPatched: patched(HTMLCanvasElement.prototype.toDataURL),
-        audioPatched: typeof AudioBuffer !== 'undefined' ? patched(AudioBuffer.prototype.getChannelData) : false,
+        canvasPatched: patched(HTMLCanvasElement.prototype.toDataURL, 'canvas'),
+        audioPatched: typeof AudioBuffer !== 'undefined' ? patched(AudioBuffer.prototype.getChannelData, 'audio') : false,
         webrtcDisabled: (typeof window.RTCPeerConnection === 'undefined'),
         fontsGuarded: fontsGuarded,
         webGpuPresent: gpuPresent,

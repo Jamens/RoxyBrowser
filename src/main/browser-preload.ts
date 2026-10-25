@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { webGpuInfoFor, webGpuSupported, webGpuSpoofAllowed } from '../shared/webgpu'
 import { audioProfileFor } from '../shared/webaudio'
-import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/canvasNoise'
+import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } from '../shared/canvasNoise'
 ;(() => {
   interface Fingerprint {
     os: string
@@ -64,15 +64,39 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     /* 注入失败不影响环境使用，仅导致外部工具无法自动识别环境归属 */
   }
 
-  // 确定性随机（同一环境的 Canvas/音频噪声保持稳定，不同环境之间互不相同）
-  function mulberry32(a: number) {
-    return function () {
-      a |= 0
-      a = (a + 0x6d2b79f5) | 0
-      let t = Math.imul(a ^ (a >>> 15), 1 | a)
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-    }
+  // ===== 补丁函数登记表：让被覆写的函数 toString 仍报 [native code] =====
+  // 指纹站（browserscan d0 等「测谎」检查）会直接 /native/i.test(fn.toString())——
+  // 覆写后的函数若原样暴露源码，一行就能判定「这个浏览器被改过」。
+  // 这里把所有补丁登记在案，并覆写 Function.prototype.toString 按表返回原生形态。
+  const patchedFns = new Map<Function, string>()
+  const patchNative = <T extends Function>(fn: T, name: string): T => {
+    patchedFns.set(fn, name)
+    return fn
+  }
+  const origFnToString = Function.prototype.toString
+  Function.prototype.toString = patchNative(function (this: any) {
+    const name = patchedFns.get(this)
+    if (name) return `function ${name}() { [native code] }`
+    return origFnToString.call(this)
+  }, 'toString')
+
+  // 补丁挂载暗记：toString 伪装让「源码判据」（String(fn) 不含 [native code]）失效，
+  // 环境体检（healthProbe）改用本表判断「注入是否真的挂上了」——逐项记录、不可枚举，
+  // 与 __roxyApp 同风格（外部扫 __roxy 前缀的成本由已有标记承担，不新增暴露面）。
+  // 键名即体检项：canvas / audio / fonts / webgl / webrtc / uaCh / timezone / battery。
+  const patchedFlags: Record<string, boolean> = {}
+  const markPatched = (key: string) => {
+    patchedFlags[key] = true
+  }
+  try {
+    Object.defineProperty(window, '__roxyPatched', {
+      value: patchedFlags,
+      configurable: true,
+      enumerable: false,
+      writable: false
+    })
+  } catch {
+    /* ignore */
   }
 
   const def = (obj: any, key: string, value: any) => {
@@ -291,6 +315,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     // 不需要先 delete：def 在实例上建立 own property，天然遮蔽原型上的原生 getter
     def(navigator, 'userAgentData', uad)
   }
+  markPatched('uaCh')
 
   // ===== WebCrypto 新算法：按**伪装版本**门控 =====
   //
@@ -334,14 +359,14 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
         if (typeof orig !== 'function') return
         try {
           Object.defineProperty(subtle, fnName, {
-            value: function (this: any, ...args: any[]) {
+            value: patchNative(function (this: any, ...args: any[]) {
               // generateKey(algorithm, ...) / importKey(format, keyData, algorithm, ...)
               // / deriveBits(algorithm, baseKey, ...) —— 算法参数位置不统一，逐个探测。
               for (const a of args) {
                 if (a && typeof a === 'object' && !Array.isArray(a)) rejectBlocked(a)
               }
               return orig.apply(this, args)
-            },
+            }, fnName),
             configurable: true,
             writable: true
           })
@@ -361,15 +386,16 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
 
   // ===== 时区 =====
   const realGetTimezoneOffset = Date.prototype.getTimezoneOffset
-  Date.prototype.getTimezoneOffset = function () {
+  Date.prototype.getTimezoneOffset = patchNative(function (this: any) {
     return fp.tzOffset
-  }
+  }, 'getTimezoneOffset')
   const realResolved = Intl.DateTimeFormat.prototype.resolvedOptions
-  Intl.DateTimeFormat.prototype.resolvedOptions = function (...args: any[]) {
+  Intl.DateTimeFormat.prototype.resolvedOptions = patchNative(function (this: any, ...args: any[]) {
     const options = realResolved.apply(this, args as [])
     options.timeZone = fp.timezone
     return options
-  }
+  }, 'resolvedOptions')
+  markPatched('timezone')
 
   // ===== 地理位置（navigator.geolocation）=====
   // 必须与时区自洽：页面拿到坐标后会与时区 / 语言交叉验证，
@@ -513,88 +539,221 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     /* ignore */
   }
 
-  // ===== Canvas 噪声 =====
-  // 噪声种子回退：profileId 派生 seed 为 0/NaN（极端情况下未注入 id）时，改用 webglVendor 派生稳定种子，
-  // 避免所有「无种子」环境共用同一套噪声（等于互相撞车、可被聚类识别）。
+  // ===== Canvas 噪声（幂等烘焙 + 全读路径一致）=====
+  // 架构（2026-10-25 重构，动因：browserscan 检测百分百无法通过）：
+  //
+  // 旧实现在「读取时」叠加噪声，且 toDataURL 与 getImageData 用**两套互不相干**的
+  // 扰动机制（前者 alpha 混色 2 像素、后者 2% 像素 ±1），OffscreenCanvas 完全没覆盖。
+  // browserscan 的三个一致性检查因此全部挂：
+  //   e0  图像回环：toDataURL 输出解码后画到另一块画布读回，与直读原画布逐像素比对
+  //       —— 两套噪声让回环结果必然不一致（且 e0 与 Q 同时失败即硬判「伪造」）；
+  //   Q   OffscreenCanvas.convertToBlob 与 HTMLCanvas.toDataURL 同图案输出必须逐字节一致
+  //       —— OffscreenCanvas 未打补丁，一路干净一路带噪；
+  //   n0  文字渲染测谎：把上述不一致的像素 diff 上报服务端裁决。
+  //
+  // 新架构把噪声下沉到「画布后备存储」，三个性质同时成立：
+  //   1) 幂等：applyIdempotentNoise 是投影变换（N(N(x))===N(x)），回环几遍读取都一致；
+  //   2) 全读路径同源：toDataURL / toBlob / getImageData（HTML 与 Offscreen 两套上下文）/
+  //      convertToBlob / transferToImageBitmap / createImageBitmap 全部先烘焙再读，
+  //      任何路径拿到的是同一份噪声像素；
+  //   3) 确定性：噪声只由 (环境种子, 宽, 高) 派生，与画布身份、读取次数无关，
+  //      双绘一致性（s0/x0）天然成立。
+  // 实测前提（Electron 45 / Chromium）：getImageData→putImageData 往返无损（0 差异），
+  // toDataURL 与 convertToBlob 对相同像素输出逐字节相同——见 .tmp_probe 基线探针。
   if (fp.canvasNoise) {
     const effSeed = effectiveCanvasSeed(seed, fp.webglVendor || fp.os || 'roxy')
-    const origToDataURL = HTMLCanvasElement.prototype.toDataURL
-    HTMLCanvasElement.prototype.toDataURL = function (...args: any[]) {
-      try {
-        const w = this.width
-        const h = this.height
-        // 极小画布（参考探针常用 1×N 纯色条）不注入噪声：对纯色 1px 条扰动会立即被「反篡改」探针识别，
-        // 且极小画布本就不是指纹采集对象，扰动收益低、暴露风险高（见 isTinyCanvas）。
-        if (w > 0 && h > 0 && !isTinyCanvas(w, h)) {
-          const copy = document.createElement('canvas')
-          copy.width = w
-          copy.height = h
-          const cx = copy.getContext('2d')
-          if (cx) {
-            cx.drawImage(this, 0, 0)
-            // 关键：噪声种子由 (环境种子, 画布宽, 画布高) 确定性派生——相同尺寸、相同环境的画布拿到
-            // **完全相同**的噪声序列，于是「两次读取同一画布」或「两次新建的相同画布」得到一致结果。
-            // 这正是检测站判定「注入」的首要检查点（per-call 随机噪声会让两次读取不一致）。
-            const rng = mulberry32(canvasNoiseSeed(effSeed, w, h))
-            const noisePixels = Math.max(1, Math.floor((w * h) / 5000))
-            for (let i = 0; i < noisePixels; i++) {
-              const r = Math.floor(rng() * 256)
-              const g = Math.floor(rng() * 256)
-              const b = Math.floor(rng() * 256)
-              cx.fillStyle = `rgba(${r},${g},${b},0.012)`
-              cx.fillRect(Math.floor(rng() * w), Math.floor(rng() * h), 1, 1)
-            }
-            return origToDataURL.apply(copy, args as [string?, number?])
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-      return origToDataURL.apply(this, args as [string?, number?])
+
+    // 脏标记：绘制操作改过内容的画布才需要重新烘焙（读路径幂等，重复烘焙无害但省掉是白赚）
+    const dirtyCanvases = new WeakSet<object>()
+    const markDirty = (c: any) => {
+      if (c && typeof c === 'object') dirtyCanvases.add(c)
     }
 
-    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData
-    CanvasRenderingContext2D.prototype.getImageData = function (...args: any[]) {
-      const data = origGetImageData.apply(this, args as [number, number, number, number])
+    // 两套上下文的原始读/写（必须在任何补丁之前捕获）
+    const origCtxGetImageData = CanvasRenderingContext2D.prototype.getImageData
+    const origCtxPutImageData = CanvasRenderingContext2D.prototype.putImageData
+    const OffCtx: any = typeof OffscreenCanvasRenderingContext2D !== 'undefined' ? OffscreenCanvasRenderingContext2D : null
+    const origOffGetImageData = OffCtx ? OffCtx.prototype.getImageData : null
+    const origOffPutImageData = OffCtx ? OffCtx.prototype.putImageData : null
+
+    // 烘焙：把幂等噪声写进画布后备存储。
+    // 只被「已知持有 2d 上下文」的路径调用（绘制补丁标记过 = 一定有 2d 上下文），
+    // 因此这里的 getContext('2d') 只会取回现有上下文，不会凭空创建。
+    const bakeCanvas = (canvas: any) => {
+      const w = canvas.width | 0
+      const h = canvas.height | 0
+      if (!(w > 0 && h > 0) || isTinyCanvas(w, h)) {
+        // 极小画布（参考探针常用 1×N 纯色条）不注入噪声：对纯色 1px 条扰动会立即被
+        // 「反篡改」探针识别，且极小画布本就不是指纹采集对象。
+        dirtyCanvases.delete(canvas)
+        return
+      }
       try {
-        const cv = (this as any).canvas
-        const w = (cv && cv.width) || 0
-        const h = (cv && cv.height) || 0
-        if (w > 0 && h > 0 && !isTinyCanvas(w, h)) {
-          // 与 toDataURL 同源派生：同一画布（无论取哪块子区域）的像素级噪声保持一致，
-          // 保证同一块区域两次读取结果相等。
-          const rng = mulberry32(canvasNoiseSeed(effSeed, w, h))
-          for (let i = 0; i < data.data.length; i += 4) {
-            if (rng() < 0.02) {
-              data.data[i] = (data.data[i] + (rng() < 0.5 ? 1 : -1)) & 0xff
-            }
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const isOff = typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas
+        const og = isOff ? origOffGetImageData : origCtxGetImageData
+        const op = isOff ? origOffPutImageData : origCtxPutImageData
+        if (!og || !op) return
+        const img = og.call(ctx, 0, 0, w, h)
+        applyIdempotentNoise(img.data, effSeed, w, h)
+        op.call(ctx, img, 0, 0)
+      } catch {
+        /* 跨域污染的画布读不了像素：放弃噪声，读路径会自然抛出同样的错 */
+      }
+      dirtyCanvases.delete(canvas)
+    }
+    const bakeIfDirty = (canvas: any) => {
+      if (canvas && typeof canvas === 'object' && dirtyCanvases.has(canvas)) bakeCanvas(canvas)
+    }
+
+    // 绘制操作 → 标记脏。fill/stroke 系列改像素，drawImage/putImageData 直接写像素。
+    const DRAW_METHODS = ['fillRect', 'strokeRect', 'clearRect', 'fill', 'stroke', 'fillText', 'strokeText', 'drawImage', 'putImageData']
+    const patchDrawMark = (proto: any) => {
+      if (!proto) return
+      for (const m of DRAW_METHODS) {
+        const orig = proto[m]
+        if (typeof orig !== 'function') continue
+        proto[m] = patchNative(function (this: any, ...args: any[]) {
+          try {
+            markDirty(this && this.canvas)
+          } catch {
+            /* ignore */
           }
+          return orig.apply(this, args)
+        }, m)
+      }
+    }
+    patchDrawMark(CanvasRenderingContext2D.prototype)
+    if (OffCtx) patchDrawMark(OffCtx.prototype)
+
+    // 编码路径（toDataURL / toBlob）：优先直接烘焙本体（省一次整画布拷贝），
+    // 上下文类型未知（可能是 WebGL）或从未绘制时走拷贝路径——绝不碰本体的 getContext，
+    // 避免给「之后想拿 webgl 上下文」的画布凭空创建 2d 上下文（同画布混用上下文类型
+    // 会让后一个 getContext 返回 null，直接搞坏站点）。
+    const encodeCanvas = (canvas: any, encode: (c: any) => any): any => {
+      const w = canvas.width | 0
+      const h = canvas.height | 0
+      if (!(w > 0 && h > 0) || isTinyCanvas(w, h)) return encode(canvas)
+      if (dirtyCanvases.has(canvas)) {
+        try {
+          bakeCanvas(canvas)
+          return encode(canvas)
+        } catch {
+          /* fall through to copy path */
+        }
+      }
+      try {
+        const copy = document.createElement('canvas')
+        copy.width = w
+        copy.height = h
+        const cx = copy.getContext('2d')
+        if (cx) {
+          cx.drawImage(canvas, 0, 0)
+          markDirty(copy)
+          bakeCanvas(copy)
+          return encode(copy)
         }
       } catch {
         /* ignore */
       }
-      return data
+      return encode(canvas)
     }
+
+    const origToDataURL = HTMLCanvasElement.prototype.toDataURL
+    HTMLCanvasElement.prototype.toDataURL = patchNative(function (this: any, ...args: any[]) {
+      return encodeCanvas(this, (c) => origToDataURL.apply(c, args as [string?, number?]))
+    }, 'toDataURL')
+
+    const origToBlob = HTMLCanvasElement.prototype.toBlob
+    HTMLCanvasElement.prototype.toBlob = patchNative(function (this: any, cb: any, ...args: any[]) {
+      return encodeCanvas(this, (c) => origToBlob.call(c, cb, ...args))
+    }, 'toBlob')
+
+    const origGetImageDataPatch = origCtxGetImageData
+    CanvasRenderingContext2D.prototype.getImageData = patchNative(function (this: any, ...args: any[]) {
+      try {
+        bakeIfDirty(this && this.canvas)
+      } catch {
+        /* ignore */
+      }
+      return origGetImageDataPatch.apply(this, args as [number, number, number, number])
+    }, 'getImageData')
+
+    if (OffCtx && origOffGetImageData) {
+      OffCtx.prototype.getImageData = patchNative(function (this: any, ...args: any[]) {
+        try {
+          bakeIfDirty(this && this.canvas)
+        } catch {
+          /* ignore */
+        }
+        return origOffGetImageData.apply(this, args as [number, number, number, number])
+      }, 'getImageData')
+    }
+
+    // OffscreenCanvas 的读出路径：convertToBlob / transferToImageBitmap
+    if (typeof OffscreenCanvas !== 'undefined') {
+      const origConvertToBlob = (OffscreenCanvas.prototype as any).convertToBlob
+      if (typeof origConvertToBlob === 'function') {
+        ;(OffscreenCanvas.prototype as any).convertToBlob = patchNative(function (this: any, ...args: any[]) {
+          try {
+            bakeIfDirty(this)
+          } catch {
+            /* ignore */
+          }
+          return origConvertToBlob.apply(this, args)
+        }, 'convertToBlob')
+      }
+      const origTransfer = (OffscreenCanvas.prototype as any).transferToImageBitmap
+      if (typeof origTransfer === 'function') {
+        ;(OffscreenCanvas.prototype as any).transferToImageBitmap = patchNative(function (this: any, ...args: any[]) {
+          try {
+            bakeIfDirty(this)
+          } catch {
+            /* ignore */
+          }
+          return origTransfer.apply(this, args)
+        }, 'transferToImageBitmap')
+      }
+    }
+
+    // createImageBitmap(canvas) 也是读路径：先烘焙再取位图，保证与 getImageData 一致
+    const origCreateImageBitmap = (window as any).createImageBitmap
+    if (typeof origCreateImageBitmap === 'function') {
+      ;(window as any).createImageBitmap = patchNative(function (this: any, ...args: any[]) {
+        try {
+          const src = args[0]
+          if (src && typeof src === 'object' && typeof (src as any).getContext === 'function') {
+            bakeIfDirty(src)
+          }
+        } catch {
+          /* ignore */
+        }
+        return origCreateImageBitmap.apply(this, args)
+      }, 'createImageBitmap')
+    }
+    markPatched('canvas')
   }
 
   // ===== WebGL =====
   const patchGetParam = (proto: any) => {
     const orig = proto.getParameter
-    proto.getParameter = function (param: number) {
+    proto.getParameter = patchNative(function (this: any, param: number) {
       // UNMASKED_VENDOR_WEBGL = 37445, UNMASKED_RENDERER_WEBGL = 37446
       if (param === 37445) return fp.webglVendor
       if (param === 37446) return fp.webglRenderer
       return orig.call(this, param)
-    }
+    }, 'getParameter')
     const origGetExt = proto.getExtension
-    proto.getExtension = function (name: string) {
+    proto.getExtension = patchNative(function (this: any, name: string) {
       const ext = origGetExt.call(this, name)
       if (name === 'WEBGL_debug_renderer_info') return ext || {}
       return ext
-    }
+    }, 'getExtension')
   }
   if (typeof WebGLRenderingContext !== 'undefined') patchGetParam(WebGLRenderingContext.prototype)
   if (typeof WebGL2RenderingContext !== 'undefined') patchGetParam(WebGL2RenderingContext.prototype)
+  markPatched('webgl')
 
   // ===== EME / Widevine（DRM 模块伪装 + 能力检测，对标 RoxyChrome 152「加密媒体能力检测」）=====
   // 检测站（BrowserLeaks / CreepJS）用 navigator.requestMediaKeySystemAccess 探测已装 DRM 模块与能力。
@@ -803,22 +962,36 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
       def(DynamicsCompressorNode.prototype, 'reduction', ap.compressorReduction)
     }
 
-    // 取样值微扰：让 OfflineAudioContext 渲染出的音频哈希带上本环境的确定性噪声
+    // 取样值微扰：让 OfflineAudioContext 渲染出的音频哈希带上本环境的确定性噪声。
+    // 旧实现是「跨调用共享一个随调用推进的 rng + 叠加 ±5e-8」——getChannelData 返回的是
+    // buffer 的**活视图**（原地修改），于是同一 buffer 读第二次会在第一次的基础上继续加，
+    // 双读一致性检查直接暴露「被改过」；且不同 buffer 拿到同一条推进中的序列，互相撞车。
+    // 新实现与 Canvas 同源：只把**选中位置**的浮点最低位清零（幂等投影，重复读取不再变化），
+    // 位置由 (环境种子, 采样数) 派生——同环境同长度的 buffer 每次读取结果一致。
+    // 不清零成另一个值而是清 LSB：保证 0 仍是 0（browserscan 的「全静音」探针据此判定
+    // 音频栈是否真实存在，把静音样点改成非零等于伪造不该有的信号）。
     if (typeof AudioBuffer !== 'undefined') {
-      const rng = mulberry32(seed ^ 0x5e6f7a8b)
       const origGetChannelData = AudioBuffer.prototype.getChannelData
-      AudioBuffer.prototype.getChannelData = function (...args: any[]) {
+      AudioBuffer.prototype.getChannelData = patchNative(function (this: any, ...args: any[]) {
         const data = origGetChannelData.apply(this, args as [number])
         try {
-          for (let i = 0; i < data.length; i++) {
-            data[i] += (rng() - 0.5) * 1e-7
+          const len = data.length | 0
+          if (len > 0) {
+            const rng = mulberry32((seed ^ 0x5e6f7a8b ^ Math.imul(len, 19349663)) >>> 0)
+            const u32 = new Uint32Array(data.buffer, data.byteOffset, len)
+            const count = Math.max(1, Math.floor(len / 5000))
+            for (let i = 0; i < count; i++) {
+              const idx = Math.floor(rng() * len)
+              u32[idx] = u32[idx] & 0xfffffffe
+            }
           }
         } catch {
           /* ignore */
         }
         return data
-      }
+      }, 'getChannelData')
     }
+    markPatched('audio')
   }
 
   // ===== WebRTC =====
@@ -828,6 +1001,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     if (navigator.mediaDevices) {
       def(navigator.mediaDevices, 'enumerateDevices', () => Promise.resolve([]))
     }
+    markPatched('webrtc')
   } else if (fp.webrtc === 'proxy') {
     // 代理模式：保留 WebRTC 功能（站点仍需通话 / 数据通道），但强制 iceCandidatePolicy='public'，
     // 丢弃本地私有 IP 的 host 候选，只保留经环境代理出去的 srflx/relay 候选——
@@ -855,6 +1029,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     } catch {
       /* ignore */
     }
+    markPatched('webrtc')
   }
 
   // ===== 字体指纹防护 =====
@@ -890,18 +1065,18 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
     const df = (document as any).fonts
     if (df && typeof df.check === 'function') {
       const origCheck = df.check.bind(df)
-      df.check = (spec: string, text?: string) => {
+      df.check = patchNative((spec: string, text?: string) => {
         // 任一候选族可用即视为可用（与真实浏览器多候选回退语义一致）
         if (familyOf(spec).split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return true
         return origCheck(spec, text)
-      }
+      }, 'check')
       const origLoad = typeof df.load === 'function' ? df.load.bind(df) : null
       if (origLoad) {
-        df.load = (spec: string, text?: string) => {
+        df.load = patchNative((spec: string, text?: string) => {
           if (familyOf(spec).split(',').map((s) => s.trim()).filter(Boolean).some(isFontAvailable)) return origLoad(spec, text)
           // 不在列表内：解析为空数组（不抛错，也不会让脚本误以为字体可用）
           return Promise.resolve([])
-        }
+        }, 'load')
       }
     }
   } catch {
@@ -909,7 +1084,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
   }
   if (typeof CanvasRenderingContext2D !== 'undefined') {
     const origMeasure = CanvasRenderingContext2D.prototype.measureText
-    CanvasRenderingContext2D.prototype.measureText = function (this: any, text: string) {
+    CanvasRenderingContext2D.prototype.measureText = patchNative(function (this: any, text: string) {
       try {
         const mapped = mapFontFamily(this.font || '10px sans-serif')
         if (mapped !== this.font) this.font = mapped
@@ -917,7 +1092,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
         /* ignore */
       }
       return origMeasure.call(this, text)
-    }
+    }, 'measureText')
   }
 
   // DOM 宽度枚举防护：站点通过给元素设 style.fontFamily 再读 offsetWidth 来枚举已安装字体，
@@ -946,7 +1121,7 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
       }
       const origSetProperty = CSSProto.setProperty
       if (typeof origSetProperty === 'function') {
-        CSSProto.setProperty = function (this: any, prop: string, value: string, priority?: string) {
+        CSSProto.setProperty = patchNative(function (this: any, prop: string, value: string, priority?: string) {
           try {
             if (typeof prop === 'string' && prop.toLowerCase() === 'font-family') {
               const mapped = mapFontFamily('10px ' + (value == null ? '' : String(value)))
@@ -956,12 +1131,13 @@ import { canvasNoiseSeed, effectiveCanvasSeed, isTinyCanvas } from '../shared/ca
             /* fall through to original */
           }
           return origSetProperty.call(this, prop, value, priority)
-        }
+        }, 'setProperty')
       }
     }
   } catch {
     /* ignore */
   }
+  markPatched('fonts')
 
   // ===== 多窗口同步（键鼠轨迹级） =====
   // 设计要点：

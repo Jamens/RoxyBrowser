@@ -162,4 +162,150 @@ t('负种子不被当作缺失（仅 0/null/undefined 回退）', () => {
   assert.strictEqual(C.effectiveCanvasSeed(-5, 'abc'), -5)
 })
 
+// ============ mulberry32 ============
+
+t('同一 a 值产生同一条序列（确定性）', () => {
+  const r1 = C.mulberry32(42), r2 = C.mulberry32(42)
+  for (let i = 0; i < 100; i++) assert.strictEqual(r1(), r2())
+})
+
+t('不同 a 值产生不同序列', () => {
+  const r1 = C.mulberry32(1), r2 = C.mulberry32(2)
+  let diff = 0
+  for (let i = 0; i < 100; i++) if (r1() !== r2()) diff++
+  assert.ok(diff > 90, '前 100 个输出应几乎全都不同')
+})
+
+t('输出落在 [0,1)', () => {
+  const r = C.mulberry32(7)
+  for (let i = 0; i < 1000; i++) {
+    const v = r()
+    assert.ok(v >= 0 && v < 1, `得到 ${v}`)
+  }
+})
+
+// ============ noisePixelCount ============
+
+t('约每 1000 像素 1 个，至少 2 个', () => {
+  assert.strictEqual(C.noisePixelCount(240, 60), 14)
+  assert.strictEqual(C.noisePixelCount(300, 150), 45)
+  assert.strictEqual(C.noisePixelCount(1920, 1080), 2073)
+  assert.strictEqual(C.noisePixelCount(8, 8), 2, '再小也有 2 个')
+  assert.strictEqual(C.noisePixelCount(0, 100), 2, '空画布也返回 2（调用方有尺寸守卫）')
+})
+
+// ============ applyIdempotentNoise ============
+
+/** 造一块确定内容的 RGBA 画布（alpha=255 的不透明像素 + 全透明背景） */
+function makeCanvas(w, h) {
+  const d = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0; i < w * h; i++) {
+    d[i * 4] = (i * 7) % 256
+    d[i * 4 + 1] = (i * 13) % 256
+    d[i * 4 + 2] = (i * 29) % 256
+    d[i * 4 + 3] = i % 3 === 0 ? 0 : 255 // 三分之一全透明
+  }
+  return d
+}
+
+t('相同 (seed,w,h) 两次施加结果完全一致（跨读取稳定）', () => {
+  const a = makeCanvas(120, 80), b = makeCanvas(120, 80)
+  C.applyIdempotentNoise(a, 42, 120, 80)
+  C.applyIdempotentNoise(b, 42, 120, 80)
+  assert.deepStrictEqual(Array.from(a), Array.from(b))
+})
+
+t('幂等：施加两次 === 施加一次（图像回环检查的根基）', () => {
+  const once = makeCanvas(120, 80), twice = makeCanvas(120, 80)
+  C.applyIdempotentNoise(once, 42, 120, 80)
+  C.applyIdempotentNoise(twice, 42, 120, 80)
+  C.applyIdempotentNoise(twice, 42, 120, 80)
+  assert.deepStrictEqual(Array.from(twice), Array.from(once), 'N(N(x)) 必须 === N(x)')
+  // 三次也一样
+  C.applyIdempotentNoise(twice, 42, 120, 80)
+  assert.deepStrictEqual(Array.from(twice), Array.from(once))
+})
+
+t('噪声确实改了像素（不是空操作）', () => {
+  const d = makeCanvas(300, 150)
+  const before = Array.from(d)
+  C.applyIdempotentNoise(d, 42, 300, 150)
+  let diff = 0
+  for (let i = 0; i < d.length; i++) if (d[i] !== before[i]) diff++
+  assert.ok(diff > 0, '至少要有像素被改动')
+  // 每个被选中的像素至多动 R/G/B 三个通道、每通道差值不超过 1（LSB）
+  for (let i = 0; i < d.length; i++) {
+    if (d[i] !== before[i]) assert.ok(Math.abs(d[i] - before[i]) <= 1, `位置 ${i} 差值 ${d[i] - before[i]}`)
+  }
+})
+
+t('常见尺寸下「完全落空」概率可忽略（曾实测 seed 42 @300x150 单通道全落空）', () => {
+  // 扫一批种子：每个种子都应至少改动一个像素。
+  // 双保险：位置只从「不透明像素索引表」抽取（100% 落在不透明像素），
+  // 且密度 /1000 让最小画布也有 ≥8 个位置，单个位置空操作概率 1/8。
+  for (const [w, h] of [[240, 60], [300, 150], [280, 60], [220, 40]]) {
+    for (let seed = 1; seed <= 50; seed++) {
+      const d = makeCanvas(w, h)
+      const before = Array.from(d)
+      C.applyIdempotentNoise(d, seed, w, h)
+      const diff = d.some((v, i) => v !== before[i])
+      assert.ok(diff, `(${w},${h}) seed=${seed} 完全落空`)
+    }
+  }
+})
+
+t('全透明像素（alpha=0）完全不动', () => {
+  const d = makeCanvas(120, 80)
+  const before = Array.from(d)
+  C.applyIdempotentNoise(d, 42, 120, 80)
+  for (let p = 0; p < d.length; p += 4) {
+    if (before[p + 3] === 0) {
+      assert.strictEqual(d[p], before[p], `透明像素 R @${p}`)
+      assert.strictEqual(d[p + 1], before[p + 1], `透明像素 G @${p}`)
+      assert.strictEqual(d[p + 2], before[p + 2], `透明像素 B @${p}`)
+    }
+  }
+})
+
+t('Alpha 通道永不被修改（只动 RGB）', () => {
+  const d = makeCanvas(120, 80)
+  const beforeAlpha = []
+  for (let p = 3; p < d.length; p += 4) beforeAlpha.push(d[p])
+  C.applyIdempotentNoise(d, 42, 120, 80)
+  for (let p = 3, i = 0; p < d.length; p += 4, i++) {
+    assert.strictEqual(d[p], beforeAlpha[i], `alpha @${p}`)
+  }
+})
+
+t('不同环境种子施加结果不同（跨环境可区分）', () => {
+  const a = makeCanvas(300, 150), b = makeCanvas(300, 150)
+  C.applyIdempotentNoise(a, 1, 300, 150)
+  C.applyIdempotentNoise(b, 2, 300, 150)
+  assert.notDeepStrictEqual(Array.from(a), Array.from(b))
+})
+
+t('同种子不同尺寸结果不同（按画布维度派生）', () => {
+  const a = makeCanvas(300, 150), b = makeCanvas(150, 300)
+  C.applyIdempotentNoise(a, 42, 300, 150)
+  C.applyIdempotentNoise(b, 42, 150, 300)
+  assert.notDeepStrictEqual(Array.from(a), Array.from(b))
+})
+
+t('两块同尺寸同内容的画布得到相同噪声（x0 双绘一致性）', () => {
+  // 两块都填纯白不透明：模拟 browserscan x0 的「两块纯色画布输出必须一致」
+  const mk = () => { const d = new Uint8ClampedArray(240 * 60 * 4); for (let p = 0; p < d.length; p += 4) { d[p] = 255; d[p+1] = 255; d[p+2] = 255; d[p+3] = 255 } return d }
+  const a = mk(), b = mk()
+  C.applyIdempotentNoise(a, 42, 240, 60)
+  C.applyIdempotentNoise(b, 42, 240, 60)
+  assert.deepStrictEqual(Array.from(a), Array.from(b))
+})
+
+t('非正尺寸直接返回不修改', () => {
+  const d = makeCanvas(4, 4)
+  const before = Array.from(d)
+  C.applyIdempotentNoise(d, 42, 0, 100)
+  C.applyIdempotentNoise(d, 42, 100, 0)
+  assert.deepStrictEqual(Array.from(d), before)
+})
+
 console.log(`\ncanvasNoise: ${pass} passed, ${fail} failed`)
