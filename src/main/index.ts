@@ -6,6 +6,7 @@ import { openWindow, closeWindow, setSyncMode, setSyncTargets, getRunningWindows
 import { AgentRunner } from './agent/runner'
 import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, setCdpPort } from './cdpManager'
 import { setNotifyWindowHooks } from './notify'
+import { mark, flushStartupTrace } from './startupTrace'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
@@ -190,7 +191,41 @@ async function createMainWindow() {
   })
   mainWindow = win
 
-  win.on('ready-to-show', () => win.show())
+  // 启动耗时打点（仅 ROXY_MEASURE_STARTUP=1 时生效，见 startupTrace.ts）
+  mark('windowCreate')
+  win.on('ready-to-show', () => {
+    mark('readyToShow')
+    win.show()
+    mark('windowShown')
+  })
+  win.webContents.on('did-finish-load', () => {
+    mark('rendererLoaded')
+    // 「首屏有内容」比 did-finish-load 更贴近用户感知：加载完成 ≠ 页面渲染出东西。
+    // did-finish-load 时 React 可能还没挂载完，直接查一次会拿到 false，
+    // 故轮询到首屏出现或超时（上限 5s）——单次判定的时序不可靠。
+    void (async () => {
+      const deadline = Date.now() + 5000
+      let painted = false
+      while (Date.now() < deadline) {
+        try {
+          painted = await win.webContents.executeJavaScript(
+            `(() => { try { const r = document.getElementById('root'); return !!r && r.childElementCount > 0 } catch (e) { return false } })()`
+          )
+        } catch {
+          painted = false
+        }
+        if (painted) break
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      mark(painted ? 'firstContent' : 'firstContentTimeout')
+      flushStartupTrace({ url: win.webContents.getURL() })
+    })()
+  })
+  // 兜底：即使渲染层始终没就绪（如受限环境），也要把已采集到的阶段落盘，
+  // 否则外部测量脚本只能等到超时，测不出任何数据。
+  win.on('ready-to-show', () => {
+    setTimeout(() => flushStartupTrace({ url: win.webContents.getURL() }), 3000)
+  })
 
   // 关闭主窗口 → 最小化到托盘，保持本地 API 与自动化接口继续可用
   win.on('close', (e) => {
@@ -249,6 +284,7 @@ if (!gotLock) {
   })
 
   app.whenReady().then(async () => {
+    mark('appReady')
     // 1. 启动本地 API 服务 + MySQL（这一步失败是致命的，整体退出）
     let apiBase: string
     try {
@@ -262,6 +298,7 @@ if (!gotLock) {
       return
     }
     process.env.ROXY_API_BASE = apiBase
+    mark('apiReady')
 
     // 1.5 确定 CDP 实际端口（bootstrap 之后即可，此时 app 已 ready）
     await finalizeCdpPort()
