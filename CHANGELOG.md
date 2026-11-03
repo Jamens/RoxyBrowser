@@ -9,6 +9,71 @@
 
 ---
 
+## 2026-11-04 · 四项收尾：GPU 策略、基线裁判、启动耗时、创建流程减重
+
+承接 2026-10-25 的 browserscan 满分修复（`a82208a` / `44389a8`），本轮把
+`FEATURE-GAP.md` 里记为「遗留」的三项逐一闭合，并顺带修掉一个此前无人发现的严重 bug。
+
+### 1. GPU 策略三档（`f7f1a38`）
+
+主进程此前把软件光栅化一并关掉（`--disable-software-rasterizer`），
+导致**环境窗口根本没有 WebGL**——而体检该项权重为 0，100 分掩盖了缺口。
+现改为三档：`ROXY_ENABLE_GPU=1` 放开硬件加速；默认只禁 GPU 进程、保留
+ANGLE + D3D11 WARP 软件渲染（WebGL 可用且 vendor/renderer 伪装照常生效）；
+`ROXY_DISABLE_SOFTWARE_GL=1` 才彻底关软件光栅化。
+
+### 2. 基线对比链路加固（`b63827b`）
+
+两个归因漏洞此前都在输出「变化 0 项」，把「这一维根本没测到」伪装成「这一维没变」：
+
+- **未覆盖 ≠ 无变化**：两份基线都是「不可用」时，diff 会输出无变化（虚假安心）。
+  现按「覆盖缺口 / 身份字段 / 行为字段」分组，**行为字段变化才是内核回归信号**；
+- **换了环境 ≠ 内核变了**：换机器采集时环境指纹差异会被混进「真变化」。
+  现区分 `identityChanged`（随环境走）与 `behaviorChanged`（内核信号）。
+
+新增基线 `baselines/chromium156-softwaregl.json`（覆盖 26/28 项，伪装度 100），
+单测 `tests/fingerprintBaseline.test.cjs`（15 项）。
+
+### 3. 打包产物白屏（`52900d8`）——本轮最严重的发现
+
+`manualChunks` 手动分块会**绕过 Rollup 自动处理循环依赖的能力**，
+三处跨块循环在 ESM 下直接触发 TDZ（`Cannot access 'FastColor' before initialization`），
+表现为**打包后主窗口白屏**——而 dev 模式用 esbuild 预打包、每模块独立，**完全不暴露**。
+实测首屏时序时才发现产物是白的，此前无人报告过。
+修法：`fast-color` 独立成块、`@ant-design/icons` 并入 antd 块、`@ant-design/colors` 归 vendor；
+新增守卫 `scripts/check-chunk-cycles.mjs`（静态 import 循环即失败退出）。
+
+### 4. 启动耗时实测（`4fc2c26`）
+
+「据说更快了」变成有数字：新增 `src/main/startupTrace.ts`（条件启用，
+`ROXY_MEASURE_STARTUP=1`，默认零开销）+ `scripts/measure-startup.mjs`（多次冷启动取中位数）。
+本机实测（5 次中位数）：`appReady 339ms · apiReady 397ms · rendererLoaded 554ms ·
+windowShown 742ms · firstContent 742ms`。
+
+### 5. 创建窗口流程减重（`feat(ux)`）
+
+对标官方 4.0.3「窗口创建体验简化」。新建态把低频项与指纹细项默认收起，
+编辑态默认展开「基础设置」，展开状态改为受控并在每次打开时重置。
+
+**两个不是 UI 问题、是数据问题的陷阱**：
+
+- antd 的 Collapse 面板在首次展开前**不渲染**内容 → 未挂载的 `Form.Item`
+  不在 `onFinish` 的 `values` 里，而后端 `PUT` 是全量覆盖 →
+  「点编辑 → 什么都不改 → 保存」会把备注 / 到期时间 / 扩展悄悄清空。
+  已用**对照实验实测确认**（去掉 `forceRender` 后备注确实变成 `remark=""`）；
+- antd 的 `defaultActiveKey` 只在首次挂载生效，而抽屉内容默认不销毁 →
+  上次展开的状态会黏到下一次打开的表单上。
+
+验证：源码级 9 项断言（`tests/profileFormUx.test.cjs`，进 `pnpm test`）
++ 行为级 7 项 CDP 验证（`scripts/verify-profile-form-ux.mjs`，含「备注保值」
+端到端核对数据库），实测 7/7 通过。
+
+> 教训：**源码断言只能证明"写对了"，证明不了"跑起来对"**——
+> antd 6 的激活 pane 类名是 `.ant-tabs-content-active`（v5 是 `.ant-tabs-tabpane-active`），
+> 两者不通用，这类版本差异只有真跑一遍才会暴露。
+
+---
+
 ## 2026-10-25 · 补丁原生性与语言头对齐：browserscan 检测满分收尾（a82208a）
 
 承接同日的 Canvas/Audio 噪声重构（471a483）——该修复后 browserscan 六项检查

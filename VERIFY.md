@@ -313,6 +313,47 @@ node scripts/check-chunk-cycles.mjs    # 有静态跨块循环即失败退出
 > antd↔vendor 经 @rc-component/util 与 @ant-design/colors），修法见
 > `electron.vite.config.ts` 的 `manualChunks` 注释。改分块策略后必须重跑此守卫。
 
+## 11. 创建环境流程 UX 验证
+
+```bash
+pnpm build                                  # 脚本跑的是 out/ 产物
+node scripts/verify-profile-form-ux.mjs    # 起应用 → 登录 → 操作 UI → 查库核对
+```
+
+前置：MySQL 已启动（默认 `127.0.0.1:3306` / `root` / `1234560`），默认账号 `admin` / `123456` 存在。
+
+**验证什么**（7 项断言，退出码 0 = 全通过）：
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| A1 | 新建态：基本信息低频项默认收起 | 备注 / 到期时间 / 扩展不该一上来就摊在用户面前 |
+| A2 | 新建态：指纹细项默认全收起 | 创建的最短路径是「填名字 → 选预设 → 保存」 |
+| B1 | 手动展开「基础设置」生效 | 折叠区本身能正常用（不是被锁死） |
+| B2 | 重开抽屉后展开状态已重置 | 受控逻辑的核心价值：上次状态不能黏住 |
+| C1 | 编辑态：指纹区默认展开「基础设置」 | 编辑时用户就是冲着改参数来的 |
+| D1 | 收起状态下备注字段仍已挂载 | `forceRender` 生效的**直接证据** |
+| D2 | 什么都没改的编辑后备注仍在 | **最关键的一条**：数据没被静默清空 |
+
+**为什么 D2 不可省**：备注 / 到期时间 / 扩展被收进了默认收起的 Collapse 面板，
+它们是 `Form.Item`——antd 的 Collapse 在首次展开前**不渲染**面板内容，
+未挂载的 `Form.Item` 不会出现在 `onFinish` 的 `values` 里，而后端 `PUT /api/profiles/:id`
+是**全量覆盖**。于是「点编辑 → 什么都不改 → 保存」会把这些字段悄悄提交成空，
+**一次无操作的编辑就把用户填过的东西抹了**。
+
+> 已用对照实验实测确认：把 `forceRender: true` 改成 `false` 后，
+> 备注确实从 `remark="UX验证备注-..."` 变成 `remark=""`。
+
+**两档验证的分工**：
+
+| 档位 | 文件 | 覆盖时机 |
+| -- | -- | -- |
+| 源码级断言（9 项） | `tests/profileFormUx.test.cjs` | 进 `pnpm test`，CI 可跑，防"改代码时无声退化" |
+| 行为级验证（7 项） | `scripts/verify-profile-form-ux.mjs` | 手动跑，防 antd 版本差异这类运行时问题 |
+
+> 源码断言只能证明"写对了"，证明不了"跑起来对"——
+> 例如 antd 6 的激活 pane 类名是 `.ant-tabs-content-active`（v5 是 `.ant-tabs-tabpane-active`），
+> 两者不通用，这类差异只有真跑一遍才会暴露。
+
 ---
 
 # 指纹基线与内核升级回归（Electron 45 / Chromium 156）
