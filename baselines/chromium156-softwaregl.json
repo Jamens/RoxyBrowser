@@ -1,0 +1,63 @@
+{
+  "capturedAt": "2026-11-03T16:59:46.996Z",
+  "electron": null,
+  "chromium": null,
+  "profileId": 1,
+  "profileName": "环境 1001",
+  "score": 100,
+  "actuals": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7262.40 Safari/537.36",
+    "platform": "Win32",
+    "languages": "en-SG,en,zh-CN,zh",
+    "screen": "2560×1440",
+    "timezone": "Asia/Singapore",
+    "tzOffset": "-480",
+    "webgl": "Google Inc. (NVIDIA) / ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 (0x00002704) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglOsMatch": "合规",
+    "hardwareConcurrency": "12",
+    "deviceMemory": "4",
+    "doNotTrack": "unspecified",
+    "uaData": "Windows / mobile=false",
+    "touch": "0 / ontouchstart=false",
+    "canvasNoise": "on / 一致性OK",
+    "audioNoise": "on",
+    "webrtc": "disable",
+    "fonts": "on",
+    "fontOsConsistency": "合规",
+    "webgpu": "WebGPU 不可用",
+    "webgpuSubgroup": "WebGPU 不可用",
+    "audioProfile": "44100 / 0.002902 / 2",
+    "audioReduction": "-1.4992",
+    "audioCodecs": "iamf=no / opus=probably / aac=probably",
+    "webcryptoVersion": "均不可用",
+    "eme": "Widevine=true ClearKey=true PlayReady=false initDataTypes=[cenc] video=0 audio=0",
+    "automation": "webdriver=false automationTraces=false",
+    "platformApis": "无矛盾（应有的缺失不计入）",
+    "mediaPrefs": "scheme=light reducedMotion=true"
+  },
+  "consistency": {
+    "tzVsProxy": {
+      "ok": true,
+      "skipped": true,
+      "actual": "—"
+    },
+    "langVsTz": {
+      "ok": true,
+      "skipped": false,
+      "actual": "en-SG (SG)"
+    },
+    "uaVsOs": {
+      "ok": true,
+      "skipped": false,
+      "actual": "windows"
+    }
+  },
+  "uncovered": [
+    "webgpu",
+    "webgpuSubgroup"
+  ],
+  "coverage": {
+    "total": 28,
+    "covered": 26
+  }
+}

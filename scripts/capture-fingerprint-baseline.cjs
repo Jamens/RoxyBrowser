@@ -7,6 +7,30 @@
 const BASE = 'http://127.0.0.1:39100/api'
 const fs = require('fs')
 
+/**
+ * 判定「因硬件缺失而测不到」的覆盖缺口。
+ *
+ * 为什么必须显式区分「不可用」与「没测到」：无 GPU 环境下 webgl / webgpu 只会报
+ * 「不可用」，而这两项恰是内核变化最敏感的（Chrome 151 调过 WebGL 输出规则、
+ * 152 加了 WebGPU 子群）。若把它混进正常实测值里，diff 会得出「WebGL 维度无变化」
+ * 的**虚假安心**——而实际是这一维根本没被覆盖。
+ *
+ * 判定要精确：只有「因硬件缺失而测不到」的项才算覆盖缺口。
+ * webcryptoVersion 的取值是「均不可用」——那是**门控生效的正确结果**（探到了、
+ * 结论是这些算法不可见），不是「没测到」，不能混进缺口清单。
+ *
+ * @param {Record<string, unknown>} actuals 体检项 key → 实测值
+ * @returns {string[]} 未覆盖的项 key
+ */
+function detectUncovered(actuals) {
+  return Object.entries(actuals || {})
+    .filter(([k, v]) => k !== 'webcryptoVersion')
+    .filter(([, v]) => /^(WebGL|WebGPU)/.test(String(v)) && /不可用/.test(String(v)))
+    .map(([k]) => k)
+}
+
+module.exports = { detectUncovered }
+
 async function main() {
   const out = process.argv[2] || 'fingerprint-baseline.json'
   const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + process.env.TK }
@@ -51,6 +75,12 @@ async function main() {
     if (c.key) consistency[c.key] = { ok: c.ok, skipped: !!c.skipped, actual: c.actual }
   }
 
+  // 覆盖缺口必须**结构化落盘**：只写进控制台输出的话，下一次 diff 拿到的只是
+  // 一堆「WebGL 不可用」字符串，无法区分「这一维没覆盖」与「这一维没变」——
+  // 两份基线都是「不可用」时 diff 会显示「无变化」，给出虚假安心。
+  const uncovered = detectUncovered(actuals)
+  const total = Object.keys(actuals).length
+
   const snapshot = {
     capturedAt: new Date().toISOString(),
     electron: process.env.ELECTRON_VERSION || null,
@@ -59,29 +89,22 @@ async function main() {
     profileName: target.name,
     score: report.score,
     actuals,
-    consistency
+    consistency,
+    uncovered,
+    coverage: { total, covered: total - uncovered.length }
   }
   fs.writeFileSync(out, JSON.stringify(snapshot, null, 2))
-  console.log('基线已写入 ' + out + '（' + Object.keys(actuals).length + ' 个体检项）')
+  console.log('基线已写入 ' + out + '（' + total + ' 个体检项，覆盖 ' +
+    (total - uncovered.length) + ' 项）')
 
   console.log('\n=== 窗口内实测值（actual）===')
   Object.entries(actuals).forEach(([k, v]) => {
     console.log('  ' + k.padEnd(22) + ' = ' + String(v).slice(0, 95))
   })
 
-  // 覆盖缺口**必须显式说出来**：无 GPU 环境下 webgl / webgpu 只会报「不可用」，
-  // 而这两项恰是内核变化最敏感的（Chrome 151 调过 WebGL 输出规则、152 加了 WebGPU 子群）。
-  // 若不提示，产出的基线会被误当成「已覆盖全部维度」，白白丢掉一次复验机会。
-  // 判定要精确：只有「因硬件缺失而测不到」的项才算覆盖缺口。
-  // webcryptoVersion 的取值是「均不可用」——那是**门控生效的正确结果**（探到了、
-  // 结论是这些算法不可见），不是「没测到」，不能混进缺口清单。
-  const unavailable = Object.entries(actuals)
-    .filter(([k, v]) => k !== 'webcryptoVersion')
-    .filter(([, v]) => /^(WebGL|WebGPU)/.test(String(v)) && /不可用/.test(String(v)))
-    .map(([k]) => k)
-  if (unavailable.length) {
+  if (uncovered.length) {
     console.log('\n⚠️ 覆盖缺口：以下项在本机不可用，本次基线**未覆盖**它们')
-    unavailable.forEach((k) => console.log('   · ' + k))
+    uncovered.forEach((k) => console.log('   · ' + k))
     console.log('   这些维度恰是内核变化最敏感的，须在**有独立显卡**的机器上补采，')
     console.log('   再用 diff-fingerprint-baseline.cjs 与本基线对比。')
   }
@@ -91,4 +114,6 @@ async function main() {
   console.log('\n已关窗')
 }
 
-main().catch((e) => { console.error('脚本异常:', e.message); process.exit(1) })
+if (require.main === module) {
+  main().catch((e) => { console.error('脚本异常:', e.message); process.exit(1) })
+}

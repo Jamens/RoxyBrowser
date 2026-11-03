@@ -99,6 +99,9 @@ const TESTS = [
   // def/cover/hide 用裸箭头函数做 getter（toString 不过 [native code] 测谎）。
   // 行为级（vm 沙箱真实执行四件套）+ 源码级（同族补丁静态断言）双闸门。
   { name: 'preloadPatchNative', file: 'tests/preloadPatchNative.test.cjs' },
+  // 指纹基线对比语义：区分「未覆盖」与「无变化」——否则无 GPU 机器采的两份基线
+  // 会输出「变化 0 项」，把「这一维根本没测到」伪装成「这一维没变」。
+  { name: 'fingerprintBaseline', file: 'tests/fingerprintBaseline.test.cjs' },
   // WebCrypto 版本一致性：Chromium 154+ 才有 ML-KEM/ML-DSA，伪装低版本却能用 = 指纹矛盾
   { name: 'webcryptoVersion', file: 'tests/webcryptoVersion.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
