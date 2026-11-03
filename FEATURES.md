@@ -239,6 +239,13 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
   - **语言两层对齐**：`Accept-Language` 请求头由主进程（`browserManager.ts`）按 `fp.languages` 覆写（q 值递减），与 JS 层 `navigator.languages` 严格一致；两层列表对不上即被判「语言不符」。
   - **已知不可覆写**：`Sec-CH-UA*` 系列头——Chromium 网络栈在 `onBeforeSendHeaders` 之后按引擎真实版本重算该系列头，覆写被静默丢弃；服务端版本判据取 payload 的 clientHints（uaCh 补丁已使 jsUA/header/clientHints 三层一致），故 preset 的 Chrome 大版本无需改动。
 
+- **GPU 策略三档（WebGL 可用性 ↔ 渲染性能）**：
+  - **默认**：只禁 GPU 进程（虚拟机 / 远程桌面 / 无显卡驱动环境下 GPU 进程反复崩溃会 `FATAL` 终止整个应用），**保留 Chromium 的 ANGLE + D3D11 WARP 软件渲染** → 环境窗口的 WebGL 上下文**可用**，且 vendor / renderer 伪装照常生效（`getParameter(37445/37446)` 与 `WEBGL_debug_renderer_info` 两条路径实测均返回预设显卡）；
+  - `ROXY_ENABLE_GPU=1`：放开硬件加速——有独显时性能最好，但虚拟机 / 无驱动环境可能崩溃；
+  - `ROXY_DISABLE_SOFTWARE_GL=1`：退回「完全无 WebGL」的旧行为，仅供极端场景。
+  - **为什么不再默认彻底关掉软件光栅化**：此前用 `--disable-software-rasterizer` 把软件渲染一并关掉，导致所有环境窗口**根本没有 WebGL**——2026 年的浏览器没有不支持 WebGL 的，这是检测站一眼能抓的机器特征；而体检把该项权重置 0（不适用不计分），100 分曾把这个缺口完全掩盖过去。现代价是页面合成走软件（滚动 / 动画 / 视频变慢），属「指纹完整度 ↔ 渲染性能」的取舍。
+  - **WebGPU 仍不可用**：`--disable-gpu` 下 Chromium 不提供 GPU 服务进程，`navigator.gpu` 根本不存在（`use-webgpu-adapter=swiftshader` 也无效）。真机有独显时可正常覆盖；无 GPU 机器上的基线会显式标注该项未覆盖（见 `VERIFY.md` 基线章节）。
+
 | 维度       | 实现方式                                                                                |
 | ---------- | --------------------------------------------------------------------------------------- |
 | User Agent | 请求头 + `navigator.userAgent` + `navigator.userAgentData`（含 `getHighEntropyValues`） |
@@ -249,7 +256,7 @@ webhook 通道也有——唯独都要用户自己想起来。现在定时扫描
 | 硬件       | `hardwareConcurrency`、`deviceMemory`                                                   |
 | 触摸       | 移动端 `maxTouchPoints=5`、`'ontouchstart' in window`                                   |
 | Canvas     | **幂等烘焙式确定性噪声**：噪声下沉画布后备存储，全读路径（`toDataURL`/`toBlob`/`getImageData`/OffscreenCanvas `convertToBlob`/`transferToImageBitmap`/`createImageBitmap`）同源一致；种子 = f(环境种子, 画布宽高)，同环境稳定、异环境不同 |
-| WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer                                |
+| WebGL      | `getParameter(37445/37446)` 返回自定义 Vendor / Renderer（软件光栅化下 WebGL 上下文可用，`WEBGL_debug_renderer_info` 路径同样覆盖） |
 | Audio      | `AudioBuffer.getChannelData` 加入极小幅度噪声                                           |
 | WebRTC     | 三种模式：禁用 `RTCPeerConnection`（防泄漏）/ 真实 / 代理模式（保留功能但隐藏本地 IP，只走代理公网候选） |
 | EME / DRM   | `navigator.requestMediaKeySystemAccess` 报出 Widevine + ClearKey（含 CENC/CBCS 能力检测；iOS 伪装整体隐藏该 API，Safari 无 EME） |
@@ -1198,7 +1205,20 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 ### 12. 启动速度优化
 
-- 渲染层构建拆分为 `react-vendor` / `antd` / `vendor` 多个 vendor chunk（并行下载 + 长期缓存，首屏不再等待 3.4MB 单包解析）；各页面按路由懒加载（`React.lazy` + `Suspense`），进入对应页面时才加载其专属 chunk（Dashboard / Rpa / Environments 等均为独立小包），首屏体积与解析时间显著下降。
+- 渲染层构建拆分为 `react-vendor` / `antd` / `vendor` / `fast-color` 多个 vendor chunk（并行下载 + 长期缓存，首屏不再等待 3.4MB 单包解析）；各页面按路由懒加载（`React.lazy` + `Suspense`），进入对应页面时才加载其专属 chunk（Dashboard / Rpa / Environments 等均为独立小包）。
+- **实测数据**（Electron 45.0.0 / Chromium 156.0.8078.48，5 次冷启动取中位数，`scripts/measure-startup.mjs`）：
+
+  | 阶段 | 耗时 | 含义 |
+  | -- | -- | -- |
+  | Electron 就绪 | 339ms | Node / Electron 初始化完成（此前的进程自身启动开销不含在内） |
+  | 本地 API + MySQL 就绪 | 397ms | 本地 API 监听就绪 + 数据库连接建立 |
+  | 渲染层 load 完成 | 554ms | 主窗口 HTML / JS 加载完毕 |
+  | 窗口显示 / 首屏有内容 | **742ms** | 用户真正看到界面 |
+
+  测量含 MySQL 连接时间，与生产环境同路径；换机器复测需在同条件下对比。
+  打点为条件启用（`ROXY_MEASURE_STARTUP=1`），默认零开销。
+
+- **分块的第一原则是「互依的包必须同块」**：手动分块会绕过 Rollup 自动处理循环依赖的能力，跨块循环在 ESM 下直接触发 TDZ（`Cannot access 'FastColor' before initialization`），表现为**打包后主窗口白屏**——而 dev 模式用 esbuild 预打包、每模块独立，**完全不暴露**。仓库已有守卫 `scripts/check-chunk-cycles.mjs`（静态 import 循环即失败退出），改 `manualChunks` 后必须跑一次。
 
 ### 13. AI Agent（本地大模型 · 零 token）
 

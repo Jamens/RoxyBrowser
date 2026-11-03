@@ -270,6 +270,51 @@ TK=$(cat /tmp/roxy-token.txt) DBU=<user> DBP=<pass> node scripts/verify-fix-guar
 
 ---
 
+## 9. 启动耗时实测
+
+```bash
+pnpm build                                   # 打点代码在主进程产物里
+node scripts/measure-startup.mjs --runs=5    # 5 次冷启动取中位数
+```
+
+输出各阶段耗时（相对进程启动，毫秒）：
+
+| 阶段 | 含义 |
+| -- | -- |
+| `appReady` | Node / Electron 初始化完成 |
+| `apiReady` | 本地 API 监听就绪 + MySQL 连接建立 |
+| `windowCreate` | 主窗口创建 |
+| `rendererLoaded` | 渲染层 HTML / JS 加载完毕 |
+| `readyToShow` / `windowShown` | 窗口可显示 / 已显示 |
+| `firstContent` | **首屏渲染出内容**（用户真正看到界面的时刻） |
+
+本机实测（Electron 45.0.0 / Chromium 156.0.8078.48，5 次中位数）：
+`appReady 339ms · apiReady 397ms · rendererLoaded 554ms · windowShown 742ms · firstContent 742ms`
+
+> **必须多次取中位数**：单次启动受磁盘缓存、MySQL 连接抖动、杀软扫描影响极大，
+> 拿单次数��当结论等于没测。脚本默认 5 次，同时给出最小 / 最大以暴露抖动幅度。
+> 测量含 MySQL 连接时间，与生产同路径；换机器复测须在同条件下对比。
+
+> 打点为条件启用：只有 `ROXY_MEASURE_STARTUP=1` 才记录，**默认零开销**。
+
+## 10. 打包产物自检（chunk 循环 → 白屏）
+
+```bash
+pnpm build
+node scripts/check-chunk-cycles.mjs    # 有静态跨块循环即失败退出
+```
+
+**为什么必须跑**：手动分块会绕过 Rollup 自动处理循环依赖的能力，跨块循环在 ESM 下
+直接触发 TDZ（`Cannot access 'FastColor' before initialization`），表现为
+**打包后主窗口白屏**——而 dev 模式（esbuild 预打包、每模块独立）**完全不暴露**，
+只有 file:// 加载产物时才会中招。
+
+> 2026-11-04 实测踩过：三处循环（vendor↔antd 经 fast-color、antd-icons↔antd、
+> antd↔vendor 经 @rc-component/util 与 @ant-design/colors），修法见
+> `electron.vite.config.ts` 的 `manualChunks` 注释。改分块策略后必须重跑此守卫。
+
+---
+
 # 指纹基线与内核升级回归（Electron 45 / Chromium 156）
 
 > 用途：**升级 Chromium 内核前后，用同一套探针逐项对比窗口内的实测值**，
@@ -315,54 +360,84 @@ TK=$(cat /tmp/roxy-token.txt) node scripts/capture-fingerprint-baseline.cjs base
 node scripts/diff-fingerprint-baseline.cjs baselines/chromium152.json baselines/chromium156.json
 ```
 
-输出分四段：**变化项**（逐条列出 A/B 两值）、**新增项**、**消失项**、**一致性项变化**。
+输出分五段：**覆盖情况**、**真变化·行为字段**、**真变化·身份字段**、**覆盖补齐/丢失**、
+**新增/消失项**与**一致性项变化**。
 
 判读要点：
 
-- **变化项里出现 `webgl` / `webgpu` / `audioProfile` / `canvasNoise`** → 必须逐条判断
-  是"内核变了我们该跟上"还是"内核变了但这维度与版本无关"；
+- **先看「行为字段变化」**——这是**唯一**能归因于内核的信号（canvas 噪声一致性 /
+  音频编码支持 / EME 能力 / 自动化痕迹 / WebCrypto 算法可见性…）。非零即需排查：
+  是「内核变了我们该跟上」还是「内核变了但这维度与版本无关」；
+- **「身份字段变化」不算回归**——UA / 平台 / 语言 / 时区 / 屏幕 / CPU / 显卡 /
+  音频档案等由指纹设定与环境种子派生，**换一套环境指纹就会全变**。
+  脚本会先判定两份基线是否同一套环境指纹（`sameEnvironment`），不同则明确提示
+  「不可归因于内核」——**内核回归必须对同一个环境（同一 profileId / 同一套指纹）
+  前后各采一次**；
+- **覆盖缺口不是「无变化」**——webgl / webgpu 若在两侧都不可用，会被单列到
+  「覆盖缺口」并提示补采，不会混进「无变化」给人虚假安心（详见第 5 节）；
+- **覆盖补齐 / 覆盖丢失**——补齐是覆盖范围扩大（不是回归）；丢失通常是采集机器
+  变了（换了无 GPU 的机器），要先核对环境；
 - **消失项**（A 有 B 无）→ 多半是体检项被改名或删除，不是内核行为变化，先查代码；
 - **一致性项变化** → 比实测值变化更严重，说明环境的自洽性被内核影响了。
 
 ## 4. 现有的基线快照
 
-| 文件 | 内核 | 采集于 | 伪装度 | 体检项数 |
-| --- | --- | --- | --- | --- |
-| `baselines/chromium152.json` | Electron 44.2.0 / Chromium 152.0.7977.76 | 2026-10-22 | 100 | 27 |
-| `baselines/chromium156.json` | Electron 45.0.0 / Chromium 156.0.8078.48 | 2026-10-22 | 100 | 28 |
+| 文件 | 内核 | 采集于 | 伪装度 | 体检项数 | 已覆盖 |
+| --- | --- | --- | --- | --- | --- |
+| `baselines/chromium152.json` | Electron 44.2.0 / Chromium 152.0.7977.76 | 2026-10-22 | 100 | 27 | 24 |
+| `baselines/chromium156.json` | Electron 45.0.0 / Chromium 156.0.8078.48 | 2026-10-22 | 100 | 28 | 25 |
+| `baselines/chromium156-softwaregl.json` | Electron 45.0.0 / Chromium 156.0.8078.48 | 2026-11-04 | 100 | 28 | **26** |
 
-**本次对比结论：27 个共有项实测值 0 变化，伪装度 100 → 100。**
+**152 → 156 对比结论：27 个共有项实测值 0 变化，伪装度 100 → 100。**
 唯一差异是 156 基线多一项 `webcryptoVersion`（值「均不可用」）——
 该项是后来新增的体检项（见第 6 节），152 基线采集时尚不存在。
 
 > 152 基线**无法**用当前代码重采（内核已升），故两份基线的体检项集合本就可能不完全一致。
 > 对比时「新增/消失项」先看是不是体检项本身增删，再判断是否内核行为变化。
 
-## 5. ⚠️ 无 GPU 环境下的覆盖缺口
+> **`chromium156-softwaregl.json` 是软件光栅化开启后的基线**：它与前两份**不是同一套
+> 环境指纹**（quick-create 生成的随机指纹），因此**不能**用它来判断内核回归——
+> 脚本会明确提示「不是同一套环境指纹」，行为字段变化为 0。它的价值是：
+> **WebGL 已不再是覆盖缺口**（见第 5 节），26/28 项有效覆盖可作后续升级的参照。
+
+## 5. ⚠️ 无 GPU 环境下的覆盖缺口（WebGL 已闭合，WebGPU 仍缺）
 
 采集基线需要有显卡的机器。在**无 GPU**环境（如容器 / 远程桌面 / 虚拟机）里，
-窗口内 `webgl` 与 `webgpu` 都会报「不可用」——**这两项恰恰是内核变化最敏感的**
+窗口内 `webgpu` 会报「不可用」——**这一项恰恰是内核变化最敏感的**
 （Chrome 151 调整过 WebGL 输出规则、152 引入 WebGPU 子群控制）。
 
-于是本机采到的基线里，这两项实际是**没覆盖**的：
+**WebGL 已通过软件光栅化闭合（2026-11-04）**：主进程此前用
+`--disable-software-rasterizer` 把软件渲染也关掉了，导致 WebGL 上下文**根本创建不出来**
+——所有环境窗口都没有 WebGL，而体检把该项权重置 0（不适用不计分），100 分曾把这个
+缺口完全掩盖过去。现改为**只禁 GPU 进程（崩溃根除不动）、保留 ANGLE + D3D11 WARP
+软件渲染**：
 
-```
-webgl    = WebGL 不可用
-webgpu   = WebGPU 不可用
-```
+- 实测 WebGL 可用，`getParameter(37445/37446)` 与 `WEBGL_debug_renderer_info`
+  两条路径都返回**预设显卡**（伪装照常生效），扩展集与真实 Chromium 一致；
+- 体检 `webgl` 项恢复计分（权重 10），`webglOsMatch` 同步恢复判定；
+- 代价：页面合成走软件，滚动 / 动画 / 视频变慢。
+  逃生阀 `ROXY_DISABLE_SOFTWARE_GL=1` 可退回「完全无 WebGL」的旧行为。
 
-**补测办法**（不需要改任何代码）：
+**WebGPU 仍无法在无 GPU 机器上覆盖**：Chromium 的 WebGPU 依赖 GPU 服务进程，
+`--disable-gpu` 下 `navigator.gpu` 根本不存在（连 `use-webgpu-adapter=swiftshader`
+也无效）。**补测办法**（需换机器，不改代码）：
 
 1. 换一台有独立显卡的机器（Windows / macOS 均可），按第 2 节采一份；
-2. 与 `baselines/chromium156.json` 对比：
+2. 与 `baselines/chromium156-softwaregl.json` 对比：
    ```bash
-   node scripts/diff-fingerprint-baseline.cjs baselines/chromium156.json baselines/<有GPU机器>.json
+   node scripts/diff-fingerprint-baseline.cjs baselines/chromium156-softwaregl.json baselines/<有GPU机器>.json
    ```
-3. 重点看 `webgl` / `webgpu` / `webglOsMatch` 三项。
+3. 重点看 `webgpu` / `webgpuSubgroup` / `webgl` 三项是否**从「不可用」变成有值**
+   （属「覆盖补齐」，不是回归）。
 
 > 注意：无 GPU 环境下 `canvasNoise` / `audioProfile` 等项**是有效的**
 > （Canvas 2D 与 WebAudio 走 CPU 软件渲染，不依赖 GPU），
-> 所以本机基线对这两类仍然有参考价值，只是 WebGL / WebGPU 两项缺失。
+> 所以本机基线对这两类仍然有参考价值，只是 WebGPU 两项缺失。
+
+> **GPU 策略三档**（`src/main/index.ts`）：
+> 默认 = 无 GPU 进程 + 软件光栅化（WebGL 可用）；
+> `ROXY_ENABLE_GPU=1` = 放开硬件加速（有独显时性能最好，虚拟机上可能崩）；
+> `ROXY_DISABLE_SOFTWARE_GL=1` = 完全无 WebGL（旧行为，仅极端场景）。
 
 ## 6. 升级内核时的额外检查项：WebCrypto 版本一致性
 
