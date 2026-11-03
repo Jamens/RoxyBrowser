@@ -66,6 +66,21 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   // 用户是否已经手动指定过指纹（选预设 / 随机 / 改字段）。新建环境会异步拉一套
   // 随机指纹，这个标记用来防止那次异步结果把用户先选好的指纹覆盖掉。
   const userPickedRef = useRef(false)
+  // ===== 创建流程减重（对标官方 4.0.3「窗口创建体验简化」）=====
+  // 两个折叠区的展开状态。**必须受控**：antd 的 Collapse defaultActiveKey 只在
+  // 首次挂载生效，而 Modal 内容默认不销毁——不接管的话，上次展开的状态会黏在
+  // 下一次打开的表单上（用户明明只想建个环境，却先看到一屏指纹细项）。
+  const [fpSections, setFpSections] = useState<string[]>([])
+  const [baseExtras, setBaseExtras] = useState<string[]>([])
+
+  useEffect(() => {
+    if (open) {
+      // 每次打开都重置展开状态：新建 → 全收起（最短路径：填名字 → 随机指纹 → 保存）；
+      // 编辑 → 展开基础设置（此时用户就是冲着改参数来的）。
+      setFpSections(initial ? ['basic'] : [])
+      setBaseExtras([])
+    }
+  }, [open, initial])
 
   useEffect(() => {
     if (open && !presets.length) {
@@ -325,24 +340,44 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     <Input placeholder="打开窗口后首先访问的网址" />
                   </Form.Item>
                 )}
-                <Form.Item name="remark" label="备注">
-                  <Input.TextArea rows={2} placeholder="备注信息（如店铺名、运营人员）" />
-                </Form.Item>
-                <Form.Item
-                  name="expiresAt"
-                  label="环境到期时间（可选）"
-                  extra="留空表示长期有效；到期后该环境将无法打开，可在编辑中延长或清空"
-                >
-                  <DatePicker showTime style={{ width: '100%' }} placeholder="长期有效" />
-                </Form.Item>
-                <Form.Item name="extensions" label="启用扩展" extra="勾选的扩展会在打开此环境窗口时自动加载">
-                  <Select
-                    mode="multiple"
-                    allowClear
-                    placeholder="不启用任何扩展"
-                    options={extensions.map((e) => ({ value: e.id, label: `${e.name}${e.version ? ' v' + e.version : ''}` }))}
-                  />
-                </Form.Item>
+                <Collapse
+                  ghost
+                  activeKey={baseExtras}
+                  onChange={(k) => setBaseExtras(k as string[])}
+                  items={[
+                    {
+                      key: 'extra',
+                      label: '更多选项（备注 / 到期时间 / 扩展）',
+                      // 必须 forceRender：这些是 Form.Item，antd 的 Collapse 面板
+                      // 在首次展开前**不渲染**——未挂载的字段不会出现在 onFinish 的
+                      // values 里，编辑场景下会把「备注 / 到期时间 / 扩展」悄悄提交
+                      // 成空，等于一次编辑就把用户填过的东西抹了。
+                      forceRender: true,
+                      children: (
+                        <>
+                          <Form.Item name="remark" label="备注">
+                            <Input.TextArea rows={2} placeholder="备注信息（如店铺名、运营人员）" />
+                          </Form.Item>
+                          <Form.Item
+                            name="expiresAt"
+                            label="环境到期时间（可选）"
+                            extra="留空表示长期有效；到期后该环境将无法打开，可在编辑中延长或清空"
+                          >
+                            <DatePicker showTime style={{ width: '100%' }} placeholder="长期有效" />
+                          </Form.Item>
+                          <Form.Item name="extensions" label="启用扩展" extra="勾选的扩展会在打开此环境窗口时自动加载">
+                            <Select
+                              mode="multiple"
+                              allowClear
+                              placeholder="不启用任何扩展"
+                              options={extensions.map((e) => ({ value: e.id, label: `${e.name}${e.version ? ' v' + e.version : ''}` }))}
+                            />
+                          </Form.Item>
+                        </>
+                      )
+                    }
+                  ]}
+                />
               </Form>
             )
           },
@@ -385,11 +420,20 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                   </Button>
                   <Typography.Text type="secondary">预设 = 各字段一致的成品组合；随机 = 按设备池整套生成</Typography.Text>
                 </Space>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 12 }}>
+                  一般只需选一个预设或点「一键随机指纹」就能用；下方细项在需要与真实设备精确对齐时才需要展开。
+                </Typography.Paragraph>
                 <Form layout="vertical">
-                  {/* 基础/高级分组（对标官方 4.0.3）：常用项默认展开，细粒度项折叠收起 */}
+                  {/* 基础/高级分组（对标官方 4.0.3）：常用项默认展开，细粒度项折叠收起。
+                      新建态改为**默认全收起**——创建环境的最短路径是「填名字 →
+                      一键随机指纹 → 保存」，几十个指纹细项属于「要改才打开」的内容，
+                      默认摊开只会让人先滚过几十行再开始填。
+                      编辑态保持展开「基础设置」：此时用户就是冲着改参数来的。
+                      指纹区用受控 value 而非 Form.Item，收起不会丢值。 */}
                   <Collapse
                     ghost
-                    defaultActiveKey={['basic']}
+                    activeKey={fpSections}
+                    onChange={(k) => setFpSections(k as string[])}
                     items={[
                       {
                         key: 'basic',

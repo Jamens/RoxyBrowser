@@ -102,6 +102,10 @@ const TESTS = [
   // 指纹基线对比语义：区分「未覆盖」与「无变化」——否则无 GPU 机器采的两份基线
   // 会输出「变化 0 项」，把「这一维根本没测到」伪装成「这一维没变」。
   { name: 'fingerprintBaseline', file: 'tests/fingerprintBaseline.test.cjs' },
+  // 创建环境表单减重的源码级守卫：锁住 forceRender（否则「什么都没改的编辑」
+  // 会把备注/到期时间/扩展静默清空）、受控 activeKey（否则展开状态会黏住）、
+  // 以及新建/编辑态的默认展开差异。行为级验证见 scripts/verify-profile-form-ux.mjs。
+  { name: 'profileFormUx', file: 'tests/profileFormUx.test.cjs' },
   // WebCrypto 版本一致性：Chromium 154+ 才有 ML-KEM/ML-DSA，伪装低版本却能用 = 指纹矛盾
   { name: 'webcryptoVersion', file: 'tests/webcryptoVersion.test.cjs' },
   { name: 'sessionRevoke', file: 'tests/sessionRevoke.test.cjs' },
