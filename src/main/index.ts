@@ -9,7 +9,7 @@ import { setNotifyWindowHooks } from './notify'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 
-// ===== GPU 降级兜底 =====
+// ===== GPU 策略（三档）=====
 // 虚拟机 / 远程桌面 / 无显卡驱动的环境里，Chromium 的 GPU 进程会反复崩溃并最终
 // `FATAL: GPU process isn't usable. Goodbye.` 直接终止整个应用——主窗口都来不及显示。
 //
@@ -20,15 +20,31 @@ process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
 //
 // 为什么默认就关而不是「崩溃后再降级」：Electron 没有「GPU 进程崩溃 N 次后降级
 // 重试」的回调可用，真到 FATAL 时进程已经死了，救不回来。只能启动前决策。
-// 指纹浏览器核心是 JS 层伪装，GPU 渲染只影响界面流畅度，关掉不影响任何功能。
-// 想启用硬件加速可设环境变量 ROXY_ENABLE_GPU=1。
+//
+// 【但不能把软件光栅化一起关掉】——`--disable-software-rasterizer` 会让 WebGL
+// 上下文**根本创建不出来**：所有窗口（含环境窗口）都没有 WebGL。2026 年的浏览器
+// 没有不支持 WebGL 的，这是检测站一眼能抓的机器特征；而体检把该项权重置 0
+// （不适用不计分），100 分曾把这个缺口完全掩盖过去。
+//
+// 现在只禁 GPU 进程（崩溃根除不动），保留 Chromium 的 ANGLE + D3D11 WARP 软件渲染：
+// WebGL 可用，且 preload 的 vendor/renderer 伪装照常生效——实测 getParameter(37445/37446)
+// 与 WEBGL_debug_renderer_info 两条路径都返回预设显卡，扩展集与真实 Chromium 一致。
+// 代价是页面合成走软件（滚动/动画/视频变慢），这是「指纹完整度 ↔ 渲染性能」的取舍。
+//
+// 三档策略：
+//   默认                        → 无 GPU 进程 + 软件光栅化（WebGL 可用）
+//   ROXY_ENABLE_GPU=1           → 放开硬件加速（有独显时性能最好，虚拟机上可能崩）
+//   ROXY_DISABLE_SOFTWARE_GL=1  → 完全无 WebGL（旧行为，仅供极端场景 / 性能优先）
 if (process.env.ROXY_ENABLE_GPU !== '1') {
   app.disableHardwareAcceleration()
   app.commandLine.appendSwitch('disable-gpu')
   app.commandLine.appendSwitch('disable-gpu-compositing')
   app.commandLine.appendSwitch('disable-gpu-sandbox')
-  app.commandLine.appendSwitch('disable-software-rasterizer')
-  app.commandLine.appendSwitch('in-process-gpu')
+  if (process.env.ROXY_DISABLE_SOFTWARE_GL === '1') {
+    app.commandLine.appendSwitch('disable-software-rasterizer')
+    app.commandLine.appendSwitch('in-process-gpu')
+    console.warn('[roxy] 已按 ROXY_DISABLE_SOFTWARE_GL=1 关闭软件光栅化：所有窗口将没有 WebGL')
+  }
 }
 
 let mainWindow: BrowserWindow | null = null
