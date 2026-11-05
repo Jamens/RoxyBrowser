@@ -154,6 +154,10 @@ Use it **instead of** automatic `synchronize`, not in addition. The script is al
 - **Proxy IP**: HTTP(S) / SOCKS5, one-click check (exit IP / region / latency / anonymity),
   IP-pool view, one-click assignment, scheduled checks, QR export, **self-healing** (automatic
   rebinding after consecutive failures, without ever creating a new IP linkage — see below).
+- **Exit IP → language / timezone fill**: when creating a profile, derive the timezone and
+  browser language from the proxy's exit country and region (countries spanning multiple
+  timezones are resolved down to state / province); the fields to be overwritten are previewed
+  before anything is written.
 - **Profile health check**: spoof score + consistency traffic lights — each configured
   fingerprint value is compared against the value **actually read back inside the profile
   window** (see below).
