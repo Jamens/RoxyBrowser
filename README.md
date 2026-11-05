@@ -121,6 +121,7 @@ mysql -uroot -p1234560 < db/schema.sql
 - **出口 IP → 语言 / 时区一键填充**：建环境时按代理出口国家与地区，直接把时区、浏览器语言对齐到出口地（跨时区国家按州 / 省细分，填前先预演将被改动的字段）
 - **环境体检**：伪装度评分 + 一致性红绿灯——把「设定指纹」与「环境窗口内实测回读值」逐项对撞（详见下节）
 - **在线检测（外部视角）**：把环境窗口真正导航到第三方指纹检测站（PixelScan / BrowserLeaks / CreepJS / AmIUnique）跑一遍，抓取页面文本 + 截图回写报告——由外部站点从真实人群分布角度评判，能发现「设定值互相矛盾」或「某项落在真实人群分布之外」这类体检抓不到的问题（详见下节）
+- **反检测审计（外部检测视角）**：体检是「自己出题自己判卷」，只能证明注入生效；审计换一副视角——不再问「注入对不对」，而问「**这台浏览器整体像不像一台真实存在的电脑**」，判的是各维度之间**自不自洽**（详见下节）
 - **环境克隆工厂**：以某个环境为母本一键派生 N 个副本——行为一致（系统 / UA / 语言 / 时区）、指纹各异（分辨率 / CPU / 内存 / 显卡 / 字体），详见下节
 - **全空间快照**：把整个团队空间（环境 + 代理 + RPA + 扩展引用）打包成单个 JSON，新机器一键灌入即还原；可选定时自动备份到本地目录，详见下节
 - **多窗口同步**：键鼠轨迹级同步（稳定 selector + 元素内相对坐标 + 贝塞尔曲线插值）
@@ -339,6 +340,20 @@ app.listen(4000)
 - **失败也留证**：网络不通 / 代理失效 / 撞上人机验证（Cloudflare）时，仍尽力带上截图与错误页文本，并把 Chromium 网络错误码翻译成中文提示；检测异常同样写入操作日志（这类记录恰恰最需要追溯）。
 - **不会自动跳回**：检测后停在检测站结果页（而不是退回起始页），因为跳回会重新加载、可能丢失用户登录态或表单；需要时请自行后退。
 - **隐私提示**：此功能会把环境窗口的真实指纹发送给第三方站点，UI 已用 Alert 明确告知；对高价值账号环境请谨慎使用。
+
+### 反检测审计（外部检测视角）
+
+体检是「自己出题自己判卷」：拿设定指纹对撞窗口内的回读值。它能证明**注入生效了**，但证明不了**外部检测站看不出来**——这两件事不是一回事。体检全绿的环境，完全可能在检测站上原形毕露。
+
+反检测审计补的就是这一段视角：不再问「注入对不对」，而问「**这台浏览器整体像不像一台真实存在的电脑**」。判据不是「某一项对不对」，而是「**两项之间自不自洽**」——检测站抓的正是矛盾。
+
+- **三层结构**：`src/shared/stealthAudit.ts`（纯判定规则集，零依赖、可离线单测）/ `src/main/stealthProbe.ts`（窗口内探针，采检测站会读、且会互相交叉验证的向量）/ `scripts/verify-stealth-audit.mjs`（起真实 Electron + 真实环境窗口的行为级验证）。端点 `POST /api/profiles/:id/stealth-audit`。
+- **覆盖维度**：自动化痕迹、身份三元组（appVersion ↔ UA ↔ oscpu）、UA-CH、语言 / 时区（含 `Date.toString()` 的 GMT 偏移）、屏幕 / 视口、硬件、跨 frame 一致性、**原型 getter 绕过**、**原生性测谎**、熵稳定性、平台 API / 字体 / 能力、Intl 构造器行为保真度。
+- **抓到的最致命一处：原型 getter 绕过**。检测站的标准手法是 `Object.getOwnPropertyDescriptor(Navigator.prototype,'platform').get.call(navigator)`——**绕开实例上的 own getter**，从原型拿回宿主真身。早期实现在 navigator **实例**上建 own getter，页面直接读确实拿到伪装值，但原型上的原生 getter 从未被改过，一 call 就露馅（实测 `platform` 读回 `Win32`、`languages` 读回 `zh-CN`、核心数读回 16）。**伪装得越认真，露馅越彻底**——修法是把 navigator / screen / UA-CH / geolocation / plugins / EME 等伪装**全部改到原型上**，顺带让 `navigator` / `screen` 的自有键归零（真实 Chrome 恒为空）。
+- **原生性检查是穷尽的，不是查清单**。手写取样列表永远会漏——2026-10-25 的 browserscan 事故与本次的 `matchMedia` / `speechSynthesis` / `geolocation` 三处漏网，**全都是「列表里没有」**。故探针遍历所有关键原型的**全部**函数逐个 `toString` 检查（实测扫描 176 个、露馅 0），只要将来新增补丁忘了 `patchNative`，这条规则必然把它抓出来。
+- **「该不存在的 API」要真删，不能只改成 undefined**。真实 iOS Safari 里**根本没有** `navigator.userAgentData`，检测站查的是 **`'userAgentData' in navigator` 是不是 false**——只把 getter 改成返回 undefined，`in` 判定仍是 true，一样露馅。故这类 API 从原型上**真正删掉**。
+- **时区按时刻动态计算（含夏令时）**。此前偏移与时区名取的是「生成指纹那一刻」的快照，伦敦夏季会出现「`toString()` 显示 `GMT+0100 (British Summer Time)` 但 `getTimezoneOffset()` 仍返回 0」的自相矛盾；现在两者按目标时刻重算，体检侧的期望值也同步换成同一算法。
+- **伪装落在实例还是原型，只能实测、不能推理**。本轮实测出 `window.devicePixelRatio` / `matchMedia` / `fetch` 都是 **window 自己的属性**（window 有 237 个自有可枚举键，`Window.prototype` 上一个都没有），若按「一律挪到原型」的思路改，既会在原型上多出一个真实 Chrome 没有的属性，又会被自有属性遮蔽而**彻底失效**。故审计同时校验「原型绕过后是否仍是伪装值」与「自有键结构是否与真实 Chrome 一致」。
 
 ### 接口限流 + 登录锁定
 
@@ -577,6 +592,7 @@ src/
 │   ├── rpaMarket.ts          # RPA 市场：内置预设脚本目录（纯数据模块，可离线单测）
 │   ├── healthProbe.ts        # 环境体检采集：在环境窗口内执行 JS，读回真实生效的指纹值
 │   ├── fingerprintScan.ts    # 在线检测：站点定义 / 文本提取 / 导航扫描（runSiteScan、extractHighlights 纯函数，可单测）
+│   ├── stealthProbe.ts       # 反检测审计采集：在环境窗口内探第三方检测站会读、会交叉验证的向量（含原型绕过与穷尽测谎扫描）
 │   ├── cookieText.ts         # Cookie 纯函数：实体→DTO 映射 + Netscape / Set-Cookie / JSON 三格式文本解析（可离线单测）
 │   ├── authScope.ts          # 账户隔离公共定义：AuthedRequest 类型 + isAdminRole / ownerScope / ownerAndWhere（server 与 routes 共用）
 │   ├── jwtSecret.ts          # JWT 签名密钥：环境变量 > ~/.roxy-clone/jwt-secret 持久化 > 随机生成（绝不回落默认值）
@@ -622,6 +638,7 @@ src/
 │   ├── locales.ts            # 支持的语言（zh-CN / en-US / ja-JP / de-DE）与 antd·dayjs 包名映射
 │   ├── timezone.ts           # IANA 时区工具：本地小时、UTC 偏移、夏令时判定（冬夏令时自动）
 │   ├── healthcheck.ts        # 环境体检比对：设定指纹 vs 实测值 → 伪装度分与一致性红绿灯（纯函数）
+│   ├── stealthAudit.ts       # 反检测审计判定：跨维度自洽规则集（原型绕过 / 测谎 / 熵稳定 / Intl 保真，纯函数，可离线单测）
 │   └── snapshot.ts           # 全空间快照：文件结构定义 + 纯函数校验/规整（不依赖 DB / Electron，可单测）
 └── renderer/src/             # React 前端
     ├── pages/                # 登录、环境管理、模板、代理、账号、Cookie、团队、日志、API、设置、新标签页

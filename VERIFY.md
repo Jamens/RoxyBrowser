@@ -487,6 +487,137 @@ node scripts/verify-ip-locale-fill.mjs      # 出口填充的行为级断言
 
 ---
 
+## 14. 反检测审计验证
+
+> 用途：回答「**这套伪装能不能瞒过浏览器**」——
+> 不是「注入生效了吗」，而是「**外部检测站会怎么看**」。
+
+### 14.1 为什么需要单独验证
+
+环境体检是「自己出题自己判卷」：拿设定指纹对撞窗口内的回读值。
+它能证明注入生效，**证明不了外部检测站看不出来**。这两件事不是一回事——
+体检全绿的环境，完全可能在检测站上原形毕露。
+
+而这类失效是**静默**的：typecheck 通过、build 通过、体检满分，
+环境照样带着致命破绽流出去。所以必须有一条**独立于体检**的验证链路。
+
+### 14.2 两档验证
+
+| 档位 | 文件 | 覆盖内容 |
+| -- | -- | -- |
+| 离线单测（67 项断言） | `tests/stealthAudit.test.cjs` | 判定规则集。构造「两处互相矛盾」的探针值 → 断言能抓到；构造「两处自洽」→ 断言不误报。已进 `pnpm test` |
+| 行为级验证（24 项断言） | `scripts/verify-stealth-audit.mjs` | 起真实 Electron + 真实环境窗口 + 真实端口 + 真实 preload，采到实测值后再判定 |
+| 伪装形态守卫（17 项断言） | `tests/preloadPatchNative.test.cjs` | 源码级 + 行为级双闸门：禁止实例级 navigator/screen 伪装、禁止往 `Window.prototype` 上加属性、要求补丁函数走 `patchNative` |
+
+> 离线单测的手法和体检测试相反但目的一致：**矛盾必须同时看到两处才能判出来**，
+> 单看一处永远测不出来。故每条用例都只改基线里的一项。
+
+### 14.3 运行方式
+
+```bash
+pnpm build                                   # 脚本跑的是 out/ 产物
+node scripts/verify-stealth-audit.mjs        # 行为级：真实窗口实测 + 审计
+node tests/stealthAudit.test.cjs            # 离线单测（需先 tsc 编出 .tmp_sa，见 pnpm test）
+```
+
+### 14.4 脚本刻意制造矛盾
+
+脚本创建的环境**故意伪装成 macOS**（宿主是 Windows）——
+矛盾会立刻显现，任何漏网的伪装都在第一次运行时就暴露，而不是等到用户上线。
+
+### 14.5 断言清单与判读
+
+| 编号 | 场景 | 期望 | 说明 |
+| -- | -- | -- | -- |
+| P1 | 探针采到 UA | 非空 | |
+| P2 | 探针采到 appVersion | 非空 | 用于与 UA 交叉验证 |
+| P3 | 探针采到 iframe UA | 非空 | 跨 frame 一致性 |
+| P4 | 探针采到 canvas 双读 | 两个哈希 | 熵稳定性 |
+| P5 | 探针采到被改函数的 toString | ≥ 10 个取样 | 原生性测谎的输入 |
+| P6 | iframe UA 与主 frame 一致 | 完全相同 | iframe 读到真身 = 一眼穿帮 |
+| P7 | 被改写的函数通过原生性测谎 | 全部含 `[native code]` | 漏掉一个 `patchNative` 就红 |
+| P8 | **穷尽原生性扫描无露馅** | 扫描 > 0 且露馅 0 | 遍历全部关键原型的所有函数 |
+| P9 | canvas 两次读一致 | 相同 | 实时改写指纹会被判死 |
+| P10 | appVersion 与 UA 自洽 | 系统段一致 | |
+| P11 | 无自动化痕迹 | `webdriver=false` 且无特征全局变量 | |
+| P12 | **原型绕过后 platform 仍是伪装值** | 绕过后 == 实例值 | 绕过后读到宿主真身 = 本项目最大的漏洞 |
+| P13 | 原型绕过后 languages 仍是伪装值 | 同上 | |
+| P14 | 原型绕过后 hardwareConcurrency 仍是伪装值 | 同上 | |
+| P15 | 原型绕过后 deviceMemory 仍是伪装值 | 同上 | |
+| P16 | navigator 自有键为空 | 空数组 | 真实 Chrome 恒为空 |
+| P17 | screen 自有键为空 | 空数组 | 同上 |
+| P18 | UA 与 UA-CH 自洽 | 无 `uach:` 类结论 | |
+| P19 | 时区三件套自洽 | 无 `timezone:offsetMismatch` / `notInjected` | 偏移 / Intl / `Date.toString` |
+| P20 | Intl 构造器行为与原生一致 | 静态方法在 + new 约束在 | 包装器丢了 `supportedLocalesOf` → 页面直接坏掉 |
+| P21 | window 自有键基线已采集 | 基线键数 > 0 | 基线没采到 → 那条规则等于没武装 |
+| P22 | API 存在性已采集 | 用 `in` 判定采集到 > 0 个 | 存在 ≠ 读出 undefined |
+| P23 | devicePixelRatio 被真正改成设定值 | 实测 == 设定（测试刻意取 3，宿主真实值 2） | 证明伪装生效，而非碰巧本来就对 |
+| P24 | 无致命破绽 | `summary.passed === true` | 收口断言 |
+
+### 14.6 判读要点
+
+- **「扫描 0 个函数」不等于通过**——那说明扫描环节本身没跑起来。
+  判定侧有对应的 `nativeLie:scanNotRun`（警告）专门区分这两种情况。
+- **`nativeLie:exhaustive` 是致命**。它意味着有函数在检测站遍历原型时能看见补丁源码，
+  修复方式只有一条：所有补丁函数必须走 `patchNative` 登记。
+- **原型绕过类结论（`bypass:*`）优先级最高**。实例读值对、原型绕过后不对，
+  意味着页面直接读没问题、检测站一 call 就露馅——这类问题**只有外部视角能发现**。
+- **「提示」不是问题**。报告里只有提示时会直接给肯定结论——
+  把提示说成「发现 N 处问题」会让人养成忽略结论的习惯，那比多报一条更糟。
+
+### 14.7 踩过的一个坑：基于错误前提的规则
+
+写「window 的可枚举自有键必须为空」这条规则时，我以为真实 Chrome 的 `Object.keys(window)`
+是空的。**实测不是**——是一份约 50 项的清单（`window` / `self` / `document` / `location` /
+`screen` / `innerWidth` / `devicePixelRatio` / `styleMedia` / `onpagereveal` …），
+因为 Window 接口上 `[LegacyUnforgeable]` 的属性按 WebIDL 就是全局对象**自己的可枚举属性**。
+
+这条规则一上线就误报。**基于错误前提的规则比没有规则更糟**：它会一直报警，
+直到被人习惯性忽略。
+
+改法不是「放宽阈值」，而是**换判据**：
+
+1. preload 在**注入任何伪装之前**把 window 的可枚举自有键拍一张基线；
+2. 审计时拿「当前键集合」与基线相减——多出来的才是后来添的；
+3. 基线来自同一个浏览器自己，故与 Chromium 版本无关，也不会误报。
+
+同理，**伪装该落在实例还是原型，不能靠推理**——必须实测。本轮实测结论：
+
+| 属性 | 真实形态 | 正确落点 |
+| -- | -- | -- |
+| `navigator.platform` / `languages` / `hardwareConcurrency` / `deviceMemory` | `Navigator.prototype` 上的**访问器** | 原型 |
+| `navigator.getBattery` / `requestMediaKeySystemAccess` | `Navigator.prototype` 上的**方法**（数据属性） | 原型上覆写**函数值**（不是改成 getter） |
+| `navigator.userAgentData` / `gpu` / `webdriver`（iOS 下） | `Navigator.prototype` 上的访问器 | 原型；「该平台没有」时**从原型删掉** |
+| `screen.width` / `height` / `availWidth` / `availHeight` | `Screen.prototype` 上的访问器 | 原型 |
+| `window.devicePixelRatio` / `matchMedia` / `fetch` | **window 自己的**属性（window 有 237 个自有可枚举键，`Window.prototype` 上一个都没有） | **实例**（挪到原型上会被自有属性遮蔽而失效） |
+
+> 落错位置有两种失败模式，**都很难察觉**：
+> ① 挪到原型上 → 多出一个真实 Chrome 没有的属性（结构破绽），且被实例自有属性遮蔽 → **伪装直接失效**；
+> ② 留在实例上 → 留下自有键，且原型上的原生 getter 一 call 就穿帮。
+>
+> 判据是「**这个属性在真实浏览器里本来就在哪**」，所以只能实测，不能推理。
+
+### 14.8 「该不存在的 API」要判**存在性**，不是读值
+
+真实 iOS Safari 里**根本没有** `navigator.userAgentData`。检测站查的不只是
+「读出来是不是 undefined」，还有 **`'userAgentData' in navigator` 是不是 false**。
+
+只把原型上的 getter 改成返回 undefined，**`in` 判定仍然是 true**——一样露馅。
+故改为**从原型上真正删掉**（WebIDL 属性实测 `configurable: true`，`delete` 生效；
+注意 `delete navigator.xxx` 删的是实例自有属性，对原型无效——项目此前踩过这个坑）。
+
+审计侧对应规则 `platform:apiShouldBeAbsent`（致命），探针侧用 `key in navigator` 采集。
+
+### 14.9 顺带要跑的回归
+
+```bash
+pnpm test                                    # 45 项，含 stealthAudit（67 项断言）+ preloadPatchNative（17 项）
+node scripts/verify-stealth-audit.mjs        # 反检测审计的行为级断言
+node scripts/verify-profile-form-ux.mjs      # 真实 UI 全流程
+```
+
+---
+
 # 指纹基线与内核升级回归（Electron 45 / Chromium 156）
 
 > 用途：**升级 Chromium 内核前后，用同一套探针逐项对比窗口内的实测值**，

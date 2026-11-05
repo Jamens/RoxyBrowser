@@ -9,6 +9,115 @@
 
 ---
 
+## 2026-11-06 · 反检测审计：把「能不能瞒过浏览器」变成可验证的问题（`7711b83`）
+
+环境体检是「**自己出题自己判卷**」——拿设定指纹对撞窗口内的回读值。
+它能证明**注入生效了**，但证明不了**外部检测站看不出来**。这两件事不是一回事：
+体检全绿的环境，完全可能在检测站上原形毕露。
+
+本次补上「外部检测视角」这条链路，并把审计实测出来的破绽**逐条真修**。
+
+### 新增三层结构
+
+| 层 | 文件 | 职责 |
+| -- | -- | -- |
+| 判定 | `src/shared/stealthAudit.ts` | 纯函数、零依赖、可离线单测（**67 项断言**） |
+| 采集 | `src/main/stealthProbe.ts` | 窗口内探针，采第三方检测站会读、且会互相交叉验证的向量 |
+| 验证 | `scripts/verify-stealth-audit.mjs` | 起真实 Electron + 真实环境窗口（**24 项断言**） |
+
+端点：`POST /api/profiles/:id/stealth-audit` → `{ findings, summary, report, probe }`。
+
+### 审计实测暴露并修复的破绽
+
+首次真窗口实测（**故意把环境伪装成 macOS，宿主却是 Windows**）报出 **4 致命 + 1 警告**：
+
+1. **原型 getter 绕过（致命 · 4 维同时中招）—— 本次最大的发现**
+
+   检测站的标准手法是
+   `Object.getOwnPropertyDescriptor(Navigator.prototype,'platform').get.call(navigator)`，
+   **绕开实例上的 own getter**，从原型拿回宿主真身。早期实现在 navigator **实例**上建
+   own getter，页面直接读确实拿到伪装值，但原型上的原生 getter 从未被改过——一 call 就露馅。
+
+   实测（伪装 macOS / 宿主 Windows）：`platform` 读回 `Win32`、`languages` 读回 `zh-CN`、
+   核心数读回 `16`、内存读回 `32`。
+
+   UA 之所以没事，是因为 `session.setUserAgent()` 改的是 Chromium 内部的 UA 字符串、
+   原型 getter 读的是同一份源；而 `platform` / `languages` / `hardwareConcurrency` /
+   `deviceMemory` 是**纯 JS 层伪装**。**伪装得越认真，露馅越彻底。**
+
+2. **`navigator` / `screen` 自有键非空（警告）**
+
+   真实 Chrome 的 `navigator` / `screen` 自有键为空（属性全在原型上）；
+   实例级 `def()` 会凭空造出 13 个 own property，`Object.keys(navigator)` 直接列出来。
+   改到原型后自有键归零。
+
+3. **补丁函数暴露源码（致命）**
+
+   `window.matchMedia`、`speechSynthesis.getVoices`、`navigator.geolocation.getCurrentPosition`
+   是裸函数赋值，没走 `patchNative`，`fn.toString()` 会吐出补丁源码。
+   与 2026-10-25 的 browserscan 事故同根因——历史修复只覆盖了 `def` / `cover` / `hide` 一族，
+   **漏掉了手写赋值点**。本次全部补 `patchNative`。
+
+4. **`Date.prototype.toString()` 按宿主真实时区渲染（致命）**
+
+   实测输出 `GMT+0800 (中国标准时间)`，而声称的时区是 `Europe/London`；
+   同时 `getTimezoneOffset()` 夏季仍返回固定 `0`（伦敦夏季应为 `-60`）——
+   两者都是「按生成指纹那一刻的快照」。本次把偏移与时区名改为**按时刻动态取**（含夏令时），
+   并同步重写 `toString` / `toDateString` / `toTimeString` / `toLocaleString` 系列。
+
+5. **`Intl` 默认 locale 泄漏宿主语言（警告）**
+
+   只改 `Intl.DateTimeFormat.prototype.resolvedOptions` 改不了构造器内部实际使用的 locale。
+   修法是包一层构造器（未显式传 locales 时注入目标 locale，`prototype` 引用保持一致）。
+   包装器另有两个**容易丢的原生行为**：静态方法 `supportedLocalesOf`（丢了页面直接报错）
+   与「必须用 `new` 调用」的约束（不还原检测站一句 `Intl.DateTimeFormat()` 就看穿）。
+
+6. **「该不存在的 API」只被「改成 undefined」，没被真正删掉（致命）**
+
+   真实 iOS Safari 里**根本没有** `navigator.userAgentData`。检测站查的是
+   **`'userAgentData' in navigator` 是不是 false**——只把 getter 改成返回 undefined，
+   `in` 判定仍是 true，一样露馅。新增 `delProto` 助手从原型上**真正删掉**
+   （`configurable: true`，`delete` 生效；删完再验一次）。
+
+### 原生性检查从「查清单」改成「穷尽扫描」
+
+手写取样列表**永远会漏**——browserscan 事故与本次的 `matchMedia` / `speechSynthesis` /
+`geolocation` 三处漏网，**全都是「列表里没有」**。
+
+故探针改为遍历所有关键原型的**全部**函数逐个 `toString` 检查
+（**实测扫描 176 个函数、露馅 0**）。只要将来新增补丁忘了 `patchNative`，这条规则必然抓到。
+判定侧对应 `nativeLie:exhaustive`（致命）与 `nativeLie:scanNotRun`（扫描数为 0 → 警告，
+因为「没跑起来」不能当作「通过」）。
+
+### 一个方法论教训：基于错误前提的规则比没有规则更糟
+
+审计里曾写过「window 的可枚举自有键必须为空」。**实测不是**——真实 Chromium 是一份
+约 50 项的清单，因为 Window 接口上 `[LegacyUnforgeable]` 的属性按 WebIDL 就是
+全局对象**自己的可枚举属性**。规则一上线就误报。
+
+改法不是放宽阈值，而是**换判据**：preload 在注入任何伪装之前拍一张 window 自有键基线，
+审计时与当前集合相减，多出来的才是后来添的。基线来自同一个浏览器自己，
+故与 Chromium 版本无关，也不会误报。
+
+同理，**伪装该落在实例还是原型不能靠推理，只能实测**——本轮实测出
+`window.devicePixelRatio` / `matchMedia` / `fetch` 都是 **window 自己的属性**
+（window 有 237 个自有可枚举键，`Window.prototype` 上一个都没有），
+若挪到原型上既多出一个真实 Chrome 没有的属性，又会被自有属性遮蔽而**彻底失效**。
+
+### 回归守卫
+
+- `tests/stealthAudit.test.cjs`（**67 项断言**，已进 `pnpm test`）：每条用例只改基线里的一项，
+  验证「矛盾能被抓到」+「自洽不误报」**双向**。
+- `tests/preloadPatchNative.test.cjs`（**17 项断言**）：新增源码级闸门，
+  禁止实例级 navigator/screen 伪装、禁止往 `Window.prototype` 上加属性。
+
+### 顺带修正的既有缺陷
+
+- 体检的 `tzOffset` 项改为按**当前时刻**算期望值（`getTimezoneOffsetMinutes(e.timezone)`）——
+  此前拿指纹里存的快照去比，夏令时期间每个环境都会报「时区偏移不符」，是个必然为假的告警。
+
+---
+
 ## 2026-11-05 · 出口 IP → 语言 / 时区一键填充：建环境时就把一致性做对（`daee8e0`）
 
 指纹的地理要素（出口 IP / 时区 / 浏览器语言）本该来自同一个「人所在的地方」。

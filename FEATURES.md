@@ -1021,6 +1021,181 @@ app.listen(4000)
 
 - **不新增数据库列**：两套列表的收藏均用 localStorage，搜索/筛选走既有/新增的 `GET` 参数（规则 #24）。
 
+### 7.18 反检测审计（外部检测视角）
+
+环境体检（§7.13 / §7.14）是「**自己出题自己判卷**」——拿设定指纹对撞窗口内的回读值。
+它能证明「注入生效了」，但证明不了「**外部检测站看不出来**」。这两件事不是一回事：
+体检全绿的环境，完全可能在检测站上原形毕露。
+
+反检测审计补的就是这一段视角：不再问「注入对不对」，而问
+「**这台浏览器整体像不像一台真实存在的电脑**」。
+
+#### 三层结构（判定 / 采集 / 验证分离）
+
+| 层 | 文件 | 职责 |
+| -- | -- | -- |
+| 判定 | `src/shared/stealthAudit.ts` | 纯函数、零依赖、可离线单测。把「外部检测站会怎么看」编码成规则集 |
+| 采集 | `src/main/stealthProbe.ts` | 窗口内探针。采第三方检测站**会读、且会互相交叉验证**的向量 |
+| 验证 | `scripts/verify-stealth-audit.mjs` | 行为级：起真实 Electron + 真实环境窗口 + 真实端口 + 真实 preload |
+
+端点：`POST /api/profiles/:id/stealth-audit` → `{ findings, summary, report, probe }`。
+
+#### 审计覆盖的维度
+
+规则不是「某一项对不对」，而是「**两项之间自不自洽**」——
+检测站抓的正是矛盾，所以判定也必须同时看到两处才能判出来：
+
+| 组 | 覆盖内容 |
+| -- | -- |
+| 自动化痕迹 | `navigator.webdriver`、26 个特征全局变量（`cdc_` / `$cdc_` / `__nightmare` …）、`window.chrome` 是否存在 |
+| 身份三元组 | `appVersion` 与 UA 的系统段、`oscpu`、`buildID`、`productSub` 是否互相吻合 |
+| UA-CH | 平台 / 版本与 UA 是否一致、是否残留 iOS 痕迹、是否缺失 |
+| 语言 / 时区 | `language` ↔ `languages[0]`、首选语言是否注入、`Date.toString()` 的 GMT 偏移与 Intl 时区是否矛盾、Intl locale 是否与浏览器语言一致 |
+| 屏幕 / 视口 | 宽高、`availWidth/availHeight`、`inner` ↔ `outer` 的数值关系 |
+| 硬件 | 核心数、内存、触摸能力与声称的平台是否相符 |
+| 跨 frame | iframe 内的 UA 与 `webdriver` 是否与主 frame 一致（只注入主 frame → iframe 读到宿主真身） |
+| **原型 getter 绕过** | 从**原型**取原生 getter 再 `.call(navigator)`，看能否读回宿主真身 |
+| **原生性测谎** | 被改函数的 `toString()` 是否漏出补丁源码；并**穷尽扫描**所有关键原型的全部函数 |
+| 熵稳定性 | canvas / audio 在同一环境内两次读是否一致 |
+| 平台 API / 字体 / 能力 | 该平台该有的 API 是否缺失、**该没有的是否真的不存在**（`key in navigator`，不是读值）、字体声称可用但测不出、iOS 伪装下是否仍暴露 WebGPU |
+| **Intl 构造器行为保真度** | `supportedLocalesOf` 静态方法是否还在、`Intl.DateTimeFormat()` 不带 new 是否照原生抛错 |
+
+#### 审计实测暴露并修复的破绽
+
+审计不是走过场——首次真窗口实测（**故意把环境伪装成 macOS，宿主却是 Windows**，
+让矛盾立刻显现）报出 **4 致命 + 1 警告**，逐项修复并加了回归守卫：
+
+1. **原型 getter 绕过（致命 · 4 维同时中招）—— 本次最大的发现**
+
+   检测站的标准手法是 `Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform').get.call(navigator)`，
+   **绕开实例上的 own getter**，从原型拿回宿主真身。早期实现在 navigator **实例**上建 own getter，
+   页面直接读确实拿到伪装值，但原型上的原生 getter 从未被改过——检测站一 call 就露馅。
+
+   实测（伪装 macOS / 宿主 Windows）：
+
+   | 字段 | 实例读值 | 原型绕过后 | 露馅 |
+   | -- | -- | -- | -- |
+   | `platform` | `MacIntel` | `Win32` | ✅ 宿主真身 |
+   | `languages` | `["en-GB","en"]` | `["zh-CN","zh-Hans-CN"]` | ✅ 宿主真身 |
+   | `hardwareConcurrency` | `8` | `16` | ✅ 宿主真身 |
+   | `deviceMemory` | `8` | `32` | ✅ 宿主真身 |
+
+   UA 之所以没露馅，是因为 `session.setUserAgent()` 改的是 Chromium 内部的 UA 字符串、
+   原型 getter 读的是同一份源；而 `platform` / `languages` / `hardwareConcurrency` / `deviceMemory`
+   是**纯 JS 层伪装**，原型级绕过能逐个打回原形。**伪装得越认真，露馅越彻底。**
+
+   **修法**：新增 `defProto`（原型上定义访问器）/ `delProto`（从原型上真正删掉）助手，
+   把 navigator / screen / UA-CH / geolocation / plugins / EME / gpu / webdriver / 触摸等伪装
+   **全部改到原型上**；
+   数据属性（`getBattery`、`requestMediaKeySystemAccess`、`SpeechSynthesis.prototype.getVoices`、
+   `MediaDevices.prototype.enumerateDevices`）用 `Object.defineProperty` 覆写原型上的**函数值**
+   —— 改成 getter 的话，检测站读一下描述符的 `.get` 就知道原生没有 getter。
+   修复后四维全部返回伪装值。
+
+2. **`navigator` / `screen` 自有键非空（警告）**
+
+   真实 Chrome 的 `navigator` / `screen` **自有键为空**（属性全在原型上）。
+   实例级 `def()` 会凭空造出 13 个 own property，`Object.keys(navigator)` 直接列出来——
+   这本身就是「这不是原生 navigator」的证据。改到原型后自有键归零，与真实 Chrome 结构一致。
+
+3. **补丁函数暴露源码（致命）**
+
+   `window.matchMedia`、`speechSynthesis.getVoices`、`navigator.geolocation.getCurrentPosition`
+   等是**裸函数赋值**，没走 `patchNative` 登记，`fn.toString()` 会原样吐出补丁源码，
+   检测站一行 `/\[native code\]/i.test(fn.toString())` 即穿帮。
+   这与 2026-10-25 的 browserscan 事故同根因——历史修复只覆盖了 `def` / `cover` / `hide` 一族，
+   **漏掉了手写赋值点**。本次全部补 `patchNative`。
+
+4. **`Date.prototype.toString()` 按宿主真实时区渲染（致命）**
+
+   实测输出 `GMT-0800 (中国标准时间)`，而声称的时区是 `Europe/London`。
+   同时 `getTimezoneOffset()` 在夏季仍返回固定 `0`（伦敦夏季应为 `-60`）——
+   两者都是「**按生成指纹那一刻的快照**」而非按目标时刻动态计算。
+   本次把偏移与时区名改为**按时刻动态取**（含夏令时正确性），
+   并同步重写 `toString` / `toDateString` / `toTimeString` / `toLocaleString` 系列。
+
+5. **`Intl` 默认 locale 泄漏宿主语言（警告）**
+
+   只改 `Intl.DateTimeFormat.prototype.resolvedOptions` 只能改「读出来的那一项」，
+   改不了构造器内部实际使用的 locale。修法是包一层构造器，未显式传 locales 时注入目标 locale，
+   并**保持 `prototype` 引用一致**（否则 `instanceof` 与原型链都会露馅）。
+
+   包装器有两个**容易丢的原生行为**，丢了比露馅更糟——**浏览器直接坏掉**：
+
+   | 丢失项 | 后果 |
+   | -- | -- |
+   | 静态方法 `supportedLocalesOf` | 页面或检测站一调用就是 `TypeError` |
+   | 「必须用 `new` 调用」的约束 | 检测站一句 `Intl.DateTimeFormat()` 就看穿构造器被换过 |
+
+   故包装时一并搬移静态方法（并走 `patchNative`）、还原 `new` 约束与 `length`，
+   审计侧也有对应规则（`locale:supportedLocalesBroken` 致命 / `locale:requiresNewBroken` 警告）。
+
+6. **「该不存在的 API」只被「改成 undefined」，没被真正删掉（致命）**
+
+   真实 iOS Safari 里**根本没有** `navigator.userAgentData`。检测站查的不只是
+   「读出来是不是 undefined」，还有 **`'userAgentData' in navigator` 是不是 false**——
+   只把原型上的 getter 改成返回 undefined，`in` 判定仍然是 **true**，一样露馅。
+
+   修法：新增 `delProto` 助手，从**原型上真正删掉**这个属性
+   （WebIDL 属性实测 `configurable: true`，`delete` 生效；删完再验一次，删不掉才退回「返回 undefined」）。
+   适用场景：iOS 伪装下的 `userAgentData` / `gpu` / `requestMediaKeySystemAccess` / `webdriver`，
+   以及该平台本就没有的桌面 API（`serial` / `hid` / `nfc` 等）。
+
+   > 注意 `delete navigator.xxx` 删的是**实例**自有属性，对原型无效——项目此前正踩过这个坑。
+   > 要删必须删 `Navigator.prototype` 上的那份。
+
+#### 伪装该落在实例还是原型——只能实测，不能推理
+
+修复过程中最大的风险不是「漏改」，而是「**改错地方**」：
+落错位置有两种失败模式，**都很难察觉**：
+
+1. 挪到原型上 → 多出一个真实 Chrome 没有的属性（结构破绽），
+   且被实例的自有属性**完全遮蔽** → 伪装直接失效；
+2. 留在实例上 → 留下自有键，且原型上的原生 getter 一 call 就穿帮。
+
+判据只有一个：**这个属性在真实浏览器里本来就在哪**。本轮实测结论：
+
+| 属性 | 真实形态 | 正确落点 |
+| -- | -- | -- |
+| `navigator.platform` / `languages` / `language` / `hardwareConcurrency` / `deviceMemory` / `doNotTrack` / `webdriver` / `maxTouchPoints` / `plugins` / `mimeTypes` / `geolocation` / `userAgentData` / `gpu` | `Navigator.prototype` 上的**访问器** | 原型 |
+| `navigator.getBattery` / `requestMediaKeySystemAccess` | `Navigator.prototype` 上的**方法**（数据属性） | 原型上覆写**函数值**——改成 getter 的话，检测站读 `.get` 就知道原生没有 getter |
+| `screen.width` / `height` / `availWidth` / `availHeight` | `Screen.prototype` 上的访问器 | 原型 |
+| `mediaDevices.enumerateDevices` / `speechSynthesis.getVoices` | 对应原型上的**方法** | 原型上覆写函数值 |
+| `window.devicePixelRatio` / `matchMedia` / `fetch` / `setTimeout` | **window 自己的**属性（window 有 237 个自有可枚举键，`Window.prototype` 上一个都没有） | **实例** |
+
+> `window.devicePixelRatio` 曾经被误挪到 `Window.prototype`——结果既在原型上多了一个
+> 真实 Chrome 没有的属性，又因为 window 的自有属性把它遮蔽而**彻底失效**。
+> 验证脚本里那条「devicePixelRatio 被真正改成了设定值」的断言（测试刻意取 3、
+> 宿主真实值 2）就是为了守住这个坑。
+
+#### 一条基于错误前提的规则，和它怎么被改对
+
+审计里曾写过「window 的可枚举自有键必须为空」。**实测不是**——真实 Chromium 是一份
+约 50 项的清单（`window` / `self` / `document` / `location` / `screen` / `innerWidth` /
+`devicePixelRatio` / `styleMedia` / `onpagereveal` …），因为 Window 接口上
+`[LegacyUnforgeable]` 的属性按 WebIDL 就是全局对象**自己的可枚举属性**。
+
+规则一上线就误报。**基于错误前提的规则比没有规则更糟**：它会一直报警，
+直到被人习惯性忽略。
+
+改法不是「放宽阈值」，而是**换判据**：preload 在注入任何伪装之前把 window 的
+可枚举自有键拍一张基线，审计时拿当前键集合与基线相减——多出来的才是后来添的。
+基线来自同一个浏览器自己，故与 Chromium 版本无关，也不会误报。
+
+#### 为什么原生性检查要「穷尽」而不是列清单
+
+手写取样列表**永远会漏**——2026-10-25 的 browserscan 事故与本次的
+`matchMedia` / `speechSynthesis` / `geolocation` 三处漏网，**全都是「列表里没有」**。
+
+故探针改为**遍历所有关键原型的全部函数**（`Navigator` / `Screen` / `Window` / `Date` /
+`Intl.DateTimeFormat` / `HTMLCanvasElement` / `CanvasRenderingContext2D` / `WebGLRenderingContext` /
+`Geolocation` / `SpeechSynthesis` / `MediaDevices` / `FontFaceSet` / `Function`），
+逐个 `toString` 检查——**实测扫描 176 个函数、露馅 0**。
+只要将来新增补丁忘了 `patchNative`，这条规则必然把它抓出来。
+
+判定侧对应两条规则：`nativeLie:exhaustive`（扫到露馅 → 致命）、
+`nativeLie:scanNotRun`（扫描数为 0 → 警告，因为「没跑起来」不能当作「通过」）。
+
 ### 8. 操作日志
 
 

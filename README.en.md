@@ -166,6 +166,10 @@ Use it **instead of** automatic `synchronize`, not in addition. The script is al
   + screenshot into a report. External sites judge from real-world population distributions,
   catching "mutually contradictory settings" or "a value outside the real population" —
   problems an in-app health check cannot see (see below).
+- **Anti-detection audit (external detector's perspective)**: the health check is "writing your
+  own exam and grading it" — it only proves injection works. The audit takes a different
+  stance: not "is the injection right" but "**does this browser look like one real computer
+  overall**", judging whether the dimensions agree with each other (see below).
 - **Clone factory**: derive N copies from one parent profile — same behavior (OS / UA /
   language / timezone), different fingerprints (resolution / CPU / memory / GPU / fonts); see
   below.
@@ -700,6 +704,61 @@ distributions. The two are complementary and both are needed.
 - **Privacy notice**: this feature sends the profile window's real fingerprint to third-party
   sites; the UI states this in an explicit Alert. Use with caution on high-value account
   profiles.
+
+### Anti-Detection Audit (external detector's perspective)
+
+The health check is "writing your own exam and grading it": it compares the configured
+fingerprint against values read back inside the window. It proves **injection works**, but it
+cannot prove **an external detector sees nothing** — those are different things. A profile that
+scores a perfect health check can still give itself away on a detection site.
+
+The audit covers exactly that gap: not "is the injection right" but "**does this browser look
+like one real computer overall**". The criteria are not "is this one value right" but "**do
+these two values agree**" — contradictions are what detectors actually catch.
+
+- **Three layers**: `src/shared/stealthAudit.ts` (pure rule set, zero dependencies, unit
+  testable offline) / `src/main/stealthProbe.ts` (in-window probe collecting the vectors a
+  detector reads and cross-validates) / `scripts/verify-stealth-audit.mjs` (behavior-level
+  verification against a real Electron app and a real profile window). Endpoint:
+  `POST /api/profiles/:id/stealth-audit`.
+- **Dimensions covered**: automation traces, identity triple (appVersion ↔ UA ↔ oscpu),
+  UA-CH, language / timezone (including the GMT offset inside `Date.toString()`), screen /
+  viewport, hardware, cross-frame consistency, **prototype getter bypass**, **native-ness
+  lie detection**, entropy stability, platform APIs / fonts / capabilities, and Intl
+  constructor behavior fidelity.
+- **The most fatal catch: prototype getter bypass**. The standard detector trick is
+  `Object.getOwnPropertyDescriptor(Navigator.prototype,'platform').get.call(navigator)` —
+  it **bypasses the instance-level own getter** and takes the host's real value back off the
+  prototype. Earlier implementations defined own getters on the navigator **instance**, so a
+  page reading `navigator.platform` did get the spoofed value — but the native getter on the
+  prototype was never touched, so one `.call()` gave everything away (measured: `platform`
+  read back `Win32`, `languages` read back `zh-CN`, core count read back 16). **The harder you
+  spoof, the more thoroughly you are exposed.** The fix moves every navigator / screen /
+  UA-CH / geolocation / plugins / EME spoof onto the **prototype**, which as a bonus makes
+  `navigator` / `screen` own-key lists empty — exactly like real Chrome.
+- **The native-ness check is exhaustive, not a hand-written list**. A hand-written list always
+  misses something: the 2026-10-25 browserscan incident and this round's `matchMedia` /
+  `speechSynthesis` / `geolocation` misses were **all "not in the list"**. So the probe walks
+  **every** function on all critical prototypes and checks each `toString` (measured: 176
+  functions scanned, 0 leaked). Any future patch that forgets `patchNative` is guaranteed to be
+  caught by this rule.
+- **An API that should not exist must actually be deleted, not just made to read undefined**.
+  Real iOS Safari has **no** `navigator.userAgentData` at all, and detectors check
+  **whether `'userAgentData' in navigator` is false** — merely changing the getter to return
+  undefined keeps the `in` check true, so it is exposed just the same. Such APIs are therefore
+  **deleted from the prototype**.
+- **The timezone is computed per instant (DST-correct)**. Previously the offset and zone name
+  came from a snapshot taken when the fingerprint was generated, so a London summer produced
+  the self-contradictory pair "`toString()` says `GMT+0100 (British Summer Time)` while
+  `getTimezoneOffset()` still returns 0". Both are now recomputed for the target instant, and
+  the health check's expected value uses the same algorithm.
+- **Whether a spoof belongs on the instance or on the prototype can only be measured, never
+  reasoned about**. This round established that `window.devicePixelRatio` / `matchMedia` /
+  `fetch` are all **own properties of window** (window has 237 own enumerable keys;
+  `Window.prototype` has none), so blindly moving everything to the prototype would both add a
+  property real Chrome does not have and get shadowed by the own property — silently
+  disabling the spoof. The audit therefore checks both "is the value still spoofed after the
+  prototype bypass" and "does the own-key structure match real Chrome".
 
 ### Rate Limiting + Login Lockout
 
@@ -1253,6 +1312,7 @@ src/
 │   ├── rpaMarket.ts          # RPA marketplace: built-in preset script catalog (pure data module, offline-testable)
 │   ├── healthProbe.ts        # Health-check collection: execute JS inside a profile window, read back effective fingerprint values
 │   ├── fingerprintScan.ts    # Online scan: site definitions / text extraction / navigation scan (runSiteScan, pure extractHighlights)
+│   ├── stealthProbe.ts       # Anti-detection audit collection: probe the vectors a detector reads and cross-validates (prototype bypass + exhaustive lie scan)
 │   ├── cookieText.ts         # Cookie pure functions: entity→DTO mapping + Netscape / Set-Cookie / JSON text parsing (offline-testable)
 │   ├── authScope.ts          # Shared account-isolation definitions: AuthedRequest type + isAdminRole / ownerScope / ownerAndWhere
 │   ├── jwtSecret.ts          # JWT signing key: env var > ~/.roxy-clone/jwt-secret persisted > random (never a default)
@@ -1298,6 +1358,7 @@ src/
 │   ├── locales.ts            # Supported languages (zh-CN / en-US / ja-JP / de-DE) + antd·dayjs package mapping
 │   ├── timezone.ts           # IANA timezone utilities: local hour, UTC offset, DST detection
 │   ├── healthcheck.ts        # Health-check comparison: configured fingerprint vs measured → spoof score + consistency lights (pure)
+│   ├── stealthAudit.ts       # Anti-detection audit rules: cross-dimension coherence (prototype bypass / lie detection / entropy / Intl fidelity, pure, offline-testable)
 │   └── snapshot.ts           # Workspace snapshot: file structure + pure validation/normalization (no DB / Electron deps, testable)
 └── renderer/src/             # React frontend
     ├── pages/                # Login, profiles, templates, proxies, accounts, cookies, team, logs, API, settings, new tab
