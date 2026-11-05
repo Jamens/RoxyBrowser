@@ -4,7 +4,7 @@
 //
 // 2026-10-25，外部反馈 browserscan.net 检测「UserAgent 不同」固定扣 10%。
 // 逆向其客户端脚本（DsSMVnXV.js）后确认根因在**我们自己的补丁**上：
-// def / cover / hide 三个帮助函数用裸箭头函数做属性 getter
+// def / defProto / hideProto 三个帮助函数用裸箭头函数做属性 getter
 // （`{ get: () => value }`），toString() 报 "() => value"。
 // browserscan 的门闩 Vr() 会同时读原型与实例两个属性描述符，
 // 要求 getter.toString() 含 `[native code]`——一行穿帮，
@@ -17,7 +17,7 @@
 // 必须有一道显式闸门。
 //
 // 本测试双管齐下：
-//   1) 行为级：从源码抽出 patchNative / def / cover / hide 四件套，
+//   1) 行为级：从源码抽出 patchNative / def / defProto / hideProto 三件套，
 //      esbuild 转译后在 vm 沙箱真实执行，断言 toString 形态与描述符属性
 //      （防回归到裸函数——这是 2026-10-25 事故的精确复现路径）；
 //   2) 源码级：静态断言同族补丁（sampleRate getter / fontFamily setter /
@@ -48,7 +48,7 @@ const src = fs.readFileSync(SRC, 'utf8')
 
 /**
  * 从 browser-preload.ts 抽出「补丁四件套」：patchedFns / patchNative /
- * origFnToString / patchedFlags / markPatched / def / hide / cover。
+ * origFnToString / patchedFlags / markPatched / def / defProto / hideProto。
  * 这段代码自包含（只用 Object / Function / Map 与模板字符串），
  * 唯一的外部依赖是 window（__roxyPatched 暗记挂载点）——沙箱里给一个假的即可。
  *
@@ -70,8 +70,8 @@ t('能抽出补丁四件套代码块且非空', () => {
   const kit = extractPatchKit(src)
   assert.ok(kit.length > 800, `抽出的代码块只有 ${kit.length} 字符，抽取逻辑可能坏了`)
   assert.ok(kit.includes('const def ='), '代码块不含 def，抽取边界可能错了')
-  assert.ok(kit.includes('const hide ='), '代码块不含 hide，抽取边界可能错了')
-  assert.ok(kit.includes('const cover ='), '代码块不含 cover，抽取边界可能错了')
+  assert.ok(kit.includes('const defProto ='), '代码块不含 defProto，抽取边界可能错了')
+  assert.ok(kit.includes('const delProto ='), '代码块不含 delProto，抽取边界可能错了')
 })
 
 // esbuild 把 TS 片段转成可执行 JS（vite/electron-vite 的传递依赖，dev 环境必有）
@@ -84,7 +84,8 @@ const kitJs = esbuild.transformSync(extractPatchKit(src), { loader: 'ts' }).code
 // 原型链指向测试进程的 Function.prototype（未伪装），String() 会拿到真实源码。
 const sandbox = { window: {} }
 const kit = vm.runInNewContext(
-  kitJs + '\n;({ def, cover, hide, patchNative, markPatched, patchedFlags, makeFn: (body) => new Function("return " + body)() })',
+  kitJs +
+    '\n;({ def, defProto, delProto, patchNative, markPatched, patchedFlags, makeFn: (body) => new Function("return " + body)() })',
   sandbox
 )
 
@@ -116,26 +117,75 @@ t('def：模拟 browserscan sL() 测谎——own 描述符 getter 必须含 [nat
   assert.ok(sL(nav, 'platform'), 'own getter 的 toString 不含 [native code]，Vr() 会直接判死')
 })
 
-t('cover：不可枚举 + toString 原生形态 + 取值正确', () => {
-  const obj = { existing: 1 }
-  kit.cover(obj, 'vendor', 'NVIDIA')
-  const d = Object.getOwnPropertyDescriptor(obj, 'vendor')
-  assert.strictEqual(d.enumerable, false, 'cover 必须不可枚举（原生实例的 keys 通常为空）')
-  assert.strictEqual(d.get.toString(), 'function get vendor() { [native code] }')
-  assert.strictEqual(obj.vendor, 'NVIDIA')
-  assert.deepStrictEqual(Object.keys(obj), ['existing'], 'cover 不得引入可枚举键')
+t('defProto：在原型上定义 getter，toString 原生形态 + 枚举性同原生', () => {
+  const proto = {}
+  kit.defProto(proto, 'platform', 'MacIntel')
+  const d = Object.getOwnPropertyDescriptor(proto, 'platform')
+  assert.ok(d && typeof d.get === 'function', 'defProto 应在原型上定义 get 访问器')
+  assert.strictEqual(d.get.toString(), 'function get platform() { [native code] }')
+  assert.strictEqual(d.get.name, 'get platform')
+  assert.strictEqual(d.enumerable, true, '原生 WebIDL 属性在原型上可枚举，改掉反而露馅')
+  assert.strictEqual(d.configurable, true)
+  // 实例读到的就是伪装值，且**实例不产生自有键**
+  // （真实 Chrome 的 navigator / screen 自有键恒为空）
+  const inst = Object.create(proto)
+  assert.strictEqual(inst.platform, 'MacIntel')
+  assert.deepStrictEqual(Object.keys(inst), [], '原型级伪装不得给实例留下自有键')
 })
 
-t('hide：遮蔽原型原生属性 + toString 原生形态 + 读取得 undefined', () => {
-  const proto = {}
-  Object.defineProperty(proto, 'gpu', { get() { return { real: true } }, configurable: true })
+t('defProto：原型 getter 绕过拿不回真身（本次最致命漏洞的回归守卫）', () => {
+  // 模拟宿主：真身原本就在原型上（Chrome 的 WebIDL 属性就是这么放的）
+  const proto = { platform: 'Win32' }
+  kit.defProto(proto, 'platform', 'MacIntel')
   const inst = Object.create(proto)
-  kit.hide(inst, 'gpu')
-  const d = Object.getOwnPropertyDescriptor(inst, 'gpu')
-  assert.ok(d && typeof d.get === 'function', 'hide 应定义 own get 访问器')
-  assert.strictEqual(d.enumerable, false)
-  assert.strictEqual(d.get.toString(), 'function get gpu() { [native code] }')
-  assert.strictEqual(inst.gpu, undefined, 'hide 后读取应得 undefined')
+  // 检测站手法：从原型取 getter 再 call 到实例上
+  const d = Object.getOwnPropertyDescriptor(proto, 'platform')
+  assert.strictEqual(d.get.call(inst), 'MacIntel',
+    '原型绕过后读回的应是伪装值——这是本项目此前最大的漏洞')
+  assert.notStrictEqual(d.get.call(inst), 'Win32', '绕过后读回了宿主真身')
+})
+
+t('delProto：把「该平台根本没有的 API」从原型上彻底删掉', () => {
+  // 关键区别：真实 iOS Safari 里根本没有 navigator.userAgentData。
+  // 只把 getter 改成返回 undefined 只能骗过 `navigator.userAgentData`，
+  // 但 `'userAgentData' in navigator` 仍是 true —— 一句就露馅。
+  // 故必须真删（原型上的 WebIDL 属性实测 configurable: true，delete 有效）。
+  const proto = {}
+  Object.defineProperty(proto, 'userAgentData', {
+    get() { return { real: true } },
+    configurable: true,
+    enumerable: true
+  })
+  kit.delProto(proto, 'userAgentData')
+  assert.strictEqual(
+    Object.getOwnPropertyDescriptor(proto, 'userAgentData'),
+    undefined,
+    'delProto 应把属性从原型上彻底删掉，而不是改成返回 undefined'
+  )
+  const inst = Object.create(proto)
+  assert.strictEqual(inst.userAgentData, undefined)
+  assert.strictEqual('userAgentData' in inst, false, "'in' 判定必须为 false——真实 Safari 上没有这个 API")
+})
+
+t('delProto：属性本来就不存在时安静返回', () => {
+  const proto = {}
+  kit.delProto(proto, 'gpu')
+  assert.strictEqual(Object.getOwnPropertyDescriptor(proto, 'gpu'), undefined)
+})
+
+t('delProto：属性不可配置时不抛错，原样保留（唯一可能的结果）', () => {
+  // 不可配置的访问器：既删不掉、也不允许再定义另一个访问器。
+  // 此时只能原样保留——不能假装成功，也不该让整段注入挂掉。
+  const proto = {}
+  Object.defineProperty(proto, 'locked', {
+    get() { return 1 },
+    configurable: false,
+    enumerable: true
+  })
+  kit.delProto(proto, 'locked')
+  const d = Object.getOwnPropertyDescriptor(proto, 'locked')
+  assert.ok(d && typeof d.get === 'function', '不可配置的属性应被原样保留')
+  assert.strictEqual(Object.create(proto).locked, 1, '不可配置时只能保留原生实现')
 })
 
 t('patchNative：登记函数 toString 报原生形态，未登记函数原样返回', () => {
@@ -208,10 +258,72 @@ t('源码级：全文件不存在裸 descriptor getter/setter（新增补丁的�
     if (/get:\s*\(\)\s*=>/.test(line)) bad.push(`行${n} 裸箭头 getter: ${trimmed.slice(0, 80)}`)
     if (/get:\s*function\b/.test(line)) bad.push(`行${n} 裸函数 getter: ${trimmed.slice(0, 80)}`)
     if (/set:\s*function\b/.test(line)) bad.push(`行${n} 裸函数 setter: ${trimmed.slice(0, 80)}`)
-    if (/^get\s*\(/.test(trimmed)) bad.push(`行${n} 方法简写 getter: ${trimmed.slice(0, 80)}`)
-    if (/^set\s*\(/.test(trimmed)) bad.push(`行${n} 方法简写 setter: ${trimmed.slice(0, 80)}`)
+    // 方法简写形式是 `get foo() {}`（get 与属性名之间**有空格**），
+    // 而 `get('year')` 是普通函数调用——两者都以 "get(" 开头，
+    // 但前者才是要拦的裸 accessor。
+    // 正则必须要求 get 与 `(` 之间有空白，否则会误伤
+    // `const get = (t) => parts.find(...)` 这类取 part 的辅助函数调用。
+    if (/^get\s+[A-Za-z_$][\w$]*\s*\(/.test(trimmed)) {
+      bad.push(`行${n} 方法简写 getter: ${trimmed.slice(0, 80)}`)
+    }
+    if (/^set\s+[A-Za-z_$][\w$]*\s*\(/.test(trimmed)) {
+      bad.push(`行${n} 方法简写 setter: ${trimmed.slice(0, 80)}`)
+    }
   })
   assert.strictEqual(bad.length, 0, '发现未走 patchNative 的属性访问器：\n      ' + bad.join('\n      '))
+})
+
+t('源码级：方法简写守卫本身有效（能抓真裸 accessor、不误报函数调用）', () => {
+  // 这条守卫的正则曾经把 `get('year')`（普通函数调用）误判成「方法简写裸 accessor」，
+  // 导致误报——而误报的闸门比没有闸门更糟：它会让人习惯性忽略这条告警。
+  // 故把正则的行为本身也锁住。
+  const getterRe = /^get\s+[A-Za-z_$][\w$]*\s*\(/
+  const setterRe = /^set\s+[A-Za-z_$][\w$]*\s*\(/
+  // 真方法简写必须被抓到
+  assert.ok(getterRe.test('get userAgent() { return 1 }'), '漏抓真 getter 简写')
+  assert.ok(getterRe.test('get x() {'), '漏抓真 getter 简写')
+  assert.ok(setterRe.test('set value(v) {'), '漏抓真 setter 简写')
+  // 函数调用不能被误报
+  assert.ok(!getterRe.test("get('year')"), '误报函数调用 get(...)')
+  assert.ok(!getterRe.test("get('month') - 1"), '误报函数调用 get(...)')
+  assert.ok(!getterRe.test('getter() {'), '误报名字含 get 的普通函数')
+})
+
+t('源码级：navigator / screen 的伪装不得落在实例上（原型绕过漏洞的回归守卫）', () => {
+  // 检测站的标准手法是从**原型**取原生 getter 再 .call 到实例上。
+  // 实例级遮蔽（def(navigator, ...)）页面直接读确实拿到伪装值，
+  // 但原型从未被改过——一 call 就拿回宿主真身。
+  // 这是本项目此前最大的漏洞，故立一道闸门挡住它复发。
+  //
+  // 注意：这条**只针对 navigator / screen**。
+  // window 的成员（matchMedia / devicePixelRatio / fetch / setTimeout / on* …）
+  // 实测全都是 **window 自己的属性**（window 有 237 个自有可枚举键，
+  // Window.prototype 上一个都没有），所以 window 级伪装留在实例上才是对的，
+  // 挪到原型上反而会多出一个真实 Chrome 没有的属性、并且被自有属性遮蔽而失效。
+  const bad = []
+  src.split('\n').forEach((line, idx) => {
+    const n = idx + 1
+    const trimmed = line.trim()
+    // 注释里提到 def(navigator, ...) 是**说明**（解释为什么不能这么写），不是调用——
+    // 只看真正的代码行，否则这条闸门会被自己的注释触发。
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return
+    if (/def\(\s*navigator\b/.test(trimmed)) {
+      bad.push(`行${n} 实例级伪装 navigator: ${trimmed.slice(0, 90)}`)
+    }
+    if (/def\(\s*window\.screen\b/.test(trimmed)) {
+      bad.push(`行${n} 实例级伪装 screen: ${trimmed.slice(0, 90)}`)
+    }
+    // 反过来：Window.prototype 上不得凭空多出属性——
+    // 真实 Chromium 的 Window.prototype 是空的（window 的成员都在实例上）。
+    if (/defProto\(\s*\(?window as any\)?\.?Window/.test(trimmed)) {
+      bad.push(`行${n} 往 Window.prototype 上加属性: ${trimmed.slice(0, 90)}`)
+    }
+    if (/defineProperty\(\s*(?:\(window as any\)\.)?Window\.prototype/.test(trimmed)) {
+      bad.push(`行${n} 往 Window.prototype 上加属性: ${trimmed.slice(0, 90)}`)
+    }
+  })
+  assert.strictEqual(bad.length, 0,
+    '发现实例级 navigator/screen 伪装，或往 Window.prototype 上加了属性：\n      ' + bad.join('\n      '))
 })
 
 console.log(`\npreloadPatchNative: ${passed} passed, ${process.exitCode ? '有失败' : '0 failed'}`)

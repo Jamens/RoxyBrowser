@@ -7,6 +7,8 @@ import type { Fingerprint, RpaStep } from '../shared/types'
 import type { FingerprintProbe } from '../shared/healthcheck'
 import { isTrackerRequest } from '../shared/trackers'
 import { collectProbe } from './healthProbe'
+import { collectStealthProbe } from './stealthProbe'
+import type { StealthProbe } from '../shared/stealthAudit'
 import { isAbnormalExit, formatCrashLog } from '../shared/crashReason'
 import { canOpenWindow, DEFAULT_MAX_CONCURRENT_WINDOWS } from '../shared/windowLimit'
 import {
@@ -149,6 +151,21 @@ export async function probeFingerprint(profileId: number): Promise<FingerprintPr
   const w = getWindow(profileId)
   if (!w) return null
   return collectProbe(w)
+}
+/**
+ * 反检测审计：在目标环境窗口内采集**外部检测视角**的向量（窗口未运行返回 null）。
+ *
+ * 与 probeFingerprint 的分工：
+ *   - probeFingerprint 拿设定值对撞回读值 → 证明「注入生效了」；
+ *   - probeStealth 采集第三方检测站会读、且会互相交叉验证的那些量
+ *     → 判定「这个浏览器整体像不像一台真实存在的电脑」。
+ *
+ * 后者才是「能不能瞒过浏览器」这个问题的答案。
+ */
+export async function probeStealth(profileId: number): Promise<StealthProbe | null> {
+  const w = getWindow(profileId)
+  if (!w) return null
+  return collectStealthProbe(w)
 }
 /** 已打开窗口的详细信息，供 UI 选择同步对象 */
 export function getRunningWindows(): { id: number; title: string }[] {

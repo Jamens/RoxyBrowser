@@ -1,4 +1,5 @@
 import type { FingerprintProbe } from '../shared/healthcheck'
+import type { StealthProbe } from '../shared/stealthAudit'
 import type { ScanResult } from './fingerprintScan'
 
 /**
@@ -16,6 +17,14 @@ export interface BrowserBridge {
   closeWindow(profileId: number): Promise<void>
   /** 环境体检：在目标窗口内采集实际生效的指纹值，窗口未运行返回 null */
   probeFingerprint(profileId: number): Promise<FingerprintProbe | null>
+  /**
+   * 反检测审计：在目标窗口内采集**外部检测视角**的向量，窗口未运行返回 null。
+   *
+   * 与 probeFingerprint 的区别不是「多采几项」，而是**视角不同**：
+   * 前者拿设定值对撞回读值（自己跟自己比），后者采集第三方检测站会读、
+   * 且会互相交叉验证的那些量（跟真实浏览器比）。详见 shared/stealthAudit.ts。
+   */
+  probeStealth(profileId: number): Promise<StealthProbe | null>
   /** 环境截图：截取运行中环境窗口当前视口，返回 PNG Buffer，窗口未运行抛错 */
   captureScreenshot(profileId: number): Promise<Buffer>
   /** 在线检测站实战验证：导航到第三方检测站并抓回文本与截图，窗口未运行抛错 */

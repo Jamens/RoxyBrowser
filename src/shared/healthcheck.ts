@@ -5,7 +5,7 @@
 // 采集（在窗口里跑 JS 取真实值）在主进程 src/main/healthProbe.ts，
 // 比对与打分在这里，两者通过 FingerprintProbe 结构解耦。
 import type { Fingerprint, OSKind } from './types'
-import { CORE_FONTS, FONT_POOL } from './fingerprint'
+import { CORE_FONTS, FONT_POOL, getTimezoneOffsetMinutes } from './fingerprint'
 import { findCountryGeo, timeZoneToCountry } from './ipLocaleSuggest'
 import { webGpuInfoFor } from './webgpu'
 import { audioProfileFor } from './webaudio'
@@ -241,7 +241,20 @@ export function buildHealthReport(
   cmp('languages', (e.languages || []).join(','), (actual.languages || []).join(','), 8)
   cmp('screen', `${e.screenWidth}×${e.screenHeight}`, `${actual.screenWidth}×${actual.screenHeight}`, 8)
   cmp('timezone', e.timezone, actual.timezone, 12)
-  cmp('tzOffset', e.tzOffset, actual.tzOffset, 8)
+  // 时区偏移必须按**当前时刻**算期望值，不能直接比指纹里存的那个。
+  //
+  // 指纹的 tzOffset 是**生成那一刻**算出来的快照，而目标时区有夏令时
+  // （Europe/London 冬季 0 / 夏季 -60）。若拿快照去比，
+  // 夏令时期间每个环境都会报「时区偏移不符」——一个必然为假的告警。
+  //
+  // 更要命的是：preload 现在也是按时刻动态算偏移的（夏令时正确），
+  // 两边必须用同一个算法、同一个时刻，才能真正对齐。
+  cmp(
+    'tzOffset',
+    e.timezone ? getTimezoneOffsetMinutes(e.timezone) : '',
+    actual.tzOffset,
+    8
+  )
   // WebGL：无 GPU 环境（CI / 禁用软件光栅化）下上下文创建不出来，此时该项不适用、不参与计分，
   // 否则会把「环境限制」误报成「指纹注入失败」。
   {

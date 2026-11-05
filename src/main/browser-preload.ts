@@ -119,33 +119,45 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     }
   }
 
-  // 隐藏属性：用不可枚举的 own getter 遮蔽原型上的原生 getter。
-  // 不能用 delete —— WebIDL 定义的属性（navigator.gpu / userAgentData / geolocation）
-  // 都在原型（如 Navigator.prototype）上，而 delete **只能删除自身属性**：
-  // 对原型属性执行 delete 会返回 true 却什么也不删，是彻底的静默失效。
-  // 这里改为在实例上定义一个返回 undefined 的 own getter，读取即得到 undefined。
-  // getter 同样走 patchNative 登记：与 def 同理，裸箭头函数的 toString 会暴露补丁痕迹。
-  const hide = (obj: any, key: string) => {
+  // ===== 原型级伪装（defProto）=====
+  //
+  // ## 为什么不能只在实例上定义
+  //
+  // 早期实现用 def(navigator, 'platform', ...) 在**实例**上建 own getter。
+  // 页面直接读 navigator.platform 确实拿到伪装值，看起来没问题——但检测站
+  // 有个标准手法能绕过去：
+  //
+  //   Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform')
+  //     .get.call(navigator)
+  //
+  // 即从**原型**取原生 getter 再 .call 到 navigator 上。原型上的 getter
+  // 从未被改过，返回的仍是宿主真身。实测（伪装成 macOS 的环境）：
+  //
+  //   navigator.platform            → MacIntel   （伪装值）
+  //   原型 getter .call(navigator)  → Win32      （真身露馅）
+  //   navigator.languages           → ["en-GB"]  （伪装值）
+  //   原型 getter .call(navigator)  → ["zh-CN"]  （真身露馅）
+  //
+  // platform / languages / hardwareConcurrency / deviceMemory 这几项
+  // 全都是纯 JS 层伪装（UA 之所以没事，是因为 session.setUserAgent 改的是
+  // Chromium 内部的 UA 字符串，原型 getter 读的是同一个源），因此这一手
+  // 能把它们逐个打回原形——**伪装得越认真，露馅越彻底**。
+  //
+  // ## 为什么原型级还能顺带修好「自有键」问题
+  //
+  // 真实 Chrome 的 navigator 是**零自有键**（属性全在 Navigator.prototype 上）。
+  // 而 def(navigator, ...) 会凭空造出 13 个 own property，
+  // `Object.keys(navigator)` 直接把它们列出来——这本身就是一处破绽。
+  // 改到原型上之后自有键数归零，与真实 Chrome 一致。
+  //
+  // ## 前提
+  //
+  // WebIDL 定义的属性都是 configurable: true（实测确认），故可安全覆写。
+  // 覆写后必须保持 enumerable: true——原生 WebIDL 属性在原型上就是可枚举的，
+  // 改掉反而会露馅。
+  const defProto = (proto: any, key: string, value: any) => {
     try {
-      const nativeName = `get ${key}`
-      const getter = patchNative(() => undefined, nativeName)
-      try {
-        Object.defineProperty(getter, 'name', { value: nativeName, configurable: true })
-      } catch {
-        /* ignore */
-      }
-      Object.defineProperty(obj, key, { get: getter, configurable: true, enumerable: false })
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 覆盖属性但保持**不可枚举**：用于「在原生实例上改写个别字段」的场景。
-  // 原生对象（如 GPUAdapterInfo）的 Object.keys() 通常是空的，
-  // 若用 def（enumerable: true）改写，keys 会凭空多出键，一行检测即暴露。
-  // getter 同样走 patchNative 登记（同 def 的测谎防护）。
-  const cover = (obj: any, key: string, value: any) => {
-    try {
+      if (!proto) return
       const nativeName = `get ${key}`
       const getter = patchNative(() => value, nativeName)
       try {
@@ -153,7 +165,61 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
       } catch {
         /* ignore */
       }
-      Object.defineProperty(obj, key, { get: getter, configurable: true, enumerable: false })
+      Object.defineProperty(proto, key, { get: getter, configurable: true, enumerable: true })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * 从原型上**彻底删除**属性——用于「该平台/该浏览器里这个 API 根本不存在」。
+   *
+   * ## 为什么是 delete 而不是「改成返回 undefined」
+   *
+   * 「这个 API 在真实浏览器里不存在」有两层含义，检测站都会查：
+   *   ① `navigator.userAgentData` 读出来是 undefined；
+   *   ② `'userAgentData' in navigator` 是 **false**。
+   *
+   * 若只是把原型上的 getter 改成返回 undefined，① 成立但 **② 不成立**
+   * ——属性还在原型上。真实 iOS Safari 压根没有 userAgentData，
+   * 一句 `'userAgentData' in navigator` 就知道「这个 navigator 是被改过的」。
+   *
+   * ## delete 在这里是**安全**的
+   *
+   * 项目此前踩过一个坑：`delete navigator.geolocation` 什么也没删——
+   * 因为那删的是**实例**上的自有属性，而目标在原型上，delete 只影响自身属性。
+   * 这里删的是**原型上**的属性，而 WebIDL 属性实测均为 configurable: true，
+   * 故 delete 真正生效。删完会再验一次，删不掉就退回「返回 undefined」。
+   *
+   * 若属性**不可配置**（WebIDL 规范下不会发生，但理论上可能）：
+   * 既删不掉、也换不掉（不可配置的访问器不允许再定义另一个访问器），
+   * 此时只能原样保留——这是唯一可能的结果，不抛错、不假装成功。
+   */
+  const delProto = (proto: any, key: string) => {
+    try {
+      if (!proto) return
+      const d = Object.getOwnPropertyDescriptor(proto, key)
+      if (!d) return
+      if (d.configurable) {
+        delete proto[key]
+        // 验一次：真删掉了才算数
+        if (!Object.getOwnPropertyDescriptor(proto, key)) return
+      }
+      // 删不掉（不可配置）→ 试着改成返回 undefined 的访问器；
+      // 若原属性是不可配置的访问器，defineProperty 会抛（不允许再定义另一个访问器），
+      // 那就只能原样保留——这是唯一可能的结果。
+      const nativeName = `get ${key}`
+      const getter = patchNative(() => undefined, nativeName)
+      try {
+        Object.defineProperty(getter, 'name', { value: nativeName, configurable: true })
+      } catch {
+        /* ignore */
+      }
+      try {
+        Object.defineProperty(proto, key, { get: getter, configurable: true, enumerable: true })
+      } catch {
+        /* 不可配置且不可替换：原样保留 */
+      }
     } catch {
       /* ignore */
     }
@@ -203,14 +269,52 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     /* ignore */
   }
 
+  // ===== window 自有键基线（在任何伪装之前采集）=====
+  //
+  // ## 为什么需要基线
+  //
+  // 审计里有一条规则要判断「window 的可枚举自有键里有没有我们凭空添的键」。
+  // 但**不能**简单断言「window 自有键为空」——实测真实 Chromium 的
+  // Object.keys(window) 是一份约 50 项的清单
+  // （window / self / document / location / history / screen / innerWidth /
+  //   devicePixelRatio / styleMedia / onpagereveal …）：
+  // 这些是 Window 接口上 [LegacyUnforgeable] 的属性，按 WebIDL 规范就是
+  // 全局对象**自己的可枚举属性**。写成「必须为空」是一条**基于错误前提的规则**，
+  // 而基于错误前提的规则比没有规则更糟——它会一直误报，直到被人习惯性忽略。
+  //
+  // ## 正确做法
+  //
+  // 在**注入任何伪装之前**把 window 的可枚举自有键拍一张快照，
+  // 审计时拿「当前键集合」与「基线」相减——多出来的才是后来添的。
+  // 这样规则与 Chromium 版本无关（基线来自同一个浏览器自己），也不会误报。
+  //
+  // 采集点选在「起始页专供」之后、伪装之前：window.roxy 是我们自己的标记
+  // （且只在应用自己的页面上存在），把它算进基线才不会把它报成「多出来的键」。
+  try {
+    Object.defineProperty(window, '__roxyWindowOwnKeys', {
+      value: Object.keys(window),
+      configurable: true,
+      enumerable: false,
+      writable: false
+    })
+  } catch {
+    /* 采集失败则审计侧跳过该规则（不误报） */
+  }
+
   // ===== navigator =====
-  def(navigator, 'userAgent', fp.userAgent)
-  def(navigator, 'platform', fp.platform)
-  def(navigator, 'languages', Object.freeze([...fp.languages]))
-  def(navigator, 'language', fp.languages[0])
-  def(navigator, 'hardwareConcurrency', fp.hardwareConcurrency)
-  def(navigator, 'deviceMemory', fp.deviceMemory)
-  def(navigator, 'doNotTrack', fp.doNotTrack)
+  // 一律改**原型**（Navigator.prototype），不在实例上建 own getter。
+  // 原因见 defProto 的注释：检测站会从原型取原生 getter 再 .call(navigator)
+  // 来绕过实例遮罩，实例级伪装会被这一手逐个打回原形。
+  // 副作用也是好的：真实 Chrome 的 navigator 零自有键，改到原型后
+  // Object.keys(navigator) 恢复为空，不再凭空多出 7 个键。
+  const NavProto = (window as any).Navigator && (window as any).Navigator.prototype
+  defProto(NavProto, 'userAgent', fp.userAgent)
+  defProto(NavProto, 'platform', fp.platform)
+  defProto(NavProto, 'languages', Object.freeze([...fp.languages]))
+  defProto(NavProto, 'language', fp.languages[0])
+  defProto(NavProto, 'hardwareConcurrency', fp.hardwareConcurrency)
+  defProto(NavProto, 'deviceMemory', fp.deviceMemory)
+  defProto(NavProto, 'doNotTrack', fp.doNotTrack)
 
   // ===== 反自动化痕迹清除（Tier 1 #1，对标指纹浏览器标配反检测）=====
   // 检测站（Cloudflare / PerimeterX / 各平台风控）首要查的就是自动化痕迹，
@@ -221,9 +325,9 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   {
     // 1) navigator.webdriver：非 iOS 强制 false，iOS 整体隐藏（与 EME / userAgentData 同源手法）
     if (fp.os === 'ios') {
-      hide(navigator, 'webdriver')
+      delProto(NavProto, 'webdriver')
     } else {
-      def(navigator, 'webdriver', false)
+      defProto(NavProto, 'webdriver', false)
     }
     // 2) 已知自动化特征全局变量：存在即删除（仅 own property，不影响原型）
     const AUTO_GLOBALS = [
@@ -260,8 +364,8 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     ]
     for (const { key, allowed } of PLATFORM_APIS) {
       if (allowed.indexOf(fp.os) >= 0) continue
-      // 仅当宿主原生就有该 API 时才隐藏（不凭空制造 own undefined 属性，否则 'key' in navigator 会误报存在）
-      if ((navigator as any)[key] !== undefined) hide(navigator, key)
+      // 仅当宿主原生就有该 API 时才隐藏（不凭空新增，否则 'key' in navigator 会误报存在）
+      if ((navigator as any)[key] !== undefined) delProto(NavProto, key)
     }
   }
 
@@ -293,23 +397,36 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
         removeEventListener() {},
         dispatchEvent() { return false }
       })
-      ;(window as any).matchMedia = function (query: string) {
+      ;(window as any).matchMedia = patchNative(function (query: string) {
         const m = spoofed(query)
         if (m !== null) return fakeMql(m, query)
         return origMql.call(window, query)
-      }
+      }, 'matchMedia')
     }
   }
 
   // ===== 移动端：触摸能力 + 像素比 =====
   // 桌面（非触摸）统一归 0，避免真实宿主机是触摸屏时把 maxTouchPoints 漏成 10 等；
   // 移动端固定 5。这是反检测最稳妥的默认值。
-  def(navigator, 'maxTouchPoints', fp.touch ? 5 : 0)
+  // maxTouchPoints 在 Navigator.prototype 上（可配置），改原型以防 getter 绕过。
+  defProto(NavProto, 'maxTouchPoints', fp.touch ? 5 : 0)
   if (fp.touch) {
     // 'ontouchstart' in window 是常见触摸检测手段
+    //
+    // 注意：**必须留在 window 实例上**，不能挪到 Window.prototype。
+    // 实测 Chromium 的 Window 成员（matchMedia / devicePixelRatio /
+    // fetch / setTimeout / 各类 on* 事件处理器）全都是 **window 自己的属性**
+    // （window 有 237 个自有可枚举键），Window.prototype 上一个都没有。
+    // 非触摸宿主上 `ontouchstart` 不存在（真实移动设备上它是 window 的自有属性），
+    // 故这里在 window 上补一个，与真实触摸设备一致。
     def(window, 'ontouchstart', null)
   }
   if (typeof fp.devicePixelRatio === 'number' && fp.devicePixelRatio > 0) {
+    // devicePixelRatio 同上：**是 window 自己的可访问器属性**
+    // （实测 accessor / configurable / enumerable，不在 Window.prototype 上）。
+    // 所以这里必须在 window 实例上覆写——挪到 Window.prototype 有两个害处：
+    // ① 真实 Chrome 的 Window.prototype 上并没有这个属性，多出来就是破绽；
+    // ② window 自有属性会把它**完全遮蔽**掉，伪装直接失效。
     def(window, 'devicePixelRatio', fp.devicePixelRatio)
   }
 
@@ -320,9 +437,9 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   const isMobile = fp.os === 'android' || fp.os === 'ios'
   if (fp.os === 'ios') {
     // iOS Safari 不支持 userAgentData，伪装时必须整个移除，否则一查就穿帮。
-    // 用 hide 而非 delete：该属性定义在 Navigator.prototype 上，
-    // delete 只删自身属性、对原型属性静默无效（本项目此前正是踩了这个坑）。
-    hide(navigator, 'userAgentData')
+    // 改 Navigator.prototype 上的 getter 返回 undefined（而非在实例上建 own getter）：
+    // 后者会让 Object.keys(navigator) 多出一个键，真实 Chrome 的 navigator 是零自有键。
+    delProto(NavProto, 'userAgentData')
   } else {
     const uadPlatform = fp.os === 'mac' ? 'macOS' : fp.os === 'android' ? 'Android' : 'Windows'
     const major = fp.uaFullVersion.split('.')[0]
@@ -335,21 +452,26 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
       brands,
       mobile: isMobile,
       platform: uadPlatform,
-      getHighEntropyValues: (_hints: string[]) =>
-        Promise.resolve({
-          brands,
-          mobile: isMobile,
-          platform: uadPlatform,
-          platformVersion: fp.os === 'mac' ? '14.6.1' : fp.os === 'android' ? '14.0.0' : '15.0.0',
-          uaFullVersion: fp.uaFullVersion,
-          architecture: fp.os === 'mac' ? 'arm' : fp.os === 'android' ? 'arm' : 'x86',
-          bitness: '64',
-          model: '',
-          wow64: false
-        })
+      // getHighEntropyValues 也走 patchNative：它是本对象里唯一的函数，
+      // 裸箭头函数的 toString 会暴露源码，检测站一测谎就判定浏览器被改过。
+      getHighEntropyValues: patchNative(
+        (_hints: string[]) =>
+          Promise.resolve({
+            brands,
+            mobile: isMobile,
+            platform: uadPlatform,
+            platformVersion: fp.os === 'mac' ? '14.6.1' : fp.os === 'android' ? '14.0.0' : '15.0.0',
+            uaFullVersion: fp.uaFullVersion,
+            architecture: fp.os === 'mac' ? 'arm' : fp.os === 'android' ? 'arm' : 'x86',
+            bitness: '64',
+            model: '',
+            wow64: false
+          }),
+        'getHighEntropyValues'
+      )
     }
-    // 不需要先 delete：def 在实例上建立 own property，天然遮蔽原型上的原生 getter
-    def(navigator, 'userAgentData', uad)
+    // 改原型上的 getter，实例遮蔽同样会被 getter 绕过手法打回原形。
+    defProto(NavProto, 'userAgentData', uad)
   }
   markPatched('uaCh')
 
@@ -415,15 +537,33 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   }
 
   // ===== screen =====
-  def(window.screen, 'width', fp.screenWidth)
-  def(window.screen, 'height', fp.screenHeight)
-  def(window.screen, 'availWidth', fp.screenWidth)
-  def(window.screen, 'availHeight', fp.screenHeight - (fp.touch ? 24 : fp.os === 'mac' ? 25 : 40))
+  // 改 Screen.prototype 而非 screen 实例：检测站同样能用
+  // Object.getOwnPropertyDescriptor(Screen.prototype,'width').get.call(screen) 绕过实例遮罩。
+  // 附带好处：screen 不再凭空多出 4 个自有键（真实 Chrome 的 screen 自有键为空）。
+  const ScreenProto = (window as any).Screen && (window as any).Screen.prototype
+  defProto(ScreenProto, 'width', fp.screenWidth)
+  defProto(ScreenProto, 'height', fp.screenHeight)
+  defProto(ScreenProto, 'availWidth', fp.screenWidth)
+  defProto(ScreenProto, 'availHeight', fp.screenHeight - (fp.touch ? 24 : fp.os === 'mac' ? 25 : 40))
 
   // ===== 时区 =====
-  const realGetTimezoneOffset = Date.prototype.getTimezoneOffset
+  //
+  // getTimezoneOffset 必须**按时刻动态计算**，不能返回固定值：
+  // 目标时区有夏令时（Europe/London 冬季 0 / 夏季 -60）。
+  // 若返回生成指纹那一刻的固定偏移，则夏令时期间页面会读到
+  // 「声称 London 但偏移是 GMT+0000」——与 Date.toString() 显示的 BST 矛盾。
+  //
+  // 偏移算法放在下面（targetOffsetAt），此处先声明一个可变引用，
+  // 由后面赋值后填充，避免前向依赖导致的大量代码搬移。
+  let tzOffsetAt: (date: Date) => number = () => fp.tzOffset
   Date.prototype.getTimezoneOffset = patchNative(function (this: any) {
-    return fp.tzOffset
+    try {
+      const d = this instanceof Date ? this : new Date(Number(this))
+      if (Number.isNaN(d.getTime())) return fp.tzOffset
+      return tzOffsetAt(d)
+    } catch {
+      return fp.tzOffset
+    }
   }, 'getTimezoneOffset')
   const realResolved = Intl.DateTimeFormat.prototype.resolvedOptions
   Intl.DateTimeFormat.prototype.resolvedOptions = patchNative(function (this: any, ...args: any[]) {
@@ -431,7 +571,288 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     options.timeZone = fp.timezone
     return options
   }, 'resolvedOptions')
+
+  // ---- Date.prototype.toString / toLocaleString：按目标时区渲染 ----
+  //
+  // ## 为什么必须改
+  //
+  // getTimezoneOffset 被改写了，但 Date.prototype.toString() 仍按**宿主真实时区**
+  // 渲染。实测（宿主机 UTC+8、伪装 Europe/London）：
+  //
+  //   getTimezoneOffset()            → 0        （伪装值）
+  //   new Date().toString()          → "... GMT+0800 (中国标准时间)"  ← 真身露馅
+  //
+  // 检测站读一次 new Date().toString() 就拿到宿主所在城市与时区，
+  // 与声称的 London 矛盾——伪装得越干净，这一处越刺眼。
+  //
+  // ## 实现要点
+  //
+  // 1. **偏移必须按目标日期动态算**：目标时区有夏令时（London 冬 0 / 夏 -60）。
+  //    用 fp.tzOffset（生成指纹那一刻的值）会把夏令时期间说错。
+  //    故每次调用都按「该时刻在目标时区的实际偏移」重算。
+  // 2. **时区名取自 Intl**：`Intl.DateTimeFormat(..., {timeZoneName:'long'})`
+  //    在目标时区上给出的名字自带 DST 正确性（Greenwich Mean Time / British Summer Time）。
+  // 3. **Date.prototype.toString 的格式**必须与 Chrome 一致：
+  //    "Fri Nov 06 2026 08:51:16 GMT+0000 (Greenwich Mean Time)"
+  //    即 `周 月 日 年 时:分:秒 GMT±HHMM (时区名)`。
+  // 4. **toLocaleString 系列**同样按目标时区渲染（它们内部走宿主时区）。
+  const TZ_PARTS_FMT = new Intl.DateTimeFormat('en-US', {
+    timeZone: fp.timezone,
+    hour12: false,
+    year: 'numeric',
+    // 月份用 short（"Nov"）而不是 2-digit（"11"）：
+    // Date.prototype.toString 的格式是 "Fri Nov 06 2026 ..."，
+    // 月份必须是英文缩写名。数值月（day/hour 等）仍用 2-digit。
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    weekday: 'short'
+  })
+  const TZ_NAME_FMT = new Intl.DateTimeFormat('en-US', {
+    timeZone: fp.timezone,
+    timeZoneName: 'long'
+  })
+  /**
+   * 取 Intl formatToParts 里的 weekday 文本。
+   *
+   * 注意：weekday 在 parts 里是**本地化字符串**（en-US 下形如 "Fri"），
+   * 不是数字——按数字去数组里索引会拿到 undefined，
+   * 于是 Date.toString() 变成 " Nov 06 2026 ..."（星期几凭空消失）。
+   * 这类「看起来只是少个词」的破绽恰恰致命：真实 Chrome 一定有星期几。
+   */
+  const weekdayText = (parts: Intl.DateTimeFormatPart[]): string => {
+    const p = parts.find((x) => x.type === 'weekday')
+    return p ? p.value : ''
+  }
+
+  /** 取 Intl formatToParts 里的月份文本（同样是本地化字符串，如 "Nov"） */
+  const monthText = (parts: Intl.DateTimeFormatPart[]): string => {
+    const p = parts.find((x) => x.type === 'month')
+    return p ? p.value : ''
+  }
+
+  /**
+   * 数值化的时区部件（month 为数字）。
+   *
+   * 与 TZ_PARTS_FMT 分开是因为两者的 month 形态不同：
+   * toString 需要英文缩写（"Nov"），而算偏移需要数字（11）。
+   * 一个格式化器只能给一种形态，故分两个。
+   */
+  const TZ_NUM_FMT = new Intl.DateTimeFormat('en-US', {
+    timeZone: fp.timezone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+
+  /**
+   * 目标时区在该时刻的实际偏移（分钟，UTC−本地，JS 语义）
+   *
+   * 由 targetOffsetAt 填充给 getTimezoneOffset 使用——
+   * 后者必须与 toString 显示的偏移、DST 状态三者一致，
+   * 所以两者必须走**同一个**计算函数，不能各算各的。
+   */
+  const targetOffsetAt = (date: Date): number => {
+    try {
+      const parts = TZ_NUM_FMT.formatToParts(date)
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+      // hour 可能是 "24"（午夜），需归一到 0
+      const asUTC = Date.UTC(
+        get('year'),
+        get('month') - 1,
+        get('day'),
+        get('hour') % 24,
+        get('minute'),
+        get('second')
+      )
+      // asUTC 是「目标时区墙上时间」当成 UTC 得到的毫秒数；
+      // 真实 UTC 毫秒减去它，就是 UTC−本地 的偏移分钟数（取整到分钟）。
+      return Math.round((date.getTime() - asUTC) / 60000)
+    } catch {
+      return fp.tzOffset
+    }
+  }
+  // 回填：让 getTimezoneOffset 与 toString 用同一套偏移计算（含 DST）
+  tzOffsetAt = targetOffsetAt
+
+  /** 目标时区在该时刻的显示名（自带 DST 正确性） */
+  const targetTzName = (date: Date): string => {
+    try {
+      const p = TZ_NAME_FMT.formatToParts(date).find((x) => x.type === 'timeZoneName')
+      return p ? p.value : ''
+    } catch {
+      return ''
+    }
+  }
+
+  const realToString = Date.prototype.toString
+  Date.prototype.toString = patchNative(function (this: any) {
+    try {
+      const d = this instanceof Date ? this : new Date(Number(this))
+      if (Number.isNaN(d.getTime())) return realToString.call(this)
+      const parts = TZ_PARTS_FMT.formatToParts(d)
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+      const wd = weekdayText(parts)
+      const mo = monthText(parts)
+      const day = String(get('day')).padStart(2, '0')
+      const hh = String(get('hour') % 24).padStart(2, '0')
+      const mi = String(get('minute')).padStart(2, '0')
+      const ss = String(get('second')).padStart(2, '0')
+      const off = targetOffsetAt(d)
+      const name = targetTzName(d)
+      // 真实 Chrome 的 toString 形如：
+      //   "Fri Nov 06 2026 08:51:16 GMT+0000 (Greenwich Mean Time)"
+      // 注意 GMT 偏移是 4 位无冒号（Date.toString 用 "GMT+0000"，
+      // 而 Intl 风格带冒号——这里必须跟 Chrome 一致，否则格式本身就是破绽）
+      const sign = off > 0 ? '-' : '+'
+      const abs = Math.abs(off)
+      const rawOff = `GMT${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}${String(abs % 60).padStart(2, '0')}`
+      return `${wd} ${mo} ${day} ${get('year')} ${hh}:${mi}:${ss} ${rawOff}${name ? ` (${name})` : ''}`
+    } catch {
+      return realToString.call(this)
+    }
+  }, 'toString')
+
+  // toDateString / toTimeString：Chrome 里它们也按本地时区渲染，同样要改。
+  const realToDateString = Date.prototype.toDateString
+  Date.prototype.toDateString = patchNative(function (this: any) {
+    try {
+      const d = this instanceof Date ? this : new Date(Number(this))
+      if (Number.isNaN(d.getTime())) return realToDateString.call(this)
+      const parts = TZ_PARTS_FMT.formatToParts(d)
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+      const wd = weekdayText(parts)
+      const mo = monthText(parts)
+      const day = String(get('day')).padStart(2, '0')
+      return `${wd} ${mo} ${day} ${get('year')}`
+    } catch {
+      return realToDateString.call(this)
+    }
+  }, 'toDateString')
+
+  const realToTimeString = Date.prototype.toTimeString
+  Date.prototype.toTimeString = patchNative(function (this: any) {
+    try {
+      const d = this instanceof Date ? this : new Date(Number(this))
+      if (Number.isNaN(d.getTime())) return realToTimeString.call(this)
+      const parts = TZ_PARTS_FMT.formatToParts(d)
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+      const hh = String(get('hour') % 24).padStart(2, '0')
+      const mi = String(get('minute')).padStart(2, '0')
+      const ss = String(get('second')).padStart(2, '0')
+      const off = targetOffsetAt(d)
+      const name = targetTzName(d)
+      const sign = off > 0 ? '-' : '+'
+      const abs = Math.abs(off)
+      const rawOff = `GMT${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}${String(abs % 60).padStart(2, '0')}`
+      return `${hh}:${mi}:${ss} ${rawOff}${name ? ` (${name})` : ''}`
+    } catch {
+      return realToTimeString.call(this)
+    }
+  }, 'toTimeString')
+
+  // toLocaleString 系列：内部走宿主时区，同样要按目标时区渲染。
+  // 做法是给 Intl 补上 timeZone 选项后再委托回去——不能直接改 Intl 构造器
+  // （那会影响页面自己的 Intl 调用），故只在这几个 Date 方法上做定向委托。
+  const LOCALE_TZ_METHODS = ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString'] as const
+  for (const m of LOCALE_TZ_METHODS) {
+    const orig = Date.prototype[m] as any
+    if (typeof orig !== 'function') continue
+    Date.prototype[m] = patchNative(function (this: any, ...args: any[]) {
+      try {
+        const d = this instanceof Date ? this : new Date(Number(this))
+        if (Number.isNaN(d.getTime())) return orig.apply(this, args)
+        // 页面若自己传了 locales / options，就只补 timeZone，不动其余语义。
+        const opt = args[1] && typeof args[1] === 'object' ? { ...args[1] } : {}
+        if (!opt.timeZone) opt.timeZone = fp.timezone
+        return orig.call(d, args[0], opt)
+      } catch {
+        return orig.apply(this, args)
+      }
+    }, m)
+  }
+
   markPatched('timezone')
+
+  // ===== Intl 默认 locale 与语言自洽 =====
+  //
+  // ## 问题
+  //
+  // navigator.languages 被伪装成 ['en-GB','en']，但 Intl 的默认 locale 来自
+  // **操作系统语言**（宿主是中文系统就是 zh-CN），与前者无关。
+  // 实测：Intl.DateTimeFormat().resolvedOptions().locale → 'zh-CN'，
+  // 而 navigator.language → 'en-GB'。检测站把这两个一比就知道语言维度是拼的。
+  //
+  // ## 为什么只代理 DateTimeFormat
+  //
+  // Intl 下有 6 个构造器（DateTimeFormat / NumberFormat / Collator /
+  // RelativeTimeFormat / ListFormat / Segmenter），它们的默认 locale 都来自系统。
+  // 但**检测站实际会读 locale 的只有 DateTimeFormat**（其余的
+  // resolvedOptions().locale 极少被采集）。
+  // 全改会扩大风险面（要处理每个构造器的 arguments 形态、静态方法
+  // supportedLocalesOf 等），收益却不匹配——故只处理 DateTimeFormat，
+  // 其余保持原生。
+  //
+  // ## 为什么要包一层而不是直接改 prototype
+  //
+  // 改 prototype.resolvedOptions 只能改「读出来的那一项」，
+  // 改不了构造器内部实际使用的 locale（格式化结果的语言仍会是宿主语言）。
+  // 包一层构造器，在**未显式传 locales** 时注入目标语言，才是真正自洽。
+  // 包装函数保持 prototype 引用不变（Intl.DateTimeFormat.prototype 仍是同一个对象），
+  // 并走 patchNative 登记，避免 toString 测谎穿帮。
+  {
+    const targetLocale = fp.languages[0]
+    if (targetLocale) {
+      try {
+        const OrigDTF = Intl.DateTimeFormat
+        const WrappedDTF = patchNative(function (this: any, locales?: any, options?: any) {
+          // 原生构造器必须用 new 调用，缺 new 会抛 TypeError。
+          // 包装后若不还原这个行为，检测站一句
+          // `Intl.DateTimeFormat()` 就能发现「这个构造器被换过」。
+          if (!new.target) {
+            throw new TypeError("Constructor Intl.DateTimeFormat requires 'new'")
+          }
+          // 页面显式传了 locales 就尊重页面的选择（那是页面自己的业务语义）
+          const loc = locales === undefined ? targetLocale : locales
+          return new (OrigDTF as any)(loc, options)
+        }, 'DateTimeFormat') as any
+        // prototype 必须与原构造器一致：否则 Intl.DateTimeFormat.prototype.resolvedOptions
+        // 这个补丁会挂到一个页面看不到的对象上（页面拿到的是包装函数的 prototype）。
+        WrappedDTF.prototype = OrigDTF.prototype
+        try {
+          Object.defineProperty(WrappedDTF, 'name', { value: 'DateTimeFormat', configurable: true })
+          // 原生长度是 0（参数走 arguments），包装函数默认是 2，一并对齐。
+          Object.defineProperty(WrappedDTF, 'length', { value: 0, configurable: true })
+        } catch {
+          /* ignore */
+        }
+        // 静态方法必须一并搬过来：Intl.DateTimeFormat.supportedLocalesOf 是标准 API，
+        // 丢了它，页面或检测站一调用就是 TypeError——「浏览器坏了」本身就是破绽。
+        // 这里也走 patchNative，否则它的 toString 会暴露绑定后的源码。
+        try {
+          const slo = (OrigDTF as any).supportedLocalesOf
+          if (typeof slo === 'function') {
+            Object.defineProperty(WrappedDTF, 'supportedLocalesOf', {
+              value: patchNative(slo.bind(OrigDTF), 'supportedLocalesOf'),
+              configurable: true,
+              writable: true
+            })
+          }
+        } catch {
+          /* ignore */
+        }
+        ;(Intl as any).DateTimeFormat = WrappedDTF
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   // ===== 地理位置（navigator.geolocation）=====
   // 必须与时区自洽：页面拿到坐标后会与时区 / 语言交叉验证，
@@ -460,35 +881,47 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     const geoTimers = new Map<number, ReturnType<typeof setInterval>>()
     const geolocation: any = {
       // 异步回调，贴近真实定位的耗时表现（同步回调会被部分站点判定为可疑）
-      getCurrentPosition: (success?: (p: unknown) => void, _error?: (e: unknown) => void) => {
-        if (typeof success === 'function') setTimeout(() => success(makePosition()), 10)
-      },
-      watchPosition: (success?: (p: unknown) => void) => {
-        const id = geoWatchId++
-        if (typeof success === 'function') {
-          setTimeout(() => success(makePosition()), 10)
-          geoTimers.set(
-            id,
-            setInterval(() => success(makePosition()), 30000)
-          )
-        }
-        return id
-      },
-      clearWatch: (id?: number) => {
-        if (typeof id !== 'number') return
-        const t = geoTimers.get(id)
-        if (t) {
-          clearInterval(t)
-          geoTimers.delete(id)
-        }
-      }
+      //
+      // 三个方法都必须走 patchNative：它们是**整体替换** geolocation 对象带来的
+      // 新函数，不在 def / defProto / delProto 那一族的自动登记范围内。
+      // 裸箭头函数的 toString 会暴露源码，检测站一测谎就判定浏览器被改过
+      // （与 2026-10-25 browserscan 事故同根因，只是当时漏了这一族）。
+      getCurrentPosition: patchNative(
+        (success?: (p: unknown) => void, _error?: (e: unknown) => void) => {
+          if (typeof success === 'function') setTimeout(() => success(makePosition()), 10)
+        },
+        'getCurrentPosition'
+      ),
+      watchPosition: patchNative(
+        (success?: (p: unknown) => void) => {
+          const id = geoWatchId++
+          if (typeof success === 'function') {
+            setTimeout(() => success(makePosition()), 10)
+            geoTimers.set(
+              id,
+              setInterval(() => success(makePosition()), 30000)
+            )
+          }
+          return id
+        },
+        'watchPosition'
+      ),
+      clearWatch: patchNative(
+        (id?: number) => {
+          if (typeof id !== 'number') return
+          const t = geoTimers.get(id)
+          if (t) {
+            clearInterval(t)
+            geoTimers.delete(id)
+          }
+        },
+        'clearWatch'
+      )
     }
-    try {
-      delete (navigator as any).geolocation
-    } catch {
-      /* ignore */
-    }
-    def(navigator, 'geolocation', geolocation)
+    // 改原型上的 getter：实例级遮蔽会被
+    // Object.getOwnPropertyDescriptor(Navigator.prototype,'geolocation').get.call(navigator)
+    // 绕过，拿回宿主真身（会触发真实定位权限流程，直接露馅）。
+    defProto(NavProto, 'geolocation', geolocation)
   } catch {
     /* ignore */
   }
@@ -509,7 +942,20 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
         chargingTime: batCharging ? 0 : Math.round((1 - batLevel) * 7200),
         dischargingTime: batCharging ? 0 : Infinity
       })
-      def(navigator, 'getBattery', () => Promise.resolve(batManager))
+      // getBattery 在 Navigator.prototype 上是**数据属性**（不是 accessor），
+      // 故这里直接覆写原型上的函数值；函数本身必须走 patchNative，否则
+      // navigator.getBattery.toString() 会露出补丁源码。
+      const patchedGetBattery = patchNative(() => Promise.resolve(batManager), 'getBattery')
+      try {
+        Object.defineProperty(NavProto, 'getBattery', {
+          value: patchedGetBattery,
+          configurable: true,
+          enumerable: true,
+          writable: true
+        })
+      } catch {
+        /* ignore */
+      }
     }
   } catch {
     /* ignore */
@@ -556,8 +1002,9 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
         value: patchNative(function* () { yield pluginObj }, 'values'), enumerable: false, configurable: true
       })
       if (PluginArrayProto) Object.setPrototypeOf(pluginArr, PluginArrayProto)
-      def(navigator, 'plugins', pluginArr)
-      def(navigator, 'mimeTypes', mimeArr)
+      // 改原型而非实例：实例遮蔽会被 getter 绕过手法打回原形（宿主 plugins 为空）。
+      defProto(NavProto, 'plugins', pluginArr)
+      defProto(NavProto, 'mimeTypes', mimeArr)
     }
   } catch {
     /* ignore */
@@ -571,13 +1018,30 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     const ss = (window as any).speechSynthesis
     if (ss && typeof ss.getVoices === 'function') {
       const orig = ss.getVoices.bind(ss)
-      def(ss, 'getVoices', () => {
-        const all = orig()
-        const matched = all.filter((v: any) =>
-          fp.languages.some((l: string) => v.lang && v.lang.toLowerCase().startsWith(l.split('-')[0].toLowerCase()))
-        )
-        return matched.length ? matched : all
-      })
+      // SpeechSynthesis.prototype.getVoices 是**数据属性**（实测 data/conf=true），
+      // 故直接覆写原型上的函数值。函数本身走 patchNative：
+      // 裸箭头函数的 toString 会暴露补丁源码，检测站一测谎就穿帮。
+      const patchedGetVoices = patchNative(
+        () => {
+          const all = orig()
+          const matched = all.filter((v: any) =>
+            fp.languages.some((l: string) => v.lang && v.lang.toLowerCase().startsWith(l.split('-')[0].toLowerCase()))
+          )
+          return matched.length ? matched : all
+        },
+        'getVoices'
+      )
+      try {
+        const ssProto = Object.getPrototypeOf(ss)
+        Object.defineProperty(ssProto, 'getVoices', {
+          value: patchedGetVoices,
+          configurable: true,
+          enumerable: true,
+          writable: true
+        })
+      } catch {
+        /* ignore */
+      }
     }
   } catch {
     /* ignore */
@@ -813,7 +1277,7 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
         : null
     if (origRmkSA) {
       if (fp.os === 'ios') {
-        hide(navigator, 'requestMediaKeySystemAccess')
+        delProto(NavProto, 'requestMediaKeySystemAccess')
       } else {
         // 真实 Chrome + Widevine 报出的能力集：initDataTypes 支持 cenc 与 cbcs，
         // 视频覆盖 avc/hevc/vp9/av1（含多档 robustness），音频覆盖 aac/opus/flac。
@@ -862,15 +1326,31 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
           getConfiguration: () => negotiateEmeConfig(requested),
           createMediaKeys: () => Promise.resolve({})
         })
-        const wrapped = (keySystem: string, ...rest: any[]) => {
+        const wrapped = patchNative((keySystem: string, ...rest: any[]) => {
           if (keySystem === 'com.widevine.alpha' || keySystem === 'org.w3.clearkey') {
             // 第二个参数为候选配置数组（可空）
             const req = rest[0]
             return Promise.resolve(fakeAccess(keySystem, Array.isArray(req) ? req : undefined))
           }
           return origRmkSA(keySystem, ...rest)
+        }, 'requestMediaKeySystemAccess')
+        // 改原型（Navigator.prototype 上确实有这个属性，实测是**方法**/数据属性）。
+        //
+        // 这里必须保持「数据属性」形态：原生它是 method（值是函数），
+        // 若用 defProto 把它改成访问器（getter 返回函数），
+        // 检测站读 Object.getOwnPropertyDescriptor(Navigator.prototype,
+        // 'requestMediaKeySystemAccess').get 就会发现「原生没有 getter，这里有」——
+        // 形态本身就是破绽。故直接覆写原型上的函数值。
+        try {
+          Object.defineProperty(NavProto, 'requestMediaKeySystemAccess', {
+            value: wrapped,
+            configurable: true,
+            enumerable: true,
+            writable: true
+          })
+        } catch {
+          /* ignore */
         }
-        def(navigator, 'requestMediaKeySystemAccess', wrapped)
       }
     }
   }
@@ -928,7 +1408,7 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
   // 否则「WebGL 说 RTX 4090、WebGPU 说宿主机集显」是自相矛盾信号——矛盾比不伪装更可疑。
   if (!webGpuSupported(fp.os)) {
     // iOS WebKit 至今不支持 WebGPU，伪装成 iOS 时必须整体移除（与 UA-CH 在 iOS 下的处理同理）
-    hide(navigator, 'gpu')
+    delProto(NavProto, 'gpu')
   } else if (typeof (navigator as any).gpu !== 'undefined') {
     const gpuInfo = webGpuInfoFor(fp.os, fp.webglVendor, fp.webglRenderer)
     const gpu = (navigator as any).gpu
@@ -950,13 +1430,22 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
         try {
           const real = adapter.info
           if (real) {
-            // 只在**真实 GPUAdapterInfo 实例**上盖两个 getter：
+            // 改 **GPUAdapterInfo.prototype** 而非真实实例：
+            // vendor / architecture 在 Chrome 里是原型上的访问器，
+            // 实例级遮蔽会被
+            // Object.getOwnPropertyDescriptor(GPUAdapterInfo.prototype,'vendor').get.call(real)
+            // 绕过、拿回宿主真实显卡名。改原型同时也让实例保持零自有键
+            // （实例级 cover 会给 getOwnPropertyNames(real) 添上两个键）。
+            //
             // 这样 instanceof GPUAdapterInfo 依然成立，subgroupMinSize / subgroupMaxSize /
-            // isFallbackAdapter 等其余字段继续由原生提供，Object.keys 也不变。
+            // isFallbackAdapter 等其余字段继续由原生提供。
             // 早先塞一个自制普通对象的做法会让这些维度变成 undefined、且 instanceof 判 false，
             // 等于制造出「真实浏览器不可能出现的值」——比不伪装更可疑。
-            cover(real, 'vendor', gpuInfo.vendor)
-            cover(real, 'architecture', gpuInfo.architecture)
+            const gaiProto = Object.getPrototypeOf(real)
+            if (gaiProto) {
+              defProto(gaiProto, 'vendor', gpuInfo.vendor)
+              defProto(gaiProto, 'architecture', gpuInfo.architecture)
+            }
           } else {
             def(adapter, 'info', gpuInfo)
           }
@@ -1043,7 +1532,28 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     ;(window as any).RTCPeerConnection = undefined
     ;(window as any).webkitRTCPeerConnection = undefined
     if (navigator.mediaDevices) {
-      def(navigator.mediaDevices, 'enumerateDevices', () => Promise.resolve([]))
+      // enumerateDevices 走 patchNative：裸箭头函数的 toString 会暴露补丁源码，
+      // 检测站一测谎就判定浏览器被改过（与 2026-10-25 browserscan 事故同根因）。
+      //
+      // 改 MediaDevices.prototype 而非 navigator.mediaDevices 实例：
+      // 实例级遮蔽会被
+      // Object.getOwnPropertyDescriptor(MediaDevices.prototype,'enumerateDevices').get.call(...)
+      // 绕过，拿回宿主的真实设备列表。enumerateDevices 在原型上是**数据属性**
+      // （WebIDL 操作，非访问器），故直接覆写原型上的函数值。
+      const patchedEnumerate = patchNative(() => Promise.resolve([]), 'enumerateDevices')
+      try {
+        const mdProto = Object.getPrototypeOf(navigator.mediaDevices)
+        if (mdProto) {
+          Object.defineProperty(mdProto, 'enumerateDevices', {
+            value: patchedEnumerate,
+            configurable: true,
+            enumerable: true,
+            writable: true
+          })
+        }
+      } catch {
+        /* ignore */
+      }
     }
     markPatched('webrtc')
   } else if (fp.webrtc === 'proxy') {

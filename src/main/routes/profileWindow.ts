@@ -8,6 +8,7 @@ import type { AuthedRequest } from '../authScope'
 import type { BrowserBridge } from '../browserBridge'
 import { getEnvExpiresAt } from '../../shared/envExpiry'
 import { buildHealthReport, healthItemLabel, checkConsistency, type HealthReport } from '../../shared/healthcheck'
+import { auditStealth, summarizeFindings, formatStealthReport } from '../../shared/stealthAudit'
 import { diffBaseline, regressedItems, regressedText, MIN_SAMPLES, type HealthBaseline } from '../../shared/healthBaseline'
 import { proposeFixes, mergePatches, fixSummary } from '../../shared/healthFix'
 import { effectiveKeysFor, planBatchFix, batchFixSummary, type BatchFixInput } from '../../shared/fixBatch'
@@ -122,6 +123,47 @@ export function registerProfileWindowRoutes(router: Router, deps: ProfileWindowR
       ? proposeFixes(p.fingerprint as unknown as Partial<Fingerprint>, proxyCountry, failed)
       : []
     res.json({ ...report, fixes: proposals })
+  })
+
+  // ===== 反检测审计（外部检测视角） =====
+  //
+  // 与上面的 healthcheck 是**两个视角**，不是同一个功能的两份实现：
+  //   healthcheck —— 自己出题自己判卷：设定值 vs 窗口回读值，证明「注入生效」；
+  //   stealthAudit —— 外部检测站视角：采集第三方会读、且互相交叉验证的向量，
+  //                  判定「这个浏览器整体像不像一台真实存在的电脑」。
+  //
+  // 「能不能瞒过浏览器」是后者才能回答的问题：填了 en-GB、窗口里读到 en-GB，
+  // 体检全绿，但 appVersion 露着宿主机的 Windows 字符串、iframe 里读到真身 UA、
+  // 被改的 matchMedia 暴露补丁源码 —— 检测站一眼就看出是改过的，体检却看不见。
+  router.post('/profiles/:id/stealth-audit', authMiddleware, async (req: AuthedRequest, res: Response) => {
+    const repo = getDs().getRepository(ProfileEntity)
+    const p = await repo.findOne({ where: { id: Number(req.params.id), ...ownerScope(req) } })
+    if (!p) return res.status(404).json({ message: '环境不存在' })
+    if (p.deletedAt) return res.status(400).json({ message: '该环境已删除，请先从回收站恢复' })
+    const bridge = getBridge()
+    if (!bridge) return res.status(500).json({ message: '浏览器引擎未就绪' })
+    if (p.status !== 'running') return res.status(400).json({ message: '请先打开环境窗口，再执行反检测审计' })
+    const probe = await bridge.probeStealth(p.id)
+    if (!probe) return res.status(400).json({ message: '环境窗口未运行，请打开后再审计' })
+    const fp = p.fingerprint as unknown as Fingerprint
+    const findings = auditStealth({
+      expected: {
+        os: fp.os,
+        userAgent: fp.userAgent,
+        platform: fp.platform,
+        languages: fp.languages || [],
+        timezone: fp.timezone,
+        screenWidth: fp.screenWidth,
+        screenHeight: fp.screenHeight,
+        hardwareConcurrency: fp.hardwareConcurrency,
+        deviceMemory: fp.deviceMemory,
+        devicePixelRatio: fp.devicePixelRatio,
+        touch: fp.touch
+      },
+      probe
+    })
+    const summary = summarizeFindings(findings)
+    res.json({ findings, summary, report: formatStealthReport(findings, summary), probe })
   })
 
   // ===== 一键修复一致性 =====

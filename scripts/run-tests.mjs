@@ -80,7 +80,9 @@ const COMPILES = [
   { name: 'localGuard', files: ['src/shared/localRequestGuard.ts'], out: '.tmp_lg' },
   // 出口 IP → 语言 / 时区推导：与体检（healthcheck）同源，
   // 故两者编到同一目录——测试要验证「按出口填完，体检不报红」。
-  { name: 'ipLocale', files: ['src/shared/ipLocaleSuggest.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/webglOsMatch.ts', 'src/shared/fingerprint.ts', 'src/shared/trackers.ts', 'src/shared/webgpu.ts', 'src/shared/webaudio.ts'], out: '.tmp_ip', extra: ['--lib', 'es2020,dom'] }
+  { name: 'ipLocale', files: ['src/shared/ipLocaleSuggest.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/webglOsMatch.ts', 'src/shared/fingerprint.ts', 'src/shared/trackers.ts', 'src/shared/webgpu.ts', 'src/shared/webaudio.ts'], out: '.tmp_ip', extra: ['--lib', 'es2020,dom'] },
+  // 反检测审计判定：零 import 纯函数（外部检测视角的矛盾判定）
+  { name: 'stealthAudit', files: ['src/shared/stealthAudit.ts'], out: '.tmp_sa' }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -143,7 +145,10 @@ const TESTS = [
   { name: 'localRequestGuard', file: 'tests/localRequestGuard.test.cjs' },
   // 出口 IP → 语言 / 时区推导：一国多时区必须按地区细分；推导结果必须与体检
   // 判定口径同源（填完体检不报红），且国家表满足「语言地区码 == 国码」等不变式。
-  { name: 'ipLocaleSuggest', file: 'tests/ipLocaleSuggest.test.cjs' }
+  { name: 'ipLocaleSuggest', file: 'tests/ipLocaleSuggest.test.cjs' },
+  // 反检测审计判定：既测「矛盾能被抓到」，也测「自洽不误报」——
+  // 一个到处误报的审计等于没有审计，这两条同样重要。
+  { name: 'stealthAudit', file: 'tests/stealthAudit.test.cjs' }
 ]
 
 function run(bin, args, label) {
