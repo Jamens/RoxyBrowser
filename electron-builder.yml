@@ -13,6 +13,8 @@ files:
   # AI Agent Support 模式的知识源（产品文档），打包后安装版才能检索到
   # README = 架构/目录/命令；FEATURES = 功能详细说明，两者都是知识源，缺一不可
   - README.md
+  # 英文 README 仅随包分发，不加入上方知识源（中英双份同时索引会产生重复片段）
+  - README.en.md
   - FEATURES.md
   # 更新记录（仅随包分发，不参与检索）
   - CHANGELOG.md
