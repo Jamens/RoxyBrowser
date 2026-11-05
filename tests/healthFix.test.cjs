@@ -4,6 +4,7 @@ const assert = require('assert')
 const { proposeFixes, mergePatches, fixSummary } = require('../.tmp_hf/shared/healthFix.js')
 const { uaOs } = require('../.tmp_hf/shared/healthcheck.js')
 const { buildHealthReport } = require('../.tmp_hf/shared/healthcheck.js')
+const { COUNTRY_GEO } = require('../.tmp_hf/shared/ipLocaleSuggest.js')
 
 let pass = 0
 function t(name, fn) {
@@ -49,10 +50,18 @@ t('未绑代理 → 不可修且说明原因', () => {
 })
 
 t('代理国家不在内置表 → 不可修且如实说明（不瞎猜时区）', () => {
-  const r = proposeFixes(fp(), 'Kazakhstan', ['tzVsProxy'])
+  // 动态挑一个**确实**不在内置表里的国家。
+  // 写死具体国名是脆弱的：国家表会随覆盖范围扩充，一旦把那个国家加进去，
+  // 本用例就会从「不可修」变成「可修」而失败——但那其实是**行为变正确了**，
+  // 不是回归。动态选取才能让用例始终测它真正想测的东西。
+  const known = new Set(COUNTRY_GEO.map((g) => g.nameEn.toLowerCase()))
+  const unknownCountry = ['Bolivia', 'Venezuela', 'Tanzania', 'Zimbabwe', 'Paraguay']
+    .find((c) => !known.has(c.toLowerCase()))
+  assert.ok(unknownCountry, '内置表已覆盖全部候选国，无法构造「未知国家」样本')
+  const r = proposeFixes(fp(), unknownCountry, ['tzVsProxy'])
   const p = r.find((x) => x.key === 'tzVsProxy')
   assert.strictEqual(p.fixable, false, '不该给一个猜出来的时区')
-  assert.ok(p.reason.includes('Kazakhstan'), p.reason)
+  assert.ok(p.reason.includes(unknownCountry), p.reason)
 })
 
 t('时区已是代理国家对应值 → 不可修并提示可能是代理数据有误', () => {

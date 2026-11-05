@@ -167,8 +167,46 @@ t('指纹 Tab 有「一般只需选一个预设或点一键随机指纹」的提
   assert.ok(/一般只需选一个预设/.test(code), '缺少新建态的操作提示语')
 })
 
+// ===== 6. 代理选择驱动按钮可用性：必须走 state，不能读 form.getFieldValue =====
+//
+// 「按出口 IP 填充语言 / 时区」按钮的 disabled 取决于当前选中的代理。
+// 「绑定代理 IP」那个 Select **没有 name**，因而不被 Form.Item 订阅——
+// `form.setFieldValue('proxyId', v)` 改了 store 却**不触发重渲染**。
+// 于是 `disabled={!form.getFieldValue('proxyId')}` 永远按首次渲染时的旧值算，
+// 表现为「选完代理，按钮还是灰的，点不动」。
+//
+// 这个坑不会让 typecheck / build 失败，tsc 对「读 store 值做 UI 判断」完全失明，
+// 且现象是「功能像是没实现」，很容易被误判成后端问题。故必须锁死。
+t('代理选择用 state 驱动按钮可用性，而非直接读 form.getFieldValue', () => {
+  assert.ok(
+    /const\s*\[proxyId,\s*setProxyId\]\s*=\s*useState/.test(code),
+    '缺少 proxyId state——按钮的可用性必须是 state 驱动的'
+  )
+  // 先剥掉注释：说明文字里往往**正例**地写着 `disabled={!form.getFieldValue(...)}`
+  // 来解释坑在哪，直接对全文匹配会把注释当成代码，断言永远失败。
+  const codeNoComment = code.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const btn = codeNoComment.match(/<Button[^>]*onClick=\{suggestFromIp\}[\s\S]{0,200}?>/)
+  assert.ok(btn, '找不到「按出口 IP 填充语言 / 时区」按钮')
+  assert.ok(
+    /disabled=\{!proxyId\}/.test(btn[0]),
+    `按钮的 disabled 没有用 state：${btn[0].replace(/\s+/g, ' ').slice(0, 160)}\n` +
+      '        用 form.getFieldValue("proxyId") 的话，选中代理后按钮不会解禁。'
+  )
+  assert.ok(
+    !/disabled=\{!form\.getFieldValue\('proxyId'\)\}/.test(codeNoComment),
+    '按钮仍用 form.getFieldValue 判断可用性——选完代理按钮不会解禁'
+  )
+})
+
+t('代理 Select 的 onChange 同步 proxyId state', () => {
+  assert.ok(
+    /onChange=\{\(v\)\s*=>\s*\{[\s\S]{0,200}?setProxyId\(v/.test(code),
+    '代理 Select 的 onChange 没有同步 setProxyId'
+  )
+})
+
 console.log(`\n${passed} 项断言通过`)
-if (passed < 9) {
+if (passed < 11) {
   console.error('断言数异常偏少，检查测试是否被意外跳过')
   process.exitCode = 1
 }

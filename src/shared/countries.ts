@@ -11,7 +11,18 @@ export interface CountryDef {
   nameEn: string
   /** IANA 时区，如 America/New_York */
   timezone: string
-  /** 该国默认界面语言；不在支持列表内的国家统一回落 en-US */
+  /**
+   * 该国默认**界面语言**；不在支持列表内的国家统一回落 en-US。
+   *
+   * ⚠️ **这是界面语言，不是浏览器指纹语言。**
+   * 二者常被混用，但判定口径完全��同：
+   * 界面语言只有 4 种（zh-CN / en-US / ja-JP / de-DE），供界面文案切换；
+   * 指纹语言要求**地区码 == 国家码**（en-GB / en-AU / ru-RU / pt-BR …），
+   * 因为体检判的是「`navigator.languages[0]` 的地区码 == 时区所属国码」。
+   * 若拿本字段去填指纹，英国 / 澳洲 / 俄罗斯等国的环境会**永远判不一致**，
+   * 且一键修复也修不好（目标值同样是 en-US）。
+   * 指纹相关一律走 `shared/ipLocaleSuggest.ts` 的 `browserLanguage`。
+   */
   language: LocaleCode
 }
 
@@ -42,29 +53,13 @@ export function findCountry(code: string | undefined | null): CountryDef | undef
 }
 
 /**
- * 按 **代码 / 中文名 / 英文名** 模糊匹配国家（大小写不敏感）。
+ * 取国家对应的 IANA 时区，未知国家回落 Asia/Shanghai。
  *
- * ## 为什么需要这个函数
- *
- * `findCountry` 只认**代码**（走 COUNTRY_MAP），但代理检测拿到的 `country` 是
- * ip-api 返回的**英文名**（"United States"），两者根本对不上——
- * 直接拿 `findCountry(p.country)` 查永远查不到，会让「出口失配」判定恒为空。
- *
- * `healthFix` 的 `resolveProxyCountry` 早就需要这个宽松匹配（它要靠代理国家反推时区），
- * 但当时写成了**私有函数**，别处无从复用——于是每个「按代理国家反查」的地方
- * 都会各写一套匹配规则，最后口径必然漂移
- * （体检说"不一致"、代理列表说"一致"，用户只会怀疑工具坏了）。
- *
- * 现改为共享实现：`healthFix` 与 `proxyDrift` 都走它，判定口径只有一处。
+ * **仅供界面层使用**（按用户选的界面国家显示当地时间、主题按时段切换）。
+ * 指纹相关的时间区推导走 `shared/ipLocaleSuggest.ts` 的国家地理档案——
+ * 那份档案覆盖 69 国、支持一国多时区，且与体检判定同源。
+ * 本表只有 16 国且一国一时区，用它推指纹会得到错误的时区。
  */
-export function findCountryLoose(raw: string | undefined | null): CountryDef | undefined {
-  const s = String(raw || '').trim()
-  if (!s) return undefined
-  const lower = s.toLowerCase()
-  return COUNTRIES.find((c) => [c.code, c.name, c.nameEn].some((n) => String(n).toLowerCase() === lower))
-}
-
-/** 取国家对应的 IANA 时区，未知国家回落 Asia/Shanghai */
 export function countryTimezone(code: string | undefined | null): string {
   return findCountry(code)?.timezone || 'Asia/Shanghai'
 }

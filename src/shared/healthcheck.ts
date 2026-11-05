@@ -6,7 +6,7 @@
 // 比对与打分在这里，两者通过 FingerprintProbe 结构解耦。
 import type { Fingerprint, OSKind } from './types'
 import { CORE_FONTS, FONT_POOL } from './fingerprint'
-import { COUNTRIES } from './countries'
+import { findCountryGeo, timeZoneToCountry } from './ipLocaleSuggest'
 import { webGpuInfoFor } from './webgpu'
 import { audioProfileFor } from './webaudio'
 import { webglMatchesOs } from './webglOsMatch'
@@ -177,15 +177,30 @@ function langRegion(lang: string): string {
 }
 
 function tzToCountry(tz: string) {
-  return COUNTRIES.find((c) => c.timezone === tz)
+  // 反查走 ipLocaleSuggest 的国家档案表，而不是只认「一国一时区」的旧表：
+  // 美国 / 加拿大 / 澳大利亚 / 俄罗斯都是一国多时区，用旧表反查时
+  // `America/Los_Angeles` 这类时区会查不到国家 → 该项被标 skipped →
+  // **体检等于把「时区 ↔ 代理国家是否匹配」这项检查静默关掉了**，
+  // 而这恰恰是最容易露馅的一项。
+  return timeZoneToCountry(tz)
 }
 
-/** 代理检测回写的国家是 ip-api 的英文名，可能也可能是中文名或国码，故宽容匹配 */
+/**
+ * 代理检测回写的国家是 ip-api 的英文名，可能也可能是中文名或国码，故宽容匹配。
+ *
+ * 跨表比较（代理给的英文名 vs 时区反查出的档案名）不能只比字符串——
+ * 同一个国在不同数据源里写法不同（"USA" / "United States"），
+ * 字符串不等会被判成「时区与代理国家不一致」，而用户完全看不出原因。
+ * 故只要两边指向同一份国家档案就算一致。
+ */
 function sameCountry(a: string, b: string): boolean {
   const x = s(a).trim().toLowerCase()
   const y = s(b).trim().toLowerCase()
   if (!x || !y) return false
-  return x === y
+  if (x === y) return true
+  const ga = findCountryGeo(x)
+  const gb = findCountryGeo(y)
+  return !!ga && !!gb && ga.code === gb.code
 }
 
 export interface BuildReportOptions {

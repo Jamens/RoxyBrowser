@@ -77,7 +77,10 @@ const COMPILES = [
   // 通知中心共享逻辑：零 import 纯函数（白名单 / 订阅语义 / 元信息自洽）
   { name: 'notifications', files: ['src/shared/notifications.ts'], out: '.tmp_nt' },
   // 本地 API 请求守卫：零 import 纯函数（Host / Origin / nonce 三层判定）
-  { name: 'localGuard', files: ['src/shared/localRequestGuard.ts'], out: '.tmp_lg' }
+  { name: 'localGuard', files: ['src/shared/localRequestGuard.ts'], out: '.tmp_lg' },
+  // 出口 IP → 语言 / 时区推导：与体检（healthcheck）同源，
+  // 故两者编到同一目录——测试要验证「按出口填完，体检不报红」。
+  { name: 'ipLocale', files: ['src/shared/ipLocaleSuggest.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/webglOsMatch.ts', 'src/shared/fingerprint.ts', 'src/shared/trackers.ts', 'src/shared/webgpu.ts', 'src/shared/webaudio.ts'], out: '.tmp_ip', extra: ['--lib', 'es2020,dom'] }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -137,7 +140,10 @@ const TESTS = [
   { name: 'notifications', file: 'tests/notifications.test.cjs' },
   // 本地 API 请求守卫：Host 必须回环 / Origin 白名单 / Origin=null 必带 nonce。
   // 拒绝时不得回 CORS 允许头——这条最容易被后人"顺手优化"掉。
-  { name: 'localRequestGuard', file: 'tests/localRequestGuard.test.cjs' }
+  { name: 'localRequestGuard', file: 'tests/localRequestGuard.test.cjs' },
+  // 出口 IP → 语言 / 时区推导：一国多时区必须按地区细分；推导结果必须与体检
+  // 判定口径同源（填完体检不报红），且国家表满足「语言地区码 == 国码」等不变式。
+  { name: 'ipLocaleSuggest', file: 'tests/ipLocaleSuggest.test.cjs' }
 ]
 
 function run(bin, args, label) {

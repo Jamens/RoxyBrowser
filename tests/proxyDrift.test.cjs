@@ -75,7 +75,11 @@ t('IP 前后有空白时按去空白后比较', () => {
 })
 
 // ---------- findMisalignedProfiles ----------
-
+//
+// 判定口径（2026-11-05 起）：**时区所属国家** == 代理出口国家。
+// 早先是「时区精确等于该国唯一时区」，那会把「美国代理 + 芝加哥时区」判成失配——
+// 那是**误报**：芝加哥就是美国的时区，用它是完全正确的配置。
+// 该口径与体检 `tzVsProxy` 保持同源，多时区国家的正确时区都能被认出来。
 const profiles = [
   { id: 1, name: '纽约', proxyId: 10, timezone: 'America/New_York' },
   { id: 2, name: '芝加哥', proxyId: 10, timezone: 'America/Chicago' },
@@ -86,18 +90,25 @@ const profiles = [
 t('代理国家用英文名也能匹配（ip-api 返回的就是英文名）', () => {
   // 回归：早先用 findCountry（只认代码）导致这里恒为空数组 —— 失配永远检测不到
   const r = findMisalignedProfiles({ id: 10, country: 'United States' }, profiles)
-  assert.strictEqual(r.length, 2, '芝加哥 + 东京应被判失配')
-  assert.deepStrictEqual(r.map((x) => x.id).sort(), [2, 3])
+  assert.strictEqual(r.length, 1, '只有东京（日本）该判失配')
+  assert.deepStrictEqual(r.map((x) => x.id).sort(), [3])
 })
 
 t('代理国家用代码也能匹配', () => {
   const r = findMisalignedProfiles({ id: 10, country: 'US' }, profiles)
-  assert.strictEqual(r.length, 2)
+  assert.strictEqual(r.length, 1)
 })
 
 t('代理国家用中文名也能匹配', () => {
   const r = findMisalignedProfiles({ id: 10, country: '美国' }, profiles)
-  assert.strictEqual(r.length, 2)
+  assert.strictEqual(r.length, 1)
+})
+
+t('多时区国家的同国时区不算失配（芝加哥也是美国的时区）', () => {
+  // 这条是「按国家判定」的核心价值：旧口径把芝加哥判成失配，是纯粹的误报——
+  // 用户会为此去改一个本来就正确的时区。
+  const r = findMisalignedProfiles({ id: 10, country: 'United States' }, profiles)
+  assert.ok(!r.some((x) => x.id === 2), '芝加哥属美国，不该算失配')
 })
 
 t('时区与代理国家一致的环境不算失配', () => {

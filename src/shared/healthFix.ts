@@ -20,7 +20,7 @@
 // 故仅支持 windows ↔ mac 的双向替换（该段替换是 uaOs 解析的严格反向），其余明确返回不可修。
 
 import type { Fingerprint, OSKind } from './types'
-import { countryTimezone, countryLanguage, findCountryLoose, COUNTRIES } from './countries'
+import { findCountryGeo, timeZoneToCountry } from './ipLocaleSuggest'
 import { uaOs } from './healthcheck'
 
 export type FixKey = 'tzVsProxy' | 'langVsTz' | 'uaVsOs'
@@ -77,16 +77,17 @@ function replaceUaPlatform(ua: string, target: OSKind): string | null {
   return next === ua ? null : next
 }
 
-/** 把代理国家名（ip-api 英文名 / 中文名 / 国码）解析成 CountryDef */
+/** 把代理国家名（ip-api 英文名 / 中文名 / 国码）解析成国家档案 */
 /**
- * 代理国家 → 国家定义。
+ * 代理国家 → 国家档案。
  *
  * 代理检测存的是 ip-api 的**英文名**（"United States"），不是代码，
- * 故必须用宽松匹配（代码 / 中文名 / 英文名）。
- * 与 `shared/proxyDrift.ts` 共用同一个实现，避免两处口径漂移。
+ * 故必须用宽松匹配（代码 / 中文名 / 英文名 / 别名）。
+ * 与体检（`shared/healthcheck.ts`）、出口推导（`shared/ipLocaleSuggest.ts`）
+ * 共用同一份档案表，避免三处口径漂移。
  */
 function resolveProxyCountry(raw: string | null | undefined) {
-  return findCountryLoose(raw)
+  return findCountryGeo(raw)
 }
 
 /**
@@ -121,7 +122,9 @@ export function proposeFixes(
           : '未绑定代理，无从判断应匹配哪个时区'
       })
     } else {
-      const tz = countryTimezone(c.code)
+      // 一国多时区（美 / 加 / 澳 / 俄）时只能取该国首选时区——修复接口拿不到出口地区，
+      // 这属于「锚点信息不足」的固有限制，用户的最终裁决权在出口 IP 填充功能上。
+      const tz = c.timeZones[0]
       if (tz === f.timezone) {
         out.push({ key: 'tzVsProxy', fixable: false, reason: `时区已是代理国家（${c.name}）对应的 ${tz}，可能是代理国家数据有误` })
       } else {
@@ -139,8 +142,8 @@ export function proposeFixes(
 
   // ---- 2) 语言 ↔ 时区国家：以时区为锚，改首选语言 ----
   if (has('langVsTz')) {
-    // 时区 → 国家：用 COUNTRIES 反查（与体检 tzToCountry 同一套表，判定口径一致）
-    const tzCountry = COUNTRIES.find((x) => x.timezone === String(working.timezone || ''))
+    // 时区 → 国家：走 ipLocaleSuggest 的档案表（与体检 tzToCountry 同一套表，判定口径一致）
+    const tzCountry = timeZoneToCountry(working.timezone)
     if (!tzCountry) {
       out.push({
         key: 'langVsTz',
@@ -148,7 +151,10 @@ export function proposeFixes(
         reason: `时区 ${working.timezone || '（空）'} 不在内置国家表里，无法推导应匹配的语言；请手动指定`
       })
     } else {
-      const want = countryLanguage(tzCountry.code)
+      // 用**浏览器语言**而非界面语言：体检判的是「languages[0] 的地区码 == 国码」，
+      // 而旧口径给英国 / 澳洲 / 俄罗斯一律填 en-US —— 填完体检照样报不一致，
+      // 且这里会因为「已经是 en-US」判定为「不可修」，用户陷入无法自愈的死循环。
+      const want = tzCountry.browserLanguage
       const cur = Array.isArray(working.languages) ? working.languages : []
       if (cur[0] === want) {
         out.push({ key: 'langVsTz', fixable: false, reason: `首选语言已是 ${want}，可能语言的地区码与时区判定口径不一致` })

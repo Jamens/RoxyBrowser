@@ -1,4 +1,4 @@
-import { countryTimezone, findCountryLoose } from './countries'
+import { findCountryGeo, timeZoneToCountry } from './ipLocaleSuggest'
 
 /**
  * 代理出口 IP 漂移检测（纯函数，可离线单测）。
@@ -29,10 +29,12 @@ import { countryTimezone, findCountryLoose } from './countries'
  *
  * ## 为什么错位判定要与体检完全同口径
  *
- * 判定用 `countryTimezone(country) === timezone`（精确相等），与
- * `shared/healthFix.ts` 的 `tzVsProxy` **完全一致**。
- * 若这里用更宽松的"同国家即可"，代理列表会说"一致"而体检说"不一致"，
- * 用户只会怀疑工具坏了——两个视图打架比不显示更糟。
+ * 体检 `tzVsProxy` 判的是「**时区所属国家** == 代理出口国家」
+ * （经国家档案反查，不是与该国唯一时区精确相等），本模块与之完全一致。
+ *
+ * 同口径的价值在多时区国家上最明显：美国代理 + `America/Los_Angeles` 是**一致**的，
+ * 两个视图都该说一致。反过来若这里用更严格的「等于该国首选时区」，
+ * 代理列表会报「失配」而体检说「一致」——两个视图打架比不显示更糟。
  */
 
 export interface ProxyExitSnapshot {
@@ -105,7 +107,16 @@ export interface MisalignedProfile {
 /**
  * 找出绑定了该代理、但时区与代理当前国家不一致的环境。
  *
- * 判定口径与体检 `tzVsProxy` 一致：`countryTimezone(country) === timezone`。
+ * ## 判定口径必须与体检 `tzVsProxy` 同源
+ *
+ * 体检现在判的是「**时区所属国家** == 代理出口国家」（经国家档案反查），
+ * 不是「时区 == 该国唯一时区」。若这里还按旧口径精确比较，
+ * 美国代理 + `America/Los_Angeles` 的环境会被**漂移检测判为失配**、
+ * 却被**体检判为一致**——同一份数据两个工具结论相反，用户只会怀疑工具坏了。
+ *
+ * 改成按国家判定后，多时区国家的正确时区（加州 / 德州 / 悉尼…）都能被认出来，
+ * 真正失配的（德国代理配纽约时区）仍会被如实报出。
+ *
  * 代理国家为空或不在内置国家表里时返回空数组——**不制造噪音**
  * （代理刚建还没检测过、或国家名无法识别时，不该弹一堆"错位"）。
  */
@@ -114,13 +125,21 @@ export function findMisalignedProfiles(
   profiles: DriftProfileLike[]
 ): MisalignedProfile[] {
   // 必须用宽松匹配：代理 country 存的是英文名（"United States"），不是代码。
-  // 与 healthFix.resolveProxyCountry 共用 findCountryLoose，判定口径只有一处。
-  const country = findCountryLoose(proxy?.country)
-  if (!country) return []
-  const expected = countryTimezone(country.code)
+  // 与体检 / 一键修复共用 ipLocaleSuggest 的国家档案，判定口径只有一处。
+  const geo = findCountryGeo(proxy?.country)
+  if (!geo) return []
+  // 该国首选时区，仅用于文案里提示「建议改成什么」——
+  // 一国多时区时它只是首选之一，落地仍应走「按出口 IP 填充」按州 / 省细分。
+  const expected = geo.timeZones[0]
   if (!expected) return []
   return profiles
-    .filter((p) => p.proxyId === proxy.id && !!p.timezone && p.timezone !== expected)
+    .filter((p) => {
+      if (p.proxyId !== proxy.id || !p.timezone) return false
+      const tzGeo = timeZoneToCountry(p.timezone)
+      // 时区查不到所属国家 → 无法判定，不算失配（与体检的 skipped 语义一致）
+      if (!tzGeo) return false
+      return tzGeo.code !== geo.code
+    })
     .map((p) => ({ id: p.id, name: p.name, timezone: p.timezone, expectedTimezone: expected }))
 }
 

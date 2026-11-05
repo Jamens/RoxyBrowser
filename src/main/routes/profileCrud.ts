@@ -12,7 +12,8 @@ import {
 } from '../../shared/fingerprint'
 import { getEnvExpiresAt } from '../../shared/envExpiry'
 import { exportProfileFull } from '../exporters'
-import { allocateProxy, ApiError } from '../proxyService'
+import { allocateProxy, ApiError, checkProxy, applyProxyCheckResult } from '../proxyService'
+import { suggestLocaleFromExit } from '../../shared/ipLocaleSuggest'
 import { DEFAULT_START_URL, type OSKind, type Fingerprint } from '../../shared/types'
 
 export interface ProfileCrudRouteDeps {
@@ -317,17 +318,53 @@ export function registerProfileCrudRoutes(router: Router, deps: ProfileCrudRoute
     res.json({ ok: true, trashed: true })
   })
 
-  // 生成随机指纹
-  router.post('/fingerprint/random', authMiddleware, (req: Request, res: Response) => {
+  // 按代理出口 IP 推导语言 / 时区建议（对标竞品 4.1.0「建环境那一刻就把一致性做对」）。
+  //
+  // ## 为什么必须是「服务端推导」而不是前端查
+  // 前端拿不到代理的出口信息——代理凭据与检测结果都在主进程。
+  // 更重要的是：这个端点**只认已知的出口国家**，推不出来就报错，
+  // **绝不退而用宿主 IP 去推**（那会把开发机所在城市写进指纹，
+  // 而且这台机器多半不在代理出口国——写进去的是用户根本不知道的假一致）。
+  router.post('/fingerprint/suggest-from-ip', authMiddleware, async (req: AuthedRequest, res: Response) => {
     const body = req.body || {}
-    const os = body.os
-    const valid = ['windows', 'mac', 'android', 'ios'].includes(os) ? os : undefined
-    const cv = typeof body.coreVersion === 'number' ? body.coreVersion : undefined
-    res.json(randomFingerprint(valid as OSKind | undefined, cv))
-  })
+    const proxyId = Number(body.proxyId)
+    let country = String(body.country || '').trim()
+    let region = String(body.region || '').trim()
+    let exitIp = ''
+    let proxyName = ''
 
-  // 指纹预设库（内置验证过的指纹组合）
-  router.get('/fingerprint/presets', authMiddleware, (_req: Request, res: Response) => {
-    res.json(listFingerprintPresets())
+    if (Number.isFinite(proxyId) && proxyId > 0) {
+      const repo = getDs().getRepository(ProxyEntity)
+      const proxy = await repo.findOne({ where: { id: proxyId, ...ownerScope(req) } })
+      if (!proxy) return res.status(404).json({ message: '代理不存在' })
+      proxyName = proxy.name
+      if (!proxy.country) {
+        // 代理还没检测过：先检测一次拿出口信息。
+        // 检测失败必须如实报错并让用户去检测页，绝不猜。
+        const result = await checkProxy(proxy)
+        if (!result.ok || !result.country) {
+          return res.status(400).json({ message: '代理检测失败，无法获取出口 IP；请先到「代理 IP」页面检测该代理' })
+        }
+        applyProxyCheckResult(proxy, result)
+        await repo.save(proxy)
+        country = result.country
+        region = result.region || ''
+        exitIp = result.exitIp
+      } else {
+        country = proxy.country
+        region = proxy.region || ''
+        exitIp = proxy.exitIp || ''
+      }
+    }
+
+    if (!country) {
+      return res.status(400).json({ message: '缺少出口国家信息：请先选择已检测的代理，或直接提供国家 / 地区' })
+    }
+
+    const suggestion = suggestLocaleFromExit(country, region)
+    if (!suggestion) {
+      return res.status(400).json({ message: `出口国家「${country}」不在内置国家表中，无法推导语言与时区；请手动指定` })
+    }
+    res.json({ ...suggestion, exitIp, proxyName })
   })
 }

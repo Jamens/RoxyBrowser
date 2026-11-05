@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin, Collapse, DatePicker } from 'antd'
+import { Drawer, Form, Input, Select, InputNumber, Switch, Button, Tabs, Space, Typography, Tag, Spin, Collapse, DatePicker, Modal, Radio } from 'antd'
 import dayjs from 'dayjs'
 import { useAppCtx } from '../hooks/useApp'
 import { ThunderboltOutlined } from '@ant-design/icons'
@@ -8,6 +8,7 @@ import type { ProfileDTO, AccountDTO, Fingerprint, GroupDTO, ProxyDTO, Extension
 import { osLabel } from '@shared/types'
 import { getTimezoneOffsetMinutes, defaultFingerprint, randomFonts, normalizeFingerprint, applyCoreVersion, CHROME_MAJORS, geoFor } from '@shared/fingerprint'
 import { getEnvExpiresAt, withEnvExpiresAt } from '@shared/envExpiry'
+import type { LocaleSuggestion } from '@shared/ipLocaleSuggest'
 
 const PLATFORMS = [
   'Amazon', 'Facebook', 'Instagram', 'TikTok', 'eBay', 'Etsy', 'Walmart', 'Shopee',
@@ -72,6 +73,56 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   // 下一次打开的表单上（用户明明只想建个环境，却先看到一屏指纹细项）。
   const [fpSections, setFpSections] = useState<string[]>([])
   const [baseExtras, setBaseExtras] = useState<string[]>([])
+  // ===== 出口 IP → 语言 / 时区一键填充 =====
+  // 三段状态：suggesting（正在向服务端问出口）、suggestion（拿到的建议，null = 弹窗关闭）、
+  // suggestTz（用户在多时区候选里选中的那个，默认取建议值）。
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestion, setSuggestion] = useState<(LocaleSuggestion & { exitIp?: string; proxyName?: string }) | null>(null)
+  const [suggestTz, setSuggestTz] = useState('')
+  /**
+   * 当前选中的代理 id。
+   *
+   * **必须用 state，不能直接读 `form.getFieldValue('proxyId')`。**
+   * 「绑定代理 IP」那个 Select 没有 `name`，因此不被 Form.Item 订阅——
+   * `form.setFieldValue` 改了 store，但**不会触发重渲染**，
+   * 于是按钮上的 `disabled={!form.getFieldValue('proxyId')}` 永远按首次渲染时的
+   * 旧值算，表现为「选完代理，按钮还是灰的，点不动」。
+   * 用 state 驱动才拿得到「选择变化 → 按钮解禁」这条链路。
+   */
+  const [proxyId, setProxyId] = useState<number | undefined>(undefined)
+
+  /** 向服务端要该代理的出口国家 / 地区，再据此推导语言与时区 */
+  const suggestFromIp = async () => {
+    if (!proxyId) {
+      message.warning('请先在上方选择要绑定的代理')
+      return
+    }
+    setSuggesting(true)
+    try {
+      const r = await api.post<LocaleSuggestion & { exitIp?: string; proxyName?: string }>(
+        '/api/fingerprint/suggest-from-ip',
+        { proxyId }
+      )
+      setSuggestion(r)
+      setSuggestTz(r.timeZone)
+    } catch (e) {
+      // 代理未检测 / 检测失败 / 国家不在内置表——服务端都会明确报错。
+      // 这里如实展示，**不做任何本地兜底填充**。
+      message.error((e as Error).message || '获取出口信息失败')
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  /** 确认写回：只改时区与语言，其余指纹字段一律不动 */
+  const applySuggestion = () => {
+    if (!suggestion) return
+    const tz = suggestTz || suggestion.timeZone
+    setFpField('timezone', tz)
+    setFpField('languages', suggestion.languages)
+    setSuggestion(null)
+    message.success(`已按出口 IP 填充：时区 ${tz}、语言 ${suggestion.languages.join(' / ')}`)
+  }
 
   useEffect(() => {
     if (open) {
@@ -112,6 +163,8 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
       form.resetFields()
       setPresetId(undefined)
       userPickedRef.current = false
+      // 代理选择必须同步到 state：按钮的可用性靠它驱动（见 proxyId 的注释）
+      setProxyId(undefined)
       if (initial) {
         form.setFieldsValue({
           name: initial.name,
@@ -122,6 +175,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
           proxyId: initial.proxyId ?? undefined,
           expiresAt: getEnvExpiresAt(initial.fingerprint) ? dayjs(getEnvExpiresAt(initial.fingerprint)!) : null
         })
+        setProxyId(initial.proxyId ?? undefined)
         form.setFieldValue('extensions', initial.extensions ?? [])
         // 规整指纹：旧导出 / 历史数据可能缺 languages、fonts 等新字段，
         // 缺失字段用自洽默认值补齐，避免渲染层 fp.languages.join / fp.fonts.length 抛错导致抽屉空白
@@ -258,6 +312,7 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
   }
 
   return (
+    <>
     <Drawer
       title={initial ? (isTemplate ? '编辑模板' : '编辑环境') : isTemplate ? '新建窗口模板' : '新建浏览器环境'}
       width={640}
@@ -669,13 +724,27 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     value={form.getFieldValue('proxyId')}
                     placeholder="不使用代理（直连）"
                     allowClear
-                    onChange={(v) => form.setFieldValue('proxyId', v)}
+                    onChange={(v) => {
+                      form.setFieldValue('proxyId', v)
+                      // 同步 state，否则按钮的可用性不会跟着选择变化（见 proxyId 的注释）
+                      setProxyId(v ?? undefined)
+                    }}
                     options={proxies.map((p) => ({
                       value: p.id,
                       label: `${p.name} (${p.type.toUpperCase()} ${p.host}:${p.port}${p.country ? ' · ' + p.country : ''}${p.status === 'active' ? ' ✓' : ''})`
                     }))}
                   />
                 </Form.Item>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Button onClick={suggestFromIp} loading={suggesting} disabled={!proxyId}>
+                    按出口 IP 填充语言 / 时区
+                  </Button>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    读取所选代理的出口国家与地区，把时区、浏览器语言一次性对齐到出口地。
+                    填充前会先列出将被改动的字段，确认后才写入。
+                    代理未检测时会先自动检测一次；检测失败则不填充。
+                  </Typography.Text>
+                </Space>
                 <Typography.Text type="secondary">
                   没有可用代理？请先到「代理 IP」页面添加并检测代理，再回到这里绑定。
                 </Typography.Text>
@@ -686,5 +755,77 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
         />
       )}
     </Drawer>
+
+    {/* 出口 IP → 语言 / 时区的「先预演、后写回」确认框。
+        必须预演：填充会改掉用户可能已经手调过的时区与语言，
+        静默改掉等于把用户的手工调整吞了且无从察觉。 */}
+    <Modal
+      open={!!suggestion}
+      title="按出口 IP 填充语言 / 时区"
+      width={560}
+      okText="确认填充"
+      cancelText="取消"
+      onOk={applySuggestion}
+      onCancel={() => setSuggestion(null)}
+      destroyOnHidden
+    >
+      {suggestion && (
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+            <div>
+              出口代理：<b>{suggestion.proxyName || '（未命名）'}</b>
+              {suggestion.exitIp ? <> · 出口 IP <b>{suggestion.exitIp}</b></> : null}
+            </div>
+            <div>
+              出口地：<b>{suggestion.countryName}（{suggestion.countryNameEn}）</b>
+            </div>
+            <div style={{ color: 'rgba(0,0,0,0.45)' }}>{suggestion.reason}</div>
+          </div>
+
+          {suggestion.ambiguous && (
+            <div style={{ background: 'rgba(250,173,20,0.12)', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
+              该出口国家跨越多个时区，下面的时区请按代理实际落地城市选择，选错会造成「时区与出口城市不符」。
+            </div>
+          )}
+
+          {suggestion.timeZoneOptions.length > 1 && (
+            <div>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>时区</Typography.Text>
+              <div>
+                <Radio.Group
+                  value={suggestTz}
+                  onChange={(e) => setSuggestTz(e.target.value)}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}
+                >
+                  {suggestion.timeZoneOptions.map((tz) => (
+                    <Radio key={tz} value={tz}>{tz}</Radio>
+                  ))}
+                </Radio.Group>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>将被改动的字段</Typography.Text>
+            <div style={{ marginTop: 6, fontSize: 13, lineHeight: 2 }}>
+              <div>
+                时区：<span style={{ color: 'rgba(0,0,0,0.45)' }}>{fp?.timezone || '（空）'}</span>
+                {' → '}
+                <b>{suggestTz || suggestion.timeZone}</b>
+              </div>
+              <div>
+                语言：<span style={{ color: 'rgba(0,0,0,0.45)' }}>{fp?.languages.join(' / ') || '（空）'}</span>
+                {' → '}
+                <b>{suggestion.languages.join(' / ')}</b>
+              </div>
+              <div style={{ color: 'rgba(0,0,0,0.45)', fontSize: 12 }}>
+                地理位置会随新时区自动同步到该时区的代表城市，其余指纹字段不受影响。
+              </div>
+            </div>
+          </div>
+        </Space>
+      )}
+    </Modal>
+    </>
   )
 }
