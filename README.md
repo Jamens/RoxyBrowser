@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（42 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（43 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -346,6 +346,11 @@ app.listen(4000)
 1. **浏览器里的恶意脚本**：`fetch('http://127.0.0.1:39100/api/...')` 对同机任何网页都成立。CORS 只阻止**读**响应，不阻止**发出**请求，所以同源策略挡不住这里。
 2. **登录爆破**：本机任意进程可无限次尝试 `/auth/login`，而默认账号是 `admin / 123456`，无锁定机制时爆破成本几乎为零。
 
+> 第 1 点已由**本地 API 请求守卫**从服务端解决（2026-11-05，commit `9132735`）：
+> Host 必须是回环（挡 DNS rebinding）、Origin 必须在白名单、`Origin: null` 必须带一次性 nonce，
+> 且**拒绝时响应不含任何 CORS 允许头**。原先的 `app.use(cors())` 全开已移除。
+> 详见 `FEATURES.md` §9.1 / `VERIFY.md` §12。限流与登录锁定解决的是第 2 点，两者互补。
+
 - **滑动窗口而非固定窗口**：固定窗口（每分钟计数清零）有经典绕过——窗口末尾打满 N 次、下个窗口开头再打 N 次，实际 2 倍速率。滑动窗口按时间戳保留每次请求，边界无法卡。判定逻辑在 `src/shared/rateLimit.ts`（纯函数，可离线单测）。
 - **登录失败按「用户名」计数而非 IP** —— 这是本功能最关键的一个决策。本地所有请求都来自 `127.0.0.1`，若按 IP 计数，等于**所有人共用一个额度**：攻击者只要猛打任意账号，就能把正常用户一起锁在门外（自我 DoS）。按用户名计数才能精准打击爆破目标。
 - **但按用户名计数可被「轮换用户名」绕过** —— 故注册接口也限流（每客户端每小时 10 次），否则攻击者注册新号重试就能规避锁定。
@@ -648,7 +653,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 42 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 43 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。

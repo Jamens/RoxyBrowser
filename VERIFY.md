@@ -356,6 +356,63 @@ node scripts/verify-profile-form-ux.mjs    # 起应用 → 登录 → 操作 UI 
 
 ---
 
+## 12. 本地 API 请求守卫验证
+
+> 用途：确认本地 API 的**调用边界**符合预期——自家界面能用、第三方自动化脚本能用、
+> 而网页侧与伪造 Host 的请求被服务端主动拒绝。
+
+### 12.1 为什么需要单独验证
+
+这层守卫的风险特征是「**改松了不会报错**」：没有异常、没有测试失败，
+只是某天发现本地 API 被网页调走了。所以除了离线单测，还要对**真实运行的服务**
+打真实请求——尤其是伪造 `Host` 头（DNS rebinding 的核心手法），
+这一步**不能用 `fetch`**（undici 会拦掉手工设置的 `Host`），必须用裸 `http.request`。
+
+### 12.2 两档验证
+
+| 档位 | 文件 | 覆盖内容 |
+| -- | -- | -- |
+| 离线单测（36 项断言） | `tests/localRequestGuard.test.cjs` | 判定函数的纯逻辑：Host 解析 / Origin 白名单 / nonce 校验 / CORS 头内容。已进 `pnpm test` |
+| 行为级验证（13 项断言） | `scripts/verify-local-api-guard.mjs` | 起真实应用 + 裸 HTTP 请求打真实端口：拒绝状态码、拒绝响应里有没有 CORS 头、预检是否被正确响应 |
+
+### 12.3 运行方式
+
+```bash
+pnpm build                                  # 脚本跑的是 out/ 产物
+node scripts/verify-local-api-guard.mjs     # 前置：MySQL 已启动
+```
+
+### 12.4 断言清单与判读
+
+| 编号 | 场景 | 期望 | 说明 |
+| -- | -- | -- | -- |
+| G1 | 无 Origin（curl / 第三方脚本） | 200 | **自动化 API 不能被堵死**——这是功能边界，不是漏洞 |
+| G2 | `Origin: https://evil.com` | 403 **且响应无任何 CORS 允许头** | 回了头等于放行，浏览器会把响应交给恶意脚本 |
+| G3 | `Host: evil.com` | 403 | DNS rebinding |
+| G4 | `Origin: null` 无 nonce | 403 | 沙箱 iframe 拿不到 nonce |
+| G5 | `Origin: null` + 正确 nonce | 200，回显 `Access-Control-Allow-Origin: null` | 自家 `file://` 界面走这条 |
+| G6 | `Origin: null` + 错误 nonce | 403 | |
+| G7 | 伪造 Host + 合法 Origin + 正确 nonce | 403 | Host 判定优先 |
+| G8 | `Origin: http://127.0.0.1:<port>` | 200 | 本机来源（dev server / 接受邀请页） |
+| G9 | 预检 OPTIONS + 合法 Origin | 204，`Allow-Headers` 含 `X-Roxy-Nonce` | 渲染层每个请求都会预检 |
+| G10 | 预检 OPTIONS + 恶意 Origin | 403 | |
+
+### 12.5 顺带要跑的回归
+
+守卫改的是**所有本地 API 请求的入口**，改坏了不会立刻暴露为报错，
+而是表现为「应用打开就是白屏 / 某个页面的接口莫名全挂」。所以每次改完必须跑：
+
+```bash
+pnpm test                                   # 含 localRequestGuard（36 项断言）
+node scripts/verify-profile-form-ux.mjs     # 真实 UI 全流程（登录→建环境→编辑保存→查库）
+node scripts/verify-local-api-guard.mjs     # 攻击面断言
+```
+
+> `verify-profile-form-ux.mjs` 是关键的一道：它证明守卫**没有把应用自己挡在门外**
+> （渲染层的请求带 `Origin: null` + nonce，能走通就说明放行链路是通的）。
+
+---
+
 # 指纹基线与内核升级回归（Electron 45 / Chromium 156）
 
 > 用途：**升级 Chromium 内核前后，用同一套探针逐项对比窗口内的实测值**，

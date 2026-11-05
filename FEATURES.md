@@ -1141,6 +1141,47 @@ curl -X POST http://127.0.0.1:39100/api/v1/rpa/1/run \
 
 令牌可在客户端「自动化 API」页面生成，页面内含完整接口文档与 curl 示例。
 
+### 9.1 本地 API 请求守卫（Host / Origin / nonce 三层）
+
+本地 API 只监听 `127.0.0.1`，但**同机任何网页都能对它发请求**——
+`fetch('http://127.0.0.1:39100/api/...')` 对任何页面都成立。
+此前这一层只有 `app.use(cors())`（`Access-Control-Allow-Origin: *`）挡着，
+而 CORS 的语义常被误解：**它只阻止读响应，不阻止请求发出**。
+也就是说恶意网页可以用 `fetch(url, { mode: 'no-cors' })` 把写操作真的发出去，
+副作用照样成立，且响应还能被读回来。
+
+因此守卫改为**服务端主动拒绝**，三层判定：
+
+| 层 | 判据 | 挡什么 |
+|---|---|---|
+| 1 | **Host 必须是回环**（`127.0.0.1` / `localhost` / `::1`，精确匹配） | DNS rebinding（`evil.com` 解析到 127.0.0.1） |
+| 2 | **Origin 必须在白名单**（回环来源 + 显式额外白名单） | 网页侧跨源请求（含 `no-cors` 写操作） |
+| 3 | **`Origin: null` 必须带一次性 nonce** | 不透明源（sandboxed iframe） |
+
+**第 3 层为什么必需**：应用界面是 `file://` 加载的，Chromium 给它发的跨源请求
+Origin 是字符串 `null`；而 sandboxed iframe 这类不透明源**同样是 `null`**，
+只靠 Origin 白名单区分不了二者。nonce 由主进程每次启动随机生成（256 位），
+只注入应用自己的页面（`window.roxy.apiNonce`），外部站点与第三方 iframe 读不到。
+
+**为什么不影响第三方自动化脚本**：浏览器发起的**跨源**请求一律带 Origin
+（包括 `no-cors` 与 `<form method=post>` 提交）；唯一不带 Origin 的是
+`<img>` / `<script>` 这类无源 GET——它们带不了自定义头、构造不出 JSON body，
+响应也读不出来。而**无 Origin 的写操作只可能来自本地进程**（curl / Python /
+第三方工具），而本地 API 本来就是对这些开放的（见 §9）。所以「无 Origin 放行」
+不是漏洞，是功能边界。
+
+**放行时的响应头**：回显**具体 Origin**（不是 `*`）+ `Vary: Origin` +
+`Access-Control-Allow-Private-Network: true`（Chromium 142+ 强制 Local Network
+Access 的配套头，缺了自家前端会多出无谓的权限提示）。
+
+**对调用方的影响**：渲染层所有请求统一经 `apiFetch()` 出口，自动带上
+`X-Roxy-Nonce` 头（因而每次请求会多一次 OPTIONS 预检，本地 API 可忽略）。
+**拒绝时响应里不含任何 CORS 允许头**——回了头等于放行。
+
+实现：`src/shared/localRequestGuard.ts`（纯判定逻辑）+ `src/main/localServerGuard.ts`
+（Express 中间件）+ `src/main/apiNonce.ts`（nonce 生成）。
+验证见 `VERIFY.md` §12。
+
 ### 10. 系统设置与界面主题
 
 - **系统设置页**：全局默认配置（默认指纹操作系统、新建环境窗口尺寸、代理检测超时、定时巡检间隔、日志保留天数、主题与自动时段、所在国家 / 地区、界面语言、网络连接方式），保存即生效并持久化。

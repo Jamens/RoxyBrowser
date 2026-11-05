@@ -46,7 +46,7 @@ pnpm build        # production build (outputs to out/)
 pnpm app          # launch the client from the production build
 pnpm dist         # build the Windows installer (outputs to release/)
 
-pnpm test         # run the full offline test suite (42 tests: compile shared modules + run each)
+pnpm test         # run the full offline test suite (43 tests: compile shared modules + run each)
 pnpm db:check     # read-only check for schema/entity drift (executes no DDL)
 pnpm db:sync      # create tables + seed data (default admin / 123456, idempotent)
 pnpm migrate:secrets        # encrypt legacy plaintext credentials (dry-run by default)
@@ -710,6 +710,13 @@ attacks" but about two points that still hold:
 2. **Login brute force**: any local process can hammer `/auth/login` indefinitely, and the
    default account is `admin / 123456` — without lockout, brute force costs almost nothing.
 
+> Point 1 is now handled **server-side** by the local API request guard (2026-11-05,
+> commit `9132735`): the Host must be loopback (blocks DNS rebinding), the Origin must be
+> allow-listed, and `Origin: null` must carry a one-shot nonce — with **no CORS allow headers
+> on rejection**. The previous blanket `app.use(cors())` has been removed.
+> See `FEATURES.md` §9.1 / `VERIFY.md` §12 (both are Chinese-only documents).
+> Rate limiting and login lockout cover point 2; the two are complementary.
+
 - **Sliding window, not fixed window**: a fixed window (counter resets each minute) has the
   classic bypass — fill N at the end of one window and N more at the start of the next, for
   double the effective rate. A sliding window keeps per-request timestamps, so boundaries
@@ -1367,7 +1374,7 @@ src/
     could mint JWTs and bypass all auth. After an upgrade, old tokens become invalid and one
     re-login is expected; deleting the file is equivalent to rotating the key.
 11. **Run the tests before changing entities**: `pnpm test` compiles shared modules and runs
-    the full offline suite (42 tests). Invariants like "`normalizeFingerprint` must preserve
+    the full offline suite (43 tests). Invariants like "`normalizeFingerprint` must preserve
     custom keys such as `expiresAt`" are locked by tests and turn red immediately if broken.
 12. **Register new entities in DataSource**: `synchronize` only creates tables for entities
     **registered** in the `entities` array in `server.ts`. Missing one means the table does not

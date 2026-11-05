@@ -9,6 +9,60 @@
 
 ---
 
+## 2026-11-05 · 本地 API 请求守卫：服务端主动拒绝网页侧跨源请求（`9132735`）
+
+本地 API 只监听 `127.0.0.1`，但**同机任何网页都能对它发请求**。此前这一层只靠
+`app.use(cors())`（`Access-Control-Allow-Origin: *`）挡着，而 CORS 的语义常被误解：
+**它只阻止读响应，不阻止请求发出**。`src/main/rateLimiter.ts` 顶部的风险评估其实
+早就写明了这一点，只是当时没有对应的服务端防线。
+
+后果是恶意网页可以用 `fetch(url, { mode: 'no-cors' })` 把写操作真的发到本地 API，
+副作用照样成立，响应还能被读回来。
+
+**三层判定**（`src/shared/localRequestGuard.ts` 纯逻辑 + `src/main/localServerGuard.ts` 中间件）：
+
+1. **Host 必须是回环**（`127.0.0.1` / `localhost` / `::1`，**精确匹配**）→ 挡 DNS rebinding。
+   精确匹配是必须的——`127.0.0.1.evil.com` 用后缀匹配会蒙混过关。
+2. **Origin 必须在白名单**（回环来源 + 显式额外白名单）→ 挡网页侧跨源请求，
+   包括 `no-cors` 模式（那种请求根本不触发预检，只有服务端主动 403 才有效）。
+3. **`Origin: null` 必须带一次性 nonce** → 挡不透明源。
+   这一层不是多余的：应用界面是 `file://` 加载的，Chromium 给它发的请求 Origin 是
+   字符串 `null`，而 sandboxed iframe 这类不透明源**同样是 `null`**，
+   只靠 Origin 白名单区分不了二者。nonce 由主进程每次启动生成 256 位随机值，
+   只注入应用自己的页面（主窗口 preload 与 browser-preload 的注入条件与 `apiBase` 一致），
+   外部站点读不到。
+
+**「无 Origin 一律放行」是功能边界，不是漏洞**：浏览器发起的跨源请求一律带 Origin
+（含 `no-cors` 与 `<form method=post>` 提交）；唯一不带 Origin 的是 `<img>` / `<script>`
+这类无源 GET——带不了自定义头、构造不出 JSON body，响应也读不出来。
+而无 Origin 的写操作只可能来自本地进程（curl / Python / 第三方自动化工具），
+本地 API 本来就是对这些开放的（`FEATURES.md` §9），挡掉反而是自断功能。
+
+**拒绝时响应里不含任何 CORS 允许头**——回了头等于放行。这条单独有单测锁住，
+因为它最容易被后人「顺手优化」掉。
+
+**渲染层收口**：所有本地 API 请求统一经新增的 `apiFetch()` 出口，自动带
+`X-Roxy-Nonce` 头；原先散落 4 处的裸 fetch（BrowserTab / Logs / Rpa / Settings）
+已全部收口——漏一处就会表现为「某个页面的接口莫名全挂」。代价是每次请求多一次
+OPTIONS 预检，本地 API 可忽略。
+
+**验证**（三件套，缺一不可）：
+
+| 档位 | 文件 | 结果 |
+|---|---|---|
+| 离线单测 36 项断言（进 `pnpm test`，共 43 项） | `tests/localRequestGuard.test.cjs` | PASS |
+| 行为级 13 项断言（起真实应用打真实端口） | `scripts/verify-local-api-guard.mjs` | 13/13 PASS |
+| 真实 UI 全流程回归（登录→建环境→编辑保存→查库） | `scripts/verify-profile-form-ux.mjs` | 7/7 PASS |
+
+行为级脚本用**裸 `http.request`** 而非 `fetch`——undici 会拦掉手工设置的 `Host` 头，
+而伪造 Host 正是 DNS rebinding 的核心手法。其中「`Origin: null` + 正确 nonce → 200」
+这条最关键：它证明守卫**没有把应用自己挡在门外**。
+
+顺带修正一处类型设计：判定结果改用可辨识联合，调用方在 `allowed === false` 分支里
+能直接拿到拒绝原因，不必自己再判 `reason !== 'ok'`。
+
+---
+
 ## 2026-11-05 · 功能排期落表：竞品 4.1.0 解包结论转为可执行队列
 
 此前对竞品 4.1.0 安装包做完静态解包后，只在对话里给出过四象限与候选清单，
