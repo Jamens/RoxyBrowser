@@ -23,6 +23,7 @@ import {
 } from "@shared/types";
 import type { MessageKey } from "../i18n/messages";
 import { useI18n, type TranslateFn } from "../i18n";
+import { apiFetch } from "../api";
 
 interface ProfileInfo {
   id: number;
@@ -119,7 +120,9 @@ export default function BrowserTab() {
   useEffect(() => {
     if (!profileId) return;
     let cancelled = false;
-    fetch(`${apiBase}/api/browser/profile-info/${profileId}`)
+    // 走 apiFetch 而不是裸 fetch：本地 API 守卫要求带一次性 nonce 头，
+    // 漏了会被服务端 403（此页在环境窗口的 file:// 起始页里也会跑，Origin 为 null）
+    apiFetch(`/api/browser/profile-info/${profileId}`)
       .then((r) =>
         r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)),
       )

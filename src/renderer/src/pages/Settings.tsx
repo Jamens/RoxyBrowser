@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse, Checkbox } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
-import { api, API_BASE, getToken } from '../api'
+import { api, apiFetch, getToken } from '../api'
 import { readTextFile } from '../utils/download'
 import { DEFAULT_SETTINGS, SEARCH_ENGINES, WEBHOOK_EVENT_GROUPS, type AppSettings, type AiAutoTask, type UpdaterStatus, type WebhookConfig } from '@shared/types'
 import { NOTIFY_CATEGORIES } from '@shared/notifications'
@@ -488,7 +488,7 @@ export default function Settings() {
   // 全空间快照：把整个团队空间导出为单个 JSON（环境 + 代理 + RPA + 扩展引用）
   const exportSnapshot = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/snapshot/export`, {
+      const res = await apiFetch('/api/snapshot/export', {
         headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}
       })
       if (!res.ok) {

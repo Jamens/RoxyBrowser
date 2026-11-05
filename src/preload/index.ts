@@ -13,6 +13,14 @@ export interface NetworkProxyConfig {
 // 向渲染进程暴露本地 API 地址（由主进程在启动时写入环境变量）
 contextBridge.exposeInMainWorld('roxy', {
   apiBase: process.env.ROXY_API_BASE || 'http://127.0.0.1:39100',
+  /**
+   * 本地 API 请求守卫的一次性 nonce（主进程每次启动重新生成）。
+   *
+   * 渲染层每个请求都要带上它：应用界面是 `file://` 加载的，Origin 为 `null`，
+   * 而 `null` 也可能是恶意页面里的不透明源——nonce 是唯一能区分二者的凭据。
+   * 外部站点读不到这个值（见 `src/main/browser-preload.ts` 的同等注释）。
+   */
+  apiNonce: process.env.ROXY_API_NONCE || '',
   platform: process.platform,
   /**
    * 设置客户端自身的出网代理（仅影响主界面 / 默认 session 的请求，

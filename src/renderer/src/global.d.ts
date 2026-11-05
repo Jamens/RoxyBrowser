@@ -2,6 +2,8 @@ declare global {
   interface Window {
     roxy?: {
       apiBase: string
+      /** 本地 API 请求守卫的一次性 nonce（主进程每次启动重新生成） */
+      apiNonce?: string
       platform: string
       /** 由环境窗口注入：让起始页把导航交给主进程执行，失败可回传原因 */
       navigate?: (url: string) => void

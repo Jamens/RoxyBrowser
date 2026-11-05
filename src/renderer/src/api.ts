@@ -1,5 +1,30 @@
 const API_BASE = window.roxy?.apiBase || 'http://127.0.0.1:39100'
 
+/**
+ * 本地 API 请求守卫的一次性 nonce（服务端会校验，见 src/shared/localRequestGuard.ts）。
+ *
+ * 应用界面是 `file://` 加载的，跨源请求的 Origin 为 `null`；
+ * 而 `null` 也可能是恶意页面里的不透明源，服务端靠这个值区分二者。
+ */
+export function getApiNonce(): string {
+  return window.roxy?.apiNonce || ''
+}
+
+/**
+ * 本地 API 请求的**统一出口**：自动带上守卫要求的 nonce 头。
+ *
+ * 为什么必须收口到一处：nonce 头一旦漏掉，`Origin: null` 的请求会被服务端 403，
+ * 表现为「某个页面的接口莫名其妙全挂」。散落在各页面里的裸 fetch 很容易漏，
+ * 所以统一走这个函数。
+ */
+export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...((init.headers as Record<string, string> | undefined) ?? {}),
+    'X-Roxy-Nonce': getApiNonce()
+  }
+  return fetch(`${API_BASE}${path}`, { ...init, headers })
+}
+
 export function getToken(): string {
   return localStorage.getItem('roxy_token') || ''
 }
@@ -69,7 +94,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await apiFetch(path, {
     method,
     headers: {
       'Content-Type': 'application/json',

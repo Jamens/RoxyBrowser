@@ -6,7 +6,7 @@ import {
 import type { ArchivedLogDTO, ArchiveStatsDTO, ArchiveOutcomeDTO } from '@shared/types'
 import { SearchOutlined, DownloadOutlined, ExperimentOutlined, RollbackOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { api, getToken, API_BASE } from '../api'
+import { api, getToken, apiFetch } from '../api'
 import type { LogDTO } from '@shared/types'
 import { countryTimezone } from '@shared/countries'
 import { formatDateTimeInZone } from '@shared/timezone'
@@ -117,7 +117,7 @@ export default function Logs() {
         params.set('format', format)
         if (keyword) params.set('keyword', keyword)
         if (onlySensitive) params.set('sensitive', '1')
-        const res = await fetch(`${API_BASE}/api/logs/export?${params.toString()}`, {
+        const res = await apiFetch(`/api/logs/export?${params.toString()}`, {
           headers: { Authorization: `Bearer ${getToken()}` }
         })
         if (!res.ok) {

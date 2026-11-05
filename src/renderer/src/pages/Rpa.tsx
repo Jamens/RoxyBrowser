@@ -8,7 +8,7 @@ import {
   UploadOutlined, DownloadOutlined
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { api, API_BASE, getToken } from '../api'
+import { api, apiFetch, getToken } from '../api'
 import type { ProfileDTO, RpaScriptDTO, RpaStep } from '@shared/types'
 import { varsToArray, arrayToVars } from '@shared/rpa'
 import { useAppCtx } from '../hooks/useApp'
@@ -263,7 +263,7 @@ export default function Rpa() {
   // 导出单个脚本为 JSON 文件（走 blob 下载，绕过 api 的 JSON 解析）
   const exportScript = async (r: RpaScriptDTO) => {
     try {
-      const res = await fetch(`${API_BASE}/api/rpa/export/${r.id}`, {
+      const res = await apiFetch(`/api/rpa/export/${r.id}`, {
         headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {}
       })
       if (!res.ok) {

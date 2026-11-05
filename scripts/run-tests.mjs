@@ -75,7 +75,9 @@ const COMPILES = [
   // 程序，而实体带装饰器 —— 故需显式开启 experimentalDecorators（否则报 TS1240）
   { name: 'cookieText', files: ['src/main/cookieText.ts'], out: '.tmp_ck', extra: ['--experimentalDecorators', '--emitDecoratorMetadata'] },
   // 通知中心共享逻辑：零 import 纯函数（白名单 / 订阅语义 / 元信息自洽）
-  { name: 'notifications', files: ['src/shared/notifications.ts'], out: '.tmp_nt' }
+  { name: 'notifications', files: ['src/shared/notifications.ts'], out: '.tmp_nt' },
+  // 本地 API 请求守卫：零 import 纯函数（Host / Origin / nonce 三层判定）
+  { name: 'localGuard', files: ['src/shared/localRequestGuard.ts'], out: '.tmp_lg' }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -132,7 +134,10 @@ const TESTS = [
   { name: 'snapshotDiff', file: 'tests/snapshotDiff.test.cjs' },
   { name: 'webhook', file: 'tests/webhook.test.cjs' },
   { name: 'cookieText', file: 'tests/cookieText.test.cjs' },
-  { name: 'notifications', file: 'tests/notifications.test.cjs' }
+  { name: 'notifications', file: 'tests/notifications.test.cjs' },
+  // 本地 API 请求守卫：Host 必须回环 / Origin 白名单 / Origin=null 必带 nonce。
+  // 拒绝时不得回 CORS 允许头——这条最容易被后人"顺手优化"掉。
+  { name: 'localRequestGuard', file: 'tests/localRequestGuard.test.cjs' }
 ]
 
 function run(bin, args, label) {

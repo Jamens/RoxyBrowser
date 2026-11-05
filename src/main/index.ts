@@ -7,8 +7,14 @@ import { AgentRunner } from './agent/runner'
 import { applyCdpCommandLine, finalizeCdpPort, readCdpConfig, setCdpEnabled, setCdpPort } from './cdpManager'
 import { setNotifyWindowHooks } from './notify'
 import { mark, flushStartupTrace } from './startupTrace'
+import { API_NONCE } from './apiNonce'
 
 process.env['ELECTRON_DISABLE_SECURITY_WARNINGS'] = 'true'
+
+// 本地 API 请求守卫的一次性 nonce，写进 env 供 preload 注入到应用自己的页面。
+// 放在顶层而非 whenReady 里：环境变量必须在**任何窗口创建之前**就绪，
+// 而窗口既可能由启动流程创建、也可能由用户后续打开环境时创建。
+process.env['ROXY_API_NONCE'] = API_NONCE
 
 // ===== GPU 策略（三档）=====
 // 虚拟机 / 远程桌面 / 无显卡驱动的环境里，Chromium 的 GPU 进程会反复崩溃并最终

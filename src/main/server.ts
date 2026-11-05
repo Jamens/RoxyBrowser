@@ -1,6 +1,5 @@
 import 'reflect-metadata'
 import express, { type Request, type Response, type NextFunction, type Express } from 'express'
-import cors from 'cors'
 import http from 'http'
 import { homedir } from 'os'
 import { mkdirSync, writeFileSync, statSync, readdirSync, unlinkSync } from 'fs'
@@ -28,6 +27,8 @@ import {
   type ProxyLike
 } from '../shared/proxyHeal'
 import { loginBuckets, rateLimit, startRateLimitSweeper } from './rateLimiter'
+import { createLocalServerGuard } from './localServerGuard'
+import { API_NONCE } from './apiNonce'
 import { dispatchWebhook, setCachedWebhooks } from './webhook'
 import { dispatchDesktopNotification, refreshNotifyConfig } from './notify'
 import mysql from 'mysql2/promise'
@@ -1375,7 +1376,31 @@ export async function bootstrap(): Promise<string> {
 
   // 4. 启动 HTTP 服务（端口占用则递增）
   const app: Express = express()
-  app.use(cors())
+  /**
+   * 本地 API 请求守卫 —— 替代原先的 `app.use(cors())`（全开）。
+   *
+   * 为什么不能只靠 CORS：`cors()` 只能决定"回不回落 CORS 头"，
+   * 而 CORS 的语义是**只阻止读响应、不阻止请求发出**。恶意网页用
+   * `fetch(url, { mode: 'no-cors' })` 就能把写操作真的发到本地 API，
+   * 副作用照样成立。必须由服务端主动 403 才有效。
+   *
+   * 三层判定：Host 必须是回环（挡 DNS rebinding）、Origin 必须在白名单、
+   * `Origin: null`（file:// 页面 / 不透明源）还要带一次性 nonce。
+   * 详见 `src/shared/localRequestGuard.ts` 文件头。
+   *
+   * 放在 `express.json()` 之前：被拒绝的请求连 body 都不该解析。
+   */
+  app.use(
+    createLocalServerGuard({
+      nonce: API_NONCE,
+      onReject: (info) => {
+        console.warn(
+          `[roxy] 拒绝不受信任的本地 API 请求: ${info.reason} ${info.method} ${info.path}` +
+            ` (origin=${info.origin ?? '-'} host=${info.host ?? '-'})`
+        )
+      }
+    })
+  )
   app.use(express.json({ limit: '2mb' }))
   /**
    * 通用接口限流（滑动窗口，按客户端 IP）。

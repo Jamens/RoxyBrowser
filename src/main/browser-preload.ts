@@ -171,6 +171,14 @@ import { effectiveCanvasSeed, isTinyCanvas, mulberry32, applyIdempotentNoise } f
     ) {
       def(window, 'roxy', {
         apiBase: process.env.ROXY_API_BASE || 'http://127.0.0.1:39100',
+        /**
+         * 本地 API 请求守卫的一次性 nonce。
+         *
+         * 与主窗口 preload 暴露的是同一个值，但**注入条件同样严格**：
+         * 只在应用自己的页面（file:// 或本机地址）上给，外部站点读不到。
+         * 起始页若要调本地 API，靠的就是它——`Origin: null` 的请求没有 nonce 会被拒。
+         */
+        apiNonce: process.env.ROXY_API_NONCE || '',
         // 起始页导航交给主进程执行：环境窗口没有地址栏/进度条，页面自己改
         // location.href 时一旦加载失败（多为代理不通）就只是停住不动，
         // 用户看到的就是「点了没反应」。走主进程才能拿到失败原因并回传。
