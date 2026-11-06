@@ -10,8 +10,10 @@ import { COUNTRIES, countryLanguage, countryTimezone, findCountry } from '@share
 import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
 import { DEFAULT_CDP_PORT, type CdpInfo } from '@shared/cdp'
+import { mergeSettingsPayload, missingSmtpFields, smtpConfigured, type SmtpConfigLike, type SmtpTripleField } from '@shared/settingsValidation'
 import type { SnapshotDiff, ProxyDiffItem, ProfileDiffItem } from '@shared/snapshotDiff'
 import { useI18n, LOCALE_CHANGE_EVENT } from '../i18n'
+import type { MessageKey } from '../i18n/messages'
 
 // 主题、自动时段、国家与语言同步进 localStorage，供渲染层 resolveDark / i18n 同步读取
 // （theme.ts 与 i18n 都在模块级同步读取，不能依赖 React 状态或异步请求）
@@ -31,6 +33,13 @@ function applyNetworkProxy(s: AppSettings) {
 // 任务栏图标显示模式交给主进程（'name' 时环境窗口标题锁定为环境名）
 function applyTrayDisplay(s: AppSettings) {
   window.roxy?.setTrayDisplay?.(s.trayDisplay || 'icon')
+}
+
+/** SMTP 三件套各自的必填文案 key（条件必填，规则见 missingSmtpFields） */
+const SMTP_REQUIRED_KEY: Record<SmtpTripleField, MessageKey> = {
+  host: 'settings.smtpHostRequired',
+  user: 'settings.smtpUserRequired',
+  pass: 'settings.smtpPassRequired'
 }
 
 function persistThemeLocals(s: AppSettings) {
@@ -406,11 +415,25 @@ export default function Settings() {
     load()
   }, [load])
 
-  const save = async () => {
-    const values = await form.validateFields()
+  /**
+   * 保存设置。
+   *
+   * 走 antd 的 `onFinish` / `onFinishFailed` 而非手写 `validateFields()`：
+   * 手写版本在校验失败时会 reject，若漏了 catch 就是**静默失败** —— 用户改了设置点保存，
+   * 页面只在远处某个字段显示一行红字（且那字段多半与本次改动无关），
+   * 看起来就像「改了没生效、又被系统恢复」。这正是「AI Agent 开关与视觉模型改了存不进去」
+   * 的真实观感：根因是 SMTP 三件套无条件必填，校验整表失败 → 连请求都没发出。
+   *
+   * `scrollToFirstError` 让 antd 自动滚到第一处出错项，失败必可见。
+   */
+  const handleFinish = async (values: AppSettings) => {
     setSaving(true)
     try {
-      const res = await api.put<{ ok: boolean; settings: AppSettings }>('/api/settings', values)
+      // 合并全量 store：条件渲染卸载的字段（如 backend 切到 cloud 后本地模型字段被卸载）
+      // 不在 validateFields() 的返回值里，只发返回值等于让服务端用默认值把它们抹掉
+      // —— 用户切走再切回来会发现「自己改的又被恢复了」。
+      const payload = mergeSettingsPayload(form.getFieldsValue(true), values)
+      const res = await api.put<{ ok: boolean; settings: AppSettings }>('/api/settings', payload)
       // 主题 / 国家 / 语言即时生效：写入 localStorage 并通知 App 层重读
       persistThemeLocals(res.settings)
       window.dispatchEvent(new Event('roxy-theme-change'))
@@ -422,6 +445,38 @@ export default function Settings() {
     } finally {
       setSaving(false)
     }
+  }
+
+  /** 校验未通过：明确告诉用户「本次修改没有保存」，并给出出错项数量 */
+  const handleFinishFailed = (info: { errorFields: { name: (string | number)[]; errors: string[] }[] }) => {
+    message.error(t('settings.saveValidationFailed', { count: info.errorFields.length }))
+  }
+
+  /**
+   * SMTP 三件套的**条件必填**。
+   *
+   * SMTP 是可选功能（仅「团队空间 → 邮箱邀请成员」用到），服务端 team.ts 也是用
+   * 运行时守卫允许它未配置。此前这里挂的是无条件 `required`，而三者的默认值是空串——
+   * antd 的 validateFields() 校验的是**整张表**，任一字段不过整次保存就被拒
+   * （连 api.put 都不会发出），于是「没配 SMTP」的用户**一个设置都存不进去**：
+   * 改了 AI Agent 开关与视觉模型，点保存没反应，重新进页面又变回原值。
+   *
+   * 改成：三件套全空 = 不启用（放行）；填了任一项 = 三项必填。
+   */
+  const smtpTripleRule = (field: SmtpTripleField) => (_rule: unknown, value: unknown) => {
+    const smtp = (form.getFieldValue('smtp') as SmtpConfigLike) || {}
+    const missing = missingSmtpFields(smtp)
+    if (missing.length === 0 || !missing.includes(field)) return Promise.resolve()
+    return Promise.reject(new Error(t(SMTP_REQUIRED_KEY[field])))
+  }
+
+  /** SMTP 端口同理：没配 SMTP 时端口填什么都不该拦下保存 */
+  const smtpPortRule = (_rule: unknown, value: unknown) => {
+    const smtp = (form.getFieldValue('smtp') as SmtpConfigLike) || {}
+    if (!smtpConfigured(smtp)) return Promise.resolve()
+    return value === undefined || value === null || value === ''
+      ? Promise.reject(new Error(t('settings.smtpPortRequired')))
+      : Promise.resolve()
   }
 
   // Webhook 事件下拉选项：全部事件 + 各分组（分组值为关键词，命中规则见 webhookShouldFire）
@@ -650,7 +705,15 @@ export default function Settings() {
     <>
       <Card title={t('settings.title')} loading={loading}>
       <Typography.Paragraph type="secondary">{t('settings.desc')}</Typography.Paragraph>
-      <Form form={form} layout="vertical" initialValues={DEFAULT_SETTINGS} style={{ maxWidth: 560 }}>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={DEFAULT_SETTINGS}
+        style={{ maxWidth: 560 }}
+        onFinish={handleFinish}
+        onFinishFailed={handleFinishFailed}
+        scrollToFirstError
+      >
         <Divider>{t('settings.sectionFp')}</Divider>
         <Form.Item
           name="defaultFingerprintOs"
@@ -938,10 +1001,10 @@ export default function Settings() {
         <Divider>{t('settings.smtpSection')}</Divider>
         <Typography.Paragraph type="secondary">{t('settings.smtpDesc')}</Typography.Paragraph>
         <Space size="large" style={{ display: 'flex' }}>
-          <Form.Item name={['smtp', 'host']} label={t('settings.smtpHost')} rules={[{ required: true, message: t('settings.smtpHostRequired') }]}>
+          <Form.Item name={['smtp', 'host']} label={t('settings.smtpHost')} rules={[{ validator: smtpTripleRule('host') }]}>
             <Input placeholder="smtp.example.com" style={{ width: 260 }} />
           </Form.Item>
-          <Form.Item name={['smtp', 'port']} label={t('settings.smtpPort')} rules={[{ required: true }]}>
+          <Form.Item name={['smtp', 'port']} label={t('settings.smtpPort')} rules={[{ validator: smtpPortRule }]}>
             <InputNumber min={1} max={65535} style={{ width: 120 }} />
           </Form.Item>
           <Form.Item name={['smtp', 'secure']} label={t('settings.smtpSecure')} valuePropName="checked">
@@ -949,10 +1012,10 @@ export default function Settings() {
           </Form.Item>
         </Space>
         <Space size="large" style={{ display: 'flex' }}>
-          <Form.Item name={['smtp', 'user']} label={t('settings.smtpUser')} rules={[{ required: true, message: t('settings.smtpUserRequired') }]}>
+          <Form.Item name={['smtp', 'user']} label={t('settings.smtpUser')} rules={[{ validator: smtpTripleRule('user') }]}>
             <Input style={{ width: 240 }} placeholder="invite@your-domain.com" />
           </Form.Item>
-          <Form.Item name={['smtp', 'pass']} label={t('settings.smtpPass')} rules={[{ required: true, message: t('settings.smtpPassRequired') }]}>
+          <Form.Item name={['smtp', 'pass']} label={t('settings.smtpPass')} rules={[{ validator: smtpTripleRule('pass') }]}>
             <Input.Password style={{ width: 240 }} placeholder="授权码 / 密码" />
           </Form.Item>
         </Space>
@@ -1241,7 +1304,9 @@ export default function Settings() {
         </Form.Item>
 
         <Form.Item>
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>
+          {/* htmlType="submit"：交给 antd 的表单提交流程统一处理校验与失败提示，
+              避免手写 validateFields() 时校验失败被静默吞掉 */}
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} htmlType="submit">
             {t('settings.save')}
           </Button>
         </Form.Item>

@@ -82,7 +82,9 @@ const COMPILES = [
   // 故两者编到同一目录——测试要验证「按出口填完，体检不报红」。
   { name: 'ipLocale', files: ['src/shared/ipLocaleSuggest.ts', 'src/shared/healthcheck.ts', 'src/shared/countries.ts', 'src/shared/locales.ts', 'src/shared/webglOsMatch.ts', 'src/shared/fingerprint.ts', 'src/shared/trackers.ts', 'src/shared/webgpu.ts', 'src/shared/webaudio.ts'], out: '.tmp_ip', extra: ['--lib', 'es2020,dom'] },
   // 反检测审计判定：零 import 纯函数（外部检测视角的矛盾判定）
-  { name: 'stealthAudit', files: ['src/shared/stealthAudit.ts'], out: '.tmp_sa' }
+  { name: 'stealthAudit', files: ['src/shared/stealthAudit.ts'], out: '.tmp_sa' },
+  // 设置页保存链路：零 import 纯函数（SMTP 条件必填 + 载荷合并）
+  { name: 'settingsValidation', files: ['src/shared/settingsValidation.ts'], out: '.tmp_sv' }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -148,7 +150,13 @@ const TESTS = [
   { name: 'ipLocaleSuggest', file: 'tests/ipLocaleSuggest.test.cjs' },
   // 反检测审计判定：既测「矛盾能被抓到」，也测「自洽不误报」——
   // 一个到处误报的审计等于没有审计，这两条同样重要。
-  { name: 'stealthAudit', file: 'tests/stealthAudit.test.cjs' }
+  { name: 'stealthAudit', file: 'tests/stealthAudit.test.cjs' },
+  // 设置页保存：纯函数级（SMTP 条件必填 / 载荷合并保住卸载字段）
+  // + 源码级守卫（不再出现"默认值空串 + 无条件 required"的致命字段，
+  //   校验失败不再静默吞掉用户的改动）。
+  // 行为级验证见 scripts/verify-settings-save-guard.mjs。
+  { name: 'settingsValidation', file: 'tests/settingsValidation.test.cjs' },
+  { name: 'settingsSaveGuard', file: 'tests/settingsSaveGuard.test.cjs' }
 ]
 
 function run(bin, args, label) {

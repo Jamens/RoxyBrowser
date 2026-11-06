@@ -211,6 +211,7 @@ const zhCN = {
   'settings.smtpUserRequired': '请填写账号',
   'settings.smtpPass': '密码 / 授权码',
   'settings.smtpPassRequired': '请填写密码',
+  'settings.smtpPortRequired': '请填写端口',
   'settings.smtpFrom': '发件人邮箱',
   'settings.smtpFromExtra': '为空时默认使用「账号」作为发件人',
   'settings.smtpRejectUnauthorized': '严格校验证书',
@@ -237,6 +238,7 @@ const zhCN = {
   'settings.aboutApp': '应用版本',
   'settings.save': '保存设置',
   'settings.saved': '设置已保存',
+  'settings.saveValidationFailed': '有 {count} 项设置未通过校验，本次修改未保存。已定位到第一处出错项，请修正后重试。',
 
   // ---- 通用 ----
   'common.save': '保存',
@@ -775,6 +777,7 @@ const enUS: MessageDict = {
   'settings.smtpUserRequired': 'Account is required',
   'settings.smtpPass': 'Password / auth code',
   'settings.smtpPassRequired': 'Password is required',
+  'settings.smtpPortRequired': 'Port is required',
   'settings.smtpFrom': 'From address',
   'settings.smtpFromExtra': 'Falls back to the account when empty',
   'settings.smtpRejectUnauthorized': 'Strict certificate check',
@@ -801,6 +804,7 @@ const enUS: MessageDict = {
   'settings.aboutApp': 'App version',
   'settings.save': 'Save settings',
   'settings.saved': 'Settings saved',
+  'settings.saveValidationFailed': '{count} setting(s) failed validation, so nothing was saved. The first invalid field has been scrolled to — please fix it and try again.',
 
   'common.save': 'Save',
   'common.cancel': 'Cancel',
@@ -1335,6 +1339,7 @@ const jaJP: MessageDict = {
   'settings.smtpUserRequired': 'アカウントを入力してください',
   'settings.smtpPass': 'パスワード / 認証コード',
   'settings.smtpPassRequired': 'パスワードを入力してください',
+  'settings.smtpPortRequired': 'ポートを入力してください',
   'settings.smtpFrom': '送信元アドレス',
   'settings.smtpFromExtra': '空の場合はアカウントを送信元として使用',
   'settings.smtpRejectUnauthorized': '証明書を厳格に検証',
@@ -1361,6 +1366,7 @@ const jaJP: MessageDict = {
   'settings.aboutApp': 'アプリバージョン',
   'settings.save': '設定を保存',
   'settings.saved': '設定を保存しました',
+  'settings.saveValidationFailed': '{count} 件の項目が検証に失敗したため保存しませんでした。最初のエラー項目までスクロールしました。修正して再試行してください。',
 
   'common.save': '保存',
   'common.cancel': 'キャンセル',
@@ -1894,6 +1900,7 @@ const deDE: MessageDict = {
   'settings.smtpUserRequired': 'Konto erforderlich',
   'settings.smtpPass': 'Passwort / Autorisierungscode',
   'settings.smtpPassRequired': 'Passwort erforderlich',
+  'settings.smtpPortRequired': 'Port erforderlich',
   'settings.smtpFrom': 'Absender-Adresse',
   'settings.smtpFromExtra': 'Leer = Konto als Absender',
   'settings.smtpRejectUnauthorized': 'Zertifikat streng prüfen',
@@ -1920,6 +1927,7 @@ const deDE: MessageDict = {
   'settings.aboutApp': 'App-Version',
   'settings.save': 'Einstellungen speichern',
   'settings.saved': 'Einstellungen gespeichert',
+  'settings.saveValidationFailed': '{count} Einstellung(en) sind fehlgeschlagen, es wurde nichts gespeichert. Das erste fehlerhafte Feld wurde angescrollt — bitte korrigieren und erneut versuchen.',
 
   'common.save': 'Speichern',
   'common.cancel': 'Abbrechen',
