@@ -4,6 +4,13 @@
 import type { AgentAction, AIAgentBackend, AIAgentCloudProvider } from '../../shared/types'
 import { cloudVisionChat } from './cloud'
 import type { DomSnapshot } from './types'
+import {
+  VISION_MIN_NUM_CTX,
+  parseContextOverflow,
+  describeContextOverflow,
+  estimateVisionTokens,
+  computeVisionNumCtx
+} from '../../shared/ollamaModels'
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
 
@@ -159,6 +166,24 @@ async function understandOllama(req: VisionRequest, model: string): Promise<Agen
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: buildUserText(req), images: [req.imageBase64] }
   ]
+  /**
+   * 动态决定 num_ctx：按「本次请求的估算 token 数 × 1.5 余量」算，
+   * 下限 VISION_MIN_NUM_CTX，对齐到 1024 的整数倍。
+   *
+   * 为什么不能固定 8192：用户把浏览器窗口拉到 2560x1440 时，图像部分就 5969 tokens，
+   * 8192 仍不够；复合指令跑十几步后历史动作也会累积顶上去。
+   *
+   * 用 `req.dom.vw/vh`（视口像素）而不是去解 JPEG 尺寸 —— 截图就是视口大小，
+   * 而 DOM 快照里已经带着这个尺寸，不必额外解析 base64。
+   */
+  const estimated = estimateVisionTokens({
+    width: req.dom.vw,
+    height: req.dom.vh,
+    domCount: req.dom.els.length,
+    historyCount: req.history.length,
+    instructionLength: req.instruction.length
+  })
+  const numCtx = computeVisionNumCtx({ estimatedTokens: estimated })
   let lastErr = ''
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -168,11 +193,44 @@ async function understandOllama(req: VisionRequest, model: string): Promise<Agen
         // 不传 format:'json'：structured output 与 vision/images 在多个 Ollama/llama.cpp 构建里
         // 会冲突，产生不透明的内部错误（如 UnknownVizError）。已用 extractJson 容错解析，
         // 由 system prompt 强制「只输出 JSON」即可，避免触发该问题。
-        body: JSON.stringify({ model, messages, stream: false })
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          /**
+           * 必须显式带上 num_ctx：Ollama 的 llama.cpp runner 默认只给 4096 tokens
+           * 上下文窗口（**与模型自身支持的上下文长度无关**）。
+           *
+           * 实测本机 qwen2.5vl:7b：/api/show 里 context_length = 128000，
+           * 但 /api/ps 里运行时 context_length = 4096。而视觉请求要带
+           * 「截图 + DOM 列表 + system prompt」—— 1920x1080 截图的图像部分
+           * 就占 2715 tokens，合计约 5290 tokens → 直接撞墙：
+           *   request (5290 tokens) exceeds the available context size (4096 tokens)
+           *
+           * 请求级 `options.num_ctx` 实测可覆盖运行时默认值（无需改 Ollama 启动参数）。
+           *
+           * 注意：**不能靠缩小截图来省 token** —— DOM 坐标是视口像素，
+           * system prompt 要求坐标与截图 1:1 对齐，缩放会导致点击坐标错位。
+           * 所以走「加大窗口」而不是「压缩输入」。
+           */
+          options: { num_ctx: numCtx }
+        })
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         lastErr = `视觉模型调用失败 (${res.status})${text ? ': ' + text : ''}`
+        // 上下文超限是**确定性**错误：同样的请求重试结果必然相同。
+        // 换成有针对性的提示直接上抛，别让用户看到「连续失败 3 次」这种无信息量的重试。
+        const overflow = parseContextOverflow(text)
+        if (overflow) {
+          throw new Error(
+            describeContextOverflow({
+              model,
+              error: text,
+              suggestedNumCtx: numCtx
+            })
+          )
+        }
         // 500/模型未找到等可重试一次
         continue
       }
@@ -196,6 +254,10 @@ async function understandOllama(req: VisionRequest, model: string): Promise<Agen
     } catch (e) {
       // 已带「视觉模型返回错误：」前缀的是确定性的模型错误，直接上抛，不进重试
       if (e instanceof Error && e.message.startsWith('视觉模型返回错误：')) throw e
+      // 上下文超限同样是**确定性**错误：同样的请求重试必然同样失败。
+      // 不上抛的话会被重试两次再套上「① Ollama 未启动；② 未 pull 模型」的通用提示，
+      // 反而把真正的原因（窗口不够）盖掉了。
+      if (e instanceof Error && parseContextOverflow(e.message)) throw e
       lastErr = e instanceof Error ? e.message : String(e)
     }
   }

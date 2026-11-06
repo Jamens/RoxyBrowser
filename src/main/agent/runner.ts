@@ -9,8 +9,9 @@ import { ipcMain, type WebContents } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { AppSettings, AgentAction, RpaStep, AiAutoTask } from '../../shared/types'
 import { runAgentSession } from './session'
-import { checkOllamaStatus } from './ollama'
+import { checkOllamaStatus, getCapabilitiesOfInstalled, listModelsWithCapability } from './ollama'
 import { checkCloudStatus } from './cloud'
+import { supportsVision, describeModalityMismatch } from '../../shared/ollamaModels'
 import type { RunOptions } from './types'
 
 // 矩阵并行默认上限（设计文档 §9 R5 / §11）：超出排队，避免一次性拉起几十个 VLM 会话把机器拖垮。
@@ -165,7 +166,10 @@ export class AgentRunner {
         provider: a.cloudProvider,
         baseUrl: a.cloudBaseUrl,
         apiKey: a.cloudApiKey,
-        model: a.cloudVisionModel
+        model: a.cloudVisionModel,
+        // 必须带图探活：纯文本模型当视觉模型时，纯文本探活会通过，
+        // 真正看屏发图才被厂商拒（400 does not support image input）。
+        vision: true
       })
       if (!cs.reachable) {
         return `云端视觉模型连通性自检失败（${a.cloudVisionModel}）：${cs.error || '未知错误'}。请确认 API Key 有效、模型名正确且支持图像输入。`
@@ -182,6 +186,24 @@ export class AgentRunner {
           ? `，本机已安装：${st.models.join('、')}`
           : '，本机尚未拉取任何模型'
         return `视觉模型「${visionModel}」未安装${hint}。请先执行：ollama pull ${pull}（或在 设置 → AI Agent → 视觉模型 中改为已安装的名称）`
+      }
+      // 模态校验：装了 ≠ 支持视觉。视觉模型位误填纯文本模型时，
+      // 「已安装」这关过得去，但真正看屏时 Ollama 会报 400
+      // `model does not support multimodal requests` —— 与 /api/ai-agent/status 同一口径，
+      // 在这里提前拦下，避免跑到一半才失败。
+      const caps = await getCapabilitiesOfInstalled(visionModel, st.models)
+      const visionOk = supportsVision(caps)
+      if (visionOk === false) {
+        const alternatives = await listModelsWithCapability(
+          'vision',
+          st.models.filter((m) => m !== visionModel)
+        )
+        return describeModalityMismatch({
+          label: '视觉模型',
+          model: visionModel,
+          capabilities: caps,
+          alternatives
+        })
       }
     }
     return null

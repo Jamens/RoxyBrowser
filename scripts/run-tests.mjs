@@ -84,7 +84,12 @@ const COMPILES = [
   // 反检测审计判定：零 import 纯函数（外部检测视角的矛盾判定）
   { name: 'stealthAudit', files: ['src/shared/stealthAudit.ts'], out: '.tmp_sa' },
   // 设置页保存链路：零 import 纯函数（SMTP 条件必填 + 载荷合并）
-  { name: 'settingsValidation', files: ['src/shared/settingsValidation.ts'], out: '.tmp_sv' }
+  { name: 'settingsValidation', files: ['src/shared/settingsValidation.ts'], out: '.tmp_sv' },
+  // Ollama 模型名匹配规则：同 base 不同 tag 不能互认（探活误判的根因）
+  { name: 'ollamaModels', files: ['src/shared/ollamaModels.ts'], out: '.tmp_om' },
+  // 云端 BYOK 错误分类：厂商报错形态各异，需翻译成「问题 + 下一步」
+  // （含防误判：报文里的裸 '429' / 'multimodal' 不能被当成限流 / 不支持视觉）
+  { name: 'cloudErrors', files: ['src/shared/cloudErrors.ts'], out: '.tmp_ce' }
 ]
 
 /** 测试清单：strip=true 的走 --experimental-strip-types 直跑 */
@@ -156,7 +161,15 @@ const TESTS = [
   //   校验失败不再静默吞掉用户的改动）。
   // 行为级验证见 scripts/verify-settings-save-guard.mjs。
   { name: 'settingsValidation', file: 'tests/settingsValidation.test.cjs' },
-  { name: 'settingsSaveGuard', file: 'tests/settingsSaveGuard.test.cjs' }
+  { name: 'ollamaModels', file: 'tests/ollamaModels.test.cjs' },
+  { name: 'settingsSaveGuard', file: 'tests/settingsSaveGuard.test.cjs' },
+  // 云端 BYOK 错误分类：状态码兜底 + 语义特征 + 防误判（裸 '429' / 'multimodal'）
+  // + 原文保留 + 「下一步」文案。行为级验证见 scripts/verify-cloud-agent.mjs。
+  { name: 'cloudErrors', file: 'tests/cloudErrors.test.cjs' },
+  // 凭据泄漏守卫：仓库里不得出现任何真实或形似真实的密钥字面量。
+  // 纯读源码，无需编译。这条守卫是为了**防止回归**——
+  // 用户实测填错栏位的那串 Key 曾被原样写进测试文件，差点随下次提交入库。
+  { name: 'noCredentials', file: 'tests/noCredentials.test.cjs' }
 ]
 
 function run(bin, args, label) {

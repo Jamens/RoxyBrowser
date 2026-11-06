@@ -2,12 +2,25 @@ import { Router, type Response, type NextFunction } from 'express'
 import type { DataSource } from 'typeorm'
 import { AssistantSkillEntity } from '../entities'
 import type { AuthedRequest } from '../authScope'
-import { checkOllamaStatus, ollamaChat, type OllamaMessage } from '../agent/ollama'
+import {
+  checkOllamaStatus,
+  ollamaChat,
+  listOllamaModels,
+  getCapabilitiesOfInstalled,
+  listModelsWithCapability,
+  type OllamaMessage
+} from '../agent/ollama'
 import { cloudChat, checkCloudStatus } from '../agent/cloud'
 import { buildSupportSystemPrompt } from '../agent/knowledge'
 import { planAssistant, executeAssistantAction, runSkillPlan, type PlannerCtx } from '../assistantPlanner'
 import type { Plan } from '../../shared/assistantPlan'
 import { DEFAULT_SETTINGS, type AppSettings, type AIAgentSettings } from '../../shared/types'
+import {
+  findSameBaseModel,
+  supportsVision,
+  supportsChat,
+  describeModalityMismatch
+} from '../../shared/ollamaModels'
 
 export interface AssistantRouteDeps {
   /**
@@ -80,8 +93,12 @@ export function registerAssistantRoutes(router: Router, deps: AssistantRouteDeps
       const text = await checkCloudStatus({
         provider: a.cloudProvider, baseUrl: a.cloudBaseUrl, apiKey: a.cloudApiKey, model: a.cloudModel
       })
+      // 视觉探活必须带图（vision: true）——云端没有 /api/show 那样的 capabilities 接口，
+      // 只能实际发一张 1x1 图片验证模型是否接受图像输入。
+      // 否则纯文本模型（如 deepseek-v4-pro）当视觉模型会「探活通过、执行报 400」。
       const vision = await checkCloudStatus({
-        provider: a.cloudProvider, baseUrl: a.cloudBaseUrl, apiKey: a.cloudApiKey, model: a.cloudVisionModel
+        provider: a.cloudProvider, baseUrl: a.cloudBaseUrl, apiKey: a.cloudApiKey,
+        model: a.cloudVisionModel, vision: true
       })
       const reachable = text.reachable && vision.reachable
       const error = !text.reachable
@@ -97,9 +114,13 @@ export function registerAssistantRoutes(router: Router, deps: AssistantRouteDeps
         modelPulled: text.reachable,
         models: [],
         error,
+        // 错误分类透给前端，便于前端区分「Key 错了」与「模型填错模态」并给出不同引导
+        errorKind: !text.reachable ? text.errorKind : !vision.reachable ? vision.errorKind : undefined,
         visionModel: vision.model,
         visionReachable: vision.reachable,
-        visionError: !vision.reachable ? vision.error : undefined
+        visionError: !vision.reachable ? vision.error : undefined,
+        visionErrorKind: !vision.reachable ? vision.errorKind : undefined,
+        visionSupports: vision.supportsVision
       })
       return
     }
@@ -109,13 +130,68 @@ export function registerAssistantRoutes(router: Router, deps: AssistantRouteDeps
     const vision = await checkOllamaStatus({ model: visionModel })
     const reachable = text.reachable
     const modelPulled = text.modelPulled && vision.modelPulled
+    // 未安装时给出「本机已装了哪些」+「你是不是想用同 base 的另一个 tag」——
+    // 用户最常见的踩坑是写了同 base 但不同 tag 的名字（qwen2.5:7b vs qwen2.5:3b），
+    // 光说「未安装」会让人以为是 Ollama 没启动。
+    const describeMissing = (label: string, model: string, models: string[]): string => {
+      const installed = models.length ? models.join('、') : '无'
+      const sameBase = findSameBaseModel(model, models)
+      const hint = sameBase
+        ? `。本机已安装同系列的「${sameBase}」，可直接改用该模型`
+        : ''
+      return `${label}「${model}」未安装（本机已安装：${installed}）${hint}`
+    }
+
+    /**
+     * 模态校验：装了 ≠ 支持视觉。
+     *
+     * 视觉模型位误填纯文本模型（如 qwen2.5-coder:7b）时，「是否已安装」这一关过得去，
+     * 但该模型 capabilities 里没有 vision → 真正让 Agent 看屏时 Ollama 报
+     * 400 `model does not support multimodal requests`。这里在**探活阶段**就拦下来。
+     *
+     * 只在「已安装」之后才查能力：没装的模型查能力必然失败，先给「未安装」的提示更准。
+     */
+    const visionCaps = vision.modelPulled
+      ? await getCapabilitiesOfInstalled(visionModel, vision.models)
+      : undefined
+    const textCaps = text.modelPulled
+      ? await getCapabilitiesOfInstalled(a.localModel, text.models)
+      : undefined
+    // 三态：true=支持 / false=明确不支持 / undefined=能力未知（老版本 Ollama 无此字段）
+    const visionOk = supportsVision(visionCaps)
+    const textOk = supportsChat(textCaps)
+
+    // 给出可用的替代模型建议：只在本机确实装了支持该能力的模型时才提示
+    const visionAlternatives =
+      visionOk === false
+        ? await listModelsWithCapability('vision', vision.models.filter((m) => m !== visionModel))
+        : []
+    const textAlternatives =
+      textOk === false
+        ? await listModelsWithCapability('completion', text.models.filter((m) => m !== a.localModel))
+        : []
+
     const error = !text.reachable
       ? text.error
       : !text.modelPulled
-        ? `文本模型「${a.localModel}」未安装（本机已安装：${text.models.join('、') || '无'}）`
-        : !vision.modelPulled
-          ? `视觉模型「${visionModel}」未安装（本机已安装：${vision.models.join('、') || '无'}）`
-          : undefined
+        ? describeMissing('文本模型', a.localModel, text.models)
+        : textOk === false
+          ? describeModalityMismatch({
+              label: '文本模型',
+              model: a.localModel,
+              capabilities: textCaps,
+              alternatives: textAlternatives
+            })
+          : !vision.modelPulled
+            ? describeMissing('视觉模型', visionModel, vision.models)
+            : visionOk === false
+              ? describeModalityMismatch({
+                  label: '视觉模型',
+                  model: visionModel,
+                  capabilities: visionCaps,
+                  alternatives: visionAlternatives
+                })
+              : undefined
     res.json({
       backend: 'local',
       reachable,
@@ -126,8 +202,34 @@ export function registerAssistantRoutes(router: Router, deps: AssistantRouteDeps
       error,
       visionModel,
       visionReachable: vision.reachable,
-      visionError: !vision.reachable ? vision.error : (!vision.modelPulled ? '视觉模型未安装' : undefined)
+      visionError: !vision.reachable
+        ? vision.error
+        : !vision.modelPulled
+          ? '视觉模型未安装'
+          : visionOk === false
+            ? describeModalityMismatch({
+                label: '视觉模型',
+                model: visionModel,
+                capabilities: visionCaps,
+                alternatives: visionAlternatives
+              })
+            : undefined
     })
+  })
+
+  // ===== AI Agent：列出本机已安装的 Ollama 模型 =====
+  // 设置页的模型输入框是「可下拉选 + 可自由输入」的组合（AutoComplete）：
+  // 用户手打模型名容易打错（写了没装的 tag 就白忙一场），下拉能直接列出本机已装的。
+  // 这个接口只读不写，与 /ai-agent/status 的区别是：后者是「探活」，会带上
+  // 文本/视觉两个模型的匹配判定；这里单纯是「本机装了什么」。
+  router.get('/ai-agent/models', authMiddleware, async (_req: AuthedRequest, res: Response) => {
+    try {
+      const models = await listOllamaModels()
+      res.json({ ok: true, models })
+    } catch (e) {
+      // Ollama 没启动不是错误：前端据此把下拉提示成「未连接 Ollama」即可
+      res.json({ ok: false, models: [], error: e instanceof Error ? e.message : String(e) })
+    }
   })
 
   // ===== AI Agent：Chat/Support 对话（本地 Ollama，零 token）=====
@@ -189,8 +291,31 @@ export function registerAssistantRoutes(router: Router, deps: AssistantRouteDeps
       const reply = await ollamaChat({ model: a.localModel, messages: finalMsgs })
       res.json({ reply, mode })
     } catch (e) {
-      // Ollama 未启动 / 模型未拉取等场景给可操作的提示
+      // Ollama 未启动 / 模型未拉取等场景给可操作的提示。
+      // 404 model not found 是最常见的一种（写了同 base 但不同 tag 的名字，
+      // 或模型压根没 pull）—— 这时把**本机实际装了哪些**列出来，
+      // 用户不用猜、不用反复试，直接照着改。
       const detail = e instanceof Error ? e.message : String(e)
+      const message404 = /404/.test(detail) && /not found/i.test(detail)
+      if (message404) {
+        let installed: string[] = []
+        try {
+          installed = await listOllamaModels()
+        } catch {
+          /* Ollama 没起来，列表拿不到，下面用兜底文案 */
+        }
+        const sameBase = findSameBaseModel(a.localModel, installed)
+        const list = installed.length ? installed.join('、') : '无'
+        const hint = sameBase
+          ? `。本机已安装同系列的「${sameBase}」，可直接改用该模型`
+          : installed.length
+            ? ''
+            : '。未检测到本机已安装的模型'
+        res.status(502).json({
+          message: `本地模型调用失败：模型「${a.localModel}」未安装（本机已安装：${list}）${hint}。可在「设置 → AI Agent → 本地模型名」的下拉中选择，或先执行 ollama pull ${a.localModel}`
+        })
+        return
+      }
       res.status(502).json({ message: `本地模型调用失败：${detail}（请确认 Ollama 已启动且已 pull 模型 ${a.localModel}）` })
     }
   })

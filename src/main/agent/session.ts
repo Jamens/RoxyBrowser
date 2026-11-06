@@ -6,6 +6,7 @@ import { createVisionAdapter } from './vision'
 import { buildNavHint } from './navHint'
 import { extractDom } from './dom'
 import { executeAction } from './actions'
+import { parseContextOverflow } from '../../shared/ollamaModels'
 import type { DomEl, DomSnapshot, RunOptions } from './types'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -161,8 +162,15 @@ export async function runAgentSession(opts: {
       } catch (ve) {
         // 本地视觉模型偶发失败（如 UnknownVizError）常是瞬时抖动，直接 abort 会让整轮
         // 执行前功尽弃。允许连续失败 MAX_VISION_FAIL 次，期间跳过本步、保留进度稍后重试。
-        visionFailStreak++
         const msg = ve instanceof Error ? ve.message : String(ve)
+        // 但「上下文超限」是**确定性**错误：同样的请求重试必然同样失败。
+        // 重试 3 次只是白等 3-6 秒，且会把真正的原因埋在「连续失败 3 次」这种
+        // 无信息量的措辞里。直接中止并给出针对性提示。
+        if (parseContextOverflow(msg)) {
+          emit.error({ error: msg })
+          return
+        }
+        visionFailStreak++
         console.error(`[agent] 视觉模型调用失败 (${visionFailStreak}/${MAX_VISION_FAIL}): ${msg}`)
         if (visionFailStreak >= MAX_VISION_FAIL) {
           emit.error({ error: `视觉模型连续失败 ${visionFailStreak} 次：${msg}` })
