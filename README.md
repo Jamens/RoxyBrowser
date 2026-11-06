@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（43 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（47 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -557,6 +557,17 @@ for (const ctx of browser.contexts()) {
 - **预设设计原则**：以 `navigate`（开 URL）+ `wait` / `scroll` 为主，跨站点通用、装完即跑；`input` / `click` 这类依赖 DOM 选择器的步骤留作模板，附 `note` 提示用户按自己站点的真实 DOM 微调。所有可参数化部分用 `{{变量名}}` 暴露（`shared/rpa.ts` 的 `substituteVars` 回放时替换），账号密码等绝不写死在脚本里。
 - **数据位置**：`src/main/rpaMarket.ts`（主进程专用纯数据模块），`GET /api/rpa/market` 罗列目录、`POST /api/rpa/market/install/:id` 安装；前端在 `Rpa.tsx` 用 Tabs 拆出「我的脚本 / 脚本市场」两个视图。
 
+### 设置保存链路（改了能存进去，且不会被默认值覆盖）
+
+设置页是全局配置的入口，但它踩过一个很隐蔽的坑：**antd 的 `form.validateFields()` 校验的是整张表**——任一字段不过，整次保存都被拒，**连 `PUT /api/settings` 都不会发出**。这意味着**任何可选功能的必填项，都会静默阻塞所有其它设置的保存**。
+
+本项目踩过：SMTP（仅「团队空间 → 邮箱邀请成员」用到的**可选**功能）的 host / user / pass 曾挂无条件 `required`，而默认值是空串。于是「没配 SMTP」的用户**一个设置都存不进去**——改 AI Agent 开关与视觉模型同样丢，重新进页面时又变回原值，观感就是「自己之前改的又被恢复了」。更糟的是**失败没有任何提示**：手写的 `await form.validateFields()` reject 后没被 catch，只在远处某个与本次改动无关的字段上显示一行红字。
+
+- **可选功能的必填改为条件式**：SMTP 三件套全空 = 不启用（放行），填了任一项才要求填全——与后端 `team.ts` 允许 SMTP 未配置的运行时守卫口径一致。
+- **校验失败不再静默**：保存走 antd 的 `onFinish` / `onFinishFailed` + `scrollToFirstError`，失败弹「有 N 项设置未通过校验，本次修改未保存」并自动定位到第一处出错项。
+- **条件渲染卸载的字段不被默认值覆盖**：设置页大量用条件渲染（如模型后端切到「云端 BYOK」后本地模型字段被卸载），而 `validateFields()` 只返回**已挂载**的字段；保存时合并 `form.getFieldsValue(true)` 的全量 store，用户配好的模型名不会被服务端的默认值补齐抹掉。
+- **判定逻辑纯函数化**：`src/shared/settingsValidation.ts`（零依赖、可离线单测）；源码级守卫 `tests/settingsSaveGuard.test.cjs` 会拦下「默认值是空串 + 无条件 `required`」的致命字段；行为级验证 `scripts/verify-settings-save-guard.mjs`（真窗口 + CDP，15 项断言，运行时备份并还原数据库设置）。
+
 ### 智能助手 Planner（AI 客服）
 
 右下角悬浮气泡（登录页与全屏浏览器页不显示），打开即用自然语言问全项目的数据，例如「哪些环境快过期了」「哪个代理 3 天内到期」「最近删了哪些环境」。
@@ -671,7 +682,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 43 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 47 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。

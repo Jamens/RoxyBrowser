@@ -46,7 +46,7 @@ pnpm build        # production build (outputs to out/)
 pnpm app          # launch the client from the production build
 pnpm dist         # build the Windows installer (outputs to release/)
 
-pnpm test         # run the full offline test suite (43 tests: compile shared modules + run each)
+pnpm test         # run the full offline test suite (47 tests: compile shared modules + run each)
 pnpm db:check     # read-only check for schema/entity drift (executes no DDL)
 pnpm db:sync      # create tables + seed data (default admin / 123456, idempotent)
 pnpm migrate:secrets        # encrypt legacy plaintext credentials (dry-run by default)
@@ -1250,6 +1250,38 @@ no recording from scratch.
   `GET /api/rpa/market` lists the catalog, `POST /api/rpa/market/install/:id` installs;
   `Rpa.tsx` splits "My Scripts / Script Marketplace" into two Tabs.
 
+### Settings Save Pipeline (changes actually persist, and never get overwritten by defaults)
+
+The settings page is the entry point for all global configuration, but it hit a subtle trap:
+**antd's `form.validateFields()` validates the ENTIRE form** — if a single field fails, the whole
+save is rejected and **`PUT /api/settings` is never even sent**. That means **any required field
+belonging to an optional feature silently blocks saving every other setting**.
+
+This project hit exactly that: SMTP's host / user / pass (used only by "Team Space → invite by
+email", an **optional** feature) carried an unconditional `required`, while their defaults are
+empty strings. So users who had not configured SMTP could **not save a single setting** — toggling
+the AI Agent switch or changing the vision model was silently dropped, and re-entering the page
+showed the old values again, which reads as "the system reverted my changes". Worse, **the failure
+was never surfaced**: the hand-written `await form.validateFields()` rejected without a `catch`,
+so all the user saw was a red line on some unrelated field far away.
+
+- **Optional features use conditional required rules**: an entirely empty SMTP triple means "not
+  configured" (pass); filling in any one of them means all three are required — matching the
+  backend's runtime guard in `team.ts`, which has always allowed SMTP to be unconfigured.
+- **Validation failures are no longer silent**: saving goes through antd's `onFinish` /
+  `onFinishFailed` plus `scrollToFirstError`, so a failure shows "N setting(s) failed validation,
+  nothing was saved" and automatically scrolls to the first invalid field.
+- **Fields unmounted by conditional rendering are no longer overwritten by defaults**: the settings
+  page uses conditional rendering extensively (switching the model backend to "Cloud BYOK"
+  unmounts the local model fields), and `validateFields()` only returns **currently mounted**
+  fields; saving now merges the full `form.getFieldsValue(true)` store, so a model name the user
+  configured survives instead of being reset by the server-side defaults.
+- **The decision logic is a pure function**: `src/shared/settingsValidation.ts` (zero dependencies,
+  offline-testable); the source-level guard `tests/settingsSaveGuard.test.cjs` rejects any field
+  that combines "empty-string default" with "unconditional `required`"; behavior-level verification
+  lives in `scripts/verify-settings-save-guard.mjs` (real window + CDP, 15 assertions, backs up and
+  restores the database settings it touches).
+
 ### AI Assistant Planner (product support)
 
 A floating bubble at bottom-right (hidden on the login page and full-screen browser page) that
@@ -1439,7 +1471,7 @@ src/
     could mint JWTs and bypass all auth. After an upgrade, old tokens become invalid and one
     re-login is expected; deleting the file is equivalent to rotating the key.
 11. **Run the tests before changing entities**: `pnpm test` compiles shared modules and runs
-    the full offline suite (43 tests). Invariants like "`normalizeFingerprint` must preserve
+    the full offline suite (47 tests). Invariants like "`normalizeFingerprint` must preserve
     custom keys such as `expiresAt`" are locked by tests and turn red immediately if broken.
 12. **Register new entities in DataSource**: `synchronize` only creates tables for entities
     **registered** in the `entities` array in `server.ts`. Missing one means the table does not

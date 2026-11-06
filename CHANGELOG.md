@@ -9,6 +9,57 @@
 
 ---
 
+## 2026-11-06 · 修掉「改了设置却存不进去 / 存进去又变回原样」（`feat(settings)`）
+
+用户报障：**在设置里打开 AI Agent、把视觉模型换成 `qwen2.5vl:7b`，去 AI Agent 页面显示"未启用"，
+再回设置页发现视觉模型又变回之前的了 —— 自己改的又被恢复了。**
+
+### 根因不在 AI Agent，在设置页的整表校验
+
+antd 的 `form.validateFields()` 校验的是**整张表**：任一字段不过，整次保存就被拒 ——
+**连 `api.put('/api/settings')` 都不会发出**。而设置页里：
+
+- SMTP（仅「团队空间 → 邮箱邀请成员」用到的**可选**功能）的 host / user / pass 挂着**无条件** `required`；
+- 这三者的默认值是**空串**（`DEFAULT_SETTINGS.smtp`）。
+
+于是「没配 SMTP」的用户**一个设置都存不进去** —— 主题、国家、语言、代理巡检、日志保留期、
+并发上限、安全限流、快照备份，以及用户本次要改的 AI Agent 开关与视觉模型，全部一起丢。
+重新进页面时 `load()` 拉回服务端旧值，观感就是「改了没生效、又被系统恢复」。
+
+而失败**没有任何提示**：手写的 `await form.validateFields()` reject 后没被 catch，
+页面只在远处某个**与本次改动无关**的字段（SMTP）显示一行红字，toast 是空的。
+
+### 三处修复
+
+1. **可选功能的必填改为条件式**（`src/shared/settingsValidation.ts`）
+   SMTP 三件套全空 = 不启用（放行）；填了任一项才要求填全 —— 与服务端 `team.ts`
+   的运行时守卫（允许 SMTP 未配置）口径一致。端口同理。
+2. **校验失败不再静默**（`src/renderer/src/pages/Settings.tsx`）
+   保存改走 antd 的 `onFinish` / `onFinishFailed` + `scrollToFirstError`，
+   失败弹「有 N 项设置未通过校验，本次修改未保存」并自动定位到第一处出错项；
+   保存按钮改为 `htmlType="submit"`。
+3. **条件渲染卸载的字段不被默认值覆盖**
+   设置页大量用条件渲染（模型后端切到「云端 BYOK」后，本地模型 / 本地视觉模型字段被卸载），
+   而 `validateFields()` 只返回**已挂载**的字段 → 服务端用默认值补齐 → 用户配好的模型名被抹掉。
+   保存时合并 `form.getFieldsValue(true)` 的全量 store，卸载字段的值得以保留。
+
+### 验证
+
+| 层 | 文件 | 断言数 |
+| -- | -- | -- |
+| 纯函数 | `tests/settingsValidation.test.cjs` | 16 |
+| 源码级守卫 | `tests/settingsSaveGuard.test.cjs` | 13 |
+| 行为级（真窗口 + CDP） | `scripts/verify-settings-save-guard.mjs` | 15 |
+
+行为级脚本覆盖：SMTP 未配置时 AI Agent 开关与视觉模型能落库、切云端后端后本地模型不被默认值覆盖、
+SMTP 填一半时有可见提示且不发 PUT、改完跳走再回来值仍在。脚本**运行前备份 settings、结束必还原**。
+
+> 守卫测试顺带抓出第三个同族字段：`customProxyHost` 也是「默认值空串 + 无条件 required」。
+> 它只在 `networkMode === 'custom'` 时挂载（不挂载时不参与校验），那种情况下必填是合理的 ——
+> 已登记为显式白名单并附理由，防止以后又混进一个「默认状态下就锁死整页」的字段。
+
+---
+
 ## 2026-11-06 · 反检测审计：把「能不能瞒过浏览器」变成可验证的问题（`7711b83`）
 
 环境体检是「**自己出题自己判卷**」——拿设定指纹对撞窗口内的回读值。
