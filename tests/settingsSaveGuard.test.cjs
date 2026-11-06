@@ -102,7 +102,8 @@ function defaultScalars(src) {
  * 「默认状态下就校验不过、整个设置页存不进去」的字段。
  */
 const REQUIRED_EMPTY_DEFAULT_ALLOWLIST = {
-  customProxyHost: '仅在 networkMode=custom 时挂载；用户主动选了自定义代理才要求填主机'
+  customProxyHost: '仅在 networkMode=custom 时挂载；用户主动选了自定义代理才要求填主机',
+  'aiAgent.cloudApiKey': '仅在 backend=cloud 时挂载；用户主动选了云端 BYOK 才要求填 Key（切回本地时字段被卸载，不参与校验）'
 }
 
 t('所有 required 字段的默认值都非空（否则会拦死整个设置页的保存）', () => {
@@ -136,6 +137,41 @@ t('白名单里的例外字段确实是条件渲染（不挂载时不参与校�
   // 条件块起点之后不应再有"无条件渲染"的痕迹：检查它确实落在条件块内
   const between = before.slice(condIdx)
   assert.ok(between.includes('networkMode'), 'customProxyHost 的条件块定位失败')
+})
+
+/**
+ * 白名单里的「条件必填」字段，必须真的待在**条件渲染块**里。
+ *
+ * 这是「默认值空串 + required」这类致命组合的唯一防线：字段在条件块内时，
+ * 条件不成立 → 字段卸载 → antd 不校验它 → 不影响整表保存；
+ * 一旦被挪出条件块，它就变成「默认状态下也必填」→ 整个设置页存不进任何东西。
+ *
+ * 判定方式：字段之前必须能找到对应的条件表达式（`backend === 'cloud' &&` 等），
+ * 否则它就是无条件渲染的。
+ */
+t('白名单里的条件必填字段确实位于条件渲染块内（防止退化成无条件必填）', () => {
+  // 字段名 → 其所在的条件表达式
+  const CONDITIONAL_FIELDS = {
+    customProxyHost: "networkMode === 'custom'",
+    'aiAgent.cloudApiKey': "backend === 'cloud'"
+  }
+  for (const [field, cond] of Object.entries(CONDITIONAL_FIELDS)) {
+    // 找字段的 Form.Item 位置（支持 name="x" 与 name={['a','b']} 两种写法）
+    const patterns = [
+      `name="${field}"`,
+      `name={['${field.split('.')[0]}', '${field.split('.')[1]}']}`
+    ]
+    let idx = -1
+    for (const p of patterns) {
+      idx = settingsSrc.indexOf(p)
+      if (idx > 0) break
+    }
+    assert.ok(idx > 0, `找不到字段：${field}`)
+
+    const before = settingsSrc.slice(0, idx)
+    const condIdx = before.lastIndexOf(cond)
+    assert.ok(condIdx > 0, `${field} 不在条件块（${cond}）里 —— 它会变成无条件必填，把整个设置页的保存锁死`)
+  }
 })
 
 t('SMTP 三件套不再是「无条件 required」（必须走条件校验）', () => {

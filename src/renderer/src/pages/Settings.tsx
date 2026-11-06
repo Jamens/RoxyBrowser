@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse, Checkbox } from 'antd'
+import { Card, Form, Select, InputNumber, Input, Button, Space, Typography, Tag, Divider, Switch, Upload, Modal, Alert, Table, Collapse, Checkbox, AutoComplete, theme } from 'antd'
 import { useAppCtx } from '../hooks/useApp'
 import { SaveOutlined, DownloadOutlined, UploadOutlined, DatabaseOutlined, PlusOutlined, EditOutlined, DeleteOutlined, LockOutlined, SafetyOutlined, QrcodeOutlined, NotificationOutlined } from '@ant-design/icons'
 import { api, apiFetch, getToken } from '../api'
@@ -11,6 +11,7 @@ import { LOCALES } from '@shared/locales'
 import { describeTimeZone } from '@shared/timezone'
 import { DEFAULT_CDP_PORT, type CdpInfo } from '@shared/cdp'
 import { mergeSettingsPayload, missingSmtpFields, smtpConfigured, type SmtpConfigLike, type SmtpTripleField } from '@shared/settingsValidation'
+import { checkCloudBaseUrl } from '@shared/cloudConfigValidation'
 import type { SnapshotDiff, ProxyDiffItem, ProfileDiffItem } from '@shared/snapshotDiff'
 import { useI18n, LOCALE_CHANGE_EVENT } from '../i18n'
 import type { MessageKey } from '../i18n/messages'
@@ -19,6 +20,37 @@ import type { MessageKey } from '../i18n/messages'
 // （theme.ts 与 i18n 都在模块级同步读取，不能依赖 React 状态或异步请求）
 // 把客户端出网代理交给主进程套用到默认 session（system 模式时主进程会恢复系统代理）。
 // 放组件外：load 的 useCallback 依赖数组保持不变，避免每次渲染生成新引用导致请求重跑。
+/**
+ * 深度相等（用于「未保存改动」判定）。
+ *
+ * 为什么不用 `JSON.stringify(a) === JSON.stringify(b)`：
+ * 字符串比较**依赖键的插入顺序**，两个内容相同但键序不同的对象会被判为不等
+ * → 用户刚进设置页就被误报「有未保存的改动」，久而久之就不信这个提示了。
+ * 误报比漏报更糟 —— 提示一旦不可信，用户就再也不会注意它。
+ *
+ * 只处理 JSON 形态（对象 / 数组 / 标量），足以覆盖表单值。
+ */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    // NaN === NaN 为 false，但两者确实「一样」
+    return Number.isNaN(a as number) && Number.isNaN(b as number)
+  }
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false
+    return a.every((x, i) => deepEqual(x, b[i]))
+  }
+  const ka = Object.keys(a as Record<string, unknown>)
+  const kb = Object.keys(b as Record<string, unknown>)
+  if (ka.length !== kb.length) return false
+  return ka.every(
+    (k) =>
+      Object.prototype.hasOwnProperty.call(b, k) &&
+      deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k])
+  )
+}
+
 function applyNetworkProxy(s: AppSettings) {
   window.roxy?.setNetworkProxy?.({
     mode: s.networkMode,
@@ -198,10 +230,48 @@ function SnapshotDiffView({ diff, warnings }: { diff: SnapshotDiff; warnings: st
 export default function Settings() {
   const { message } = useAppCtx()
   const [form] = Form.useForm<AppSettings>()
+  // antd token：吸底保存栏的底色/边框色随主题自动切换
+  const { token } = theme.useToken()
   const [loading, setLoading] = useState(false)
+  /**
+   * 「服务端已落库的值」的快照，作为未保存改动的比对基线。
+   *
+   * 必须在 load() 之前声明：load() 里会写它，若声明在后面，加载路径上的赋值会撞 TDZ。
+   */
+  const savedSnapshotRef = useRef<Record<string, unknown> | null>(null)
+  /**
+   * 订阅**所有**表单字段的值变化。
+   *
+   * 用途是让「有未保存改动」的提示能随用户的每一次改动重新渲染。
+   * antd 的 Form 本身不提供「整体脏检查」的通知机制，而直接读
+   * `form.getFieldsValue()` 拿不到响应式订阅。
+   * `Form.useWatch()` 不带参数会订阅所有字段，其返回值每次变化都是新引用，
+   * 组件因此会在任意字段变化时重渲染 —— 这正是我们要的。
+   */
+  Form.useWatch([], form)
   const [saving, setSaving] = useState(false)
-  const [aiStatus, setAiStatus] = useState<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string } | null>(null)
+  // 探活结果。error / visionError 是后端已分类好的中文文案（含厂商原文），
+  // 直接展示即可；errorKind 供后续按类型给不同引导。
+  const [aiStatus, setAiStatus] = useState<{
+    reachable: boolean
+    modelPulled: boolean
+    model?: string
+    error?: string
+    models?: string[]
+    backend?: 'local' | 'cloud'
+    visionModel?: string
+    visionReachable?: boolean
+    visionError?: string
+    errorKind?: string
+    visionErrorKind?: string
+    visionSupports?: boolean
+  } | null>(null)
   const [checking, setChecking] = useState(false)
+  // 本机已安装的 Ollama 模型：模型输入框的下拉候选。
+  // 用户手打模型名很容易写成同 base 但不同 tag 的名字（qwen2.5:7b vs qwen2.5:3b），
+  // 而 Ollama 按**完整名**找模型 → 探活显示正常、真正调用 404。
+  // 下拉直接列出本机真实装了的模型，从源头消除这类错误。
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
   const [testingId, setTestingId] = useState<number | null>(null)
   const { t, setLocale } = useI18n()
 
@@ -399,11 +469,17 @@ export default function Settings() {
     try {
       const s = await api.get<AppSettings>('/api/settings')
       form.setFieldsValue(s)
+      // 记录「服务端已落库的值」作为未保存改动的比对基线。
+      // 基线取「服务端值 + 表单 store 合并」：setFieldsValue 之后 store 里还留有
+      // 条件渲染卸载的字段（如切到 cloud 后被卸载的本地模型字段），
+      // 若基线只用服务端值，两者结构不同 → 刚进页面就被判为「有未保存改动」。
+      savedSnapshotRef.current = mergeSettingsPayload(form.getFieldsValue(true), s)
       persistThemeLocals(s)
       applyNetworkProxy(s)
       applyTrayDisplay(s)
     } catch (e) {
       form.setFieldsValue(DEFAULT_SETTINGS)
+      savedSnapshotRef.current = DEFAULT_SETTINGS as unknown as Record<string, unknown>
       persistThemeLocals(DEFAULT_SETTINGS)
       message.error((e as Error).message)
     } finally {
@@ -414,6 +490,82 @@ export default function Settings() {
   useEffect(() => {
     load()
   }, [load])
+
+  /**
+   * 未保存改动的拦截。
+   *
+   * ## 要解决什么
+   *
+   * 用户实测报障的另一半：改完云端参数后**离开设置页去 AI Agent 页**看一眼，
+   * 回来发现参数全没了、模型后端又显示「本地」。
+   *
+   * 机制：设置页卸载时表单状态一并销毁；重新进入时 `load()` 用**服务端旧值**
+   * `form.setFieldsValue(s)` 覆盖 —— 于是用户改的东西看起来像「被系统恢复」。
+   * 而用户之所以敢直接切走，是因为页面上**没有任何提示**告诉他「这些改动还没保存」。
+   *
+   * ## 为什么不用 useBlocker
+   *
+   * `useBlocker` 需要 data router（`createBrowserRouter` / `RouterProvider`），
+   * 本项目用的是 `HashRouter` + `<Routes>`（声明式模式），用它会直接抛错。
+   *
+   * ## 为什么不用 isFieldsTouched
+   *
+   * `isFieldsTouched()` 只反映「用户碰过哪个字段」，不反映「当前值与服务端值是否不同」。
+   * 用户碰了又改回原值时它仍为 true，会误报「有未保存改动」。
+   * 故用**与服务端值逐字段比对**的方式判断：以最近一次落库的值为基线，
+   * 当前表单值与之不同才算「有未保存改动」。
+   */
+  /** 当前表单值是否与服务端已落库的值不同（有未保存改动） */
+  const hasUnsavedChanges = useCallback(() => {
+    const baseline = savedSnapshotRef.current
+    if (!baseline) return false
+    try {
+      return !deepEqual(form.getFieldsValue(true), baseline)
+    } catch {
+      return false
+    }
+  }, [form])
+
+  /**
+   * 关闭应用 / 刷新页面时拦一道。
+   *
+   * 只拦「应用整体关闭或页面刷新」——Electron 应用里这对应用户误关窗口。
+   * 站内路由切换拦不住（HashRouter 无拦截能力），故对站内切换靠**就近的保存按钮**
+   * 与「AI Agent 区块」的显著提示来降低误操作概率。
+   */
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges()) return
+      e.preventDefault()
+      // 传统写法：赋值 returnValue 才会触发浏览器的「离开此页面？」提示
+      e.returnValue = ''
+      return ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [hasUnsavedChanges])
+
+  /**
+   * 拉取本机已安装的 Ollama 模型（供模型输入框下拉用）。
+   *
+   * 进设置页就拉一次：下拉里直接就是本机真实装了的模型，用户不用手打
+   * （手打最容易写成同 base 但不同 tag 的名字，如本机装 qwen2.5:3b 却填 qwen2.5:7b，
+   * 而 Ollama 按完整名找模型 → 探活显示正常、真正调用 404）。
+   *
+   * 失败不算错误：Ollama 没启动时下拉为空并给出提示，用户照样可以手输模型名。
+   */
+  const loadOllamaModels = useCallback(async () => {
+    try {
+      const res = await api.get<{ ok: boolean; models?: string[] }>('/api/ai-agent/models')
+      setOllamaModels(res.models || [])
+    } catch {
+      setOllamaModels([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadOllamaModels()
+  }, [loadOllamaModels])
 
   /**
    * 保存设置。
@@ -439,6 +591,11 @@ export default function Settings() {
       window.dispatchEvent(new Event('roxy-theme-change'))
       applyNetworkProxy(res.settings)
       applyTrayDisplay(res.settings)
+      // 已落库 → 刷新「未保存改动」的比对基线，否则保存完仍被判为有未保存改动。
+      // 基线要用「服务端值 + 表单 store 合并」的结果，而不是只用 res.settings：
+      // 服务端返回的是 merged（含默认值补齐），而表单 store 里还有条件渲染卸载的字段
+      // （如 backend 切到 cloud 后被卸载的本地模型字段），两者结构不同，直接比会一直判为「有改动」。
+      savedSnapshotRef.current = mergeSettingsPayload(form.getFieldsValue(true), res.settings)
       message.success(t('settings.saved'))
     } catch (e) {
       message.error((e as Error).message)
@@ -451,6 +608,22 @@ export default function Settings() {
   const handleFinishFailed = (info: { errorFields: { name: (string | number)[]; errors: string[] }[] }) => {
     message.error(t('settings.saveValidationFailed', { count: info.errorFields.length }))
   }
+
+  /**
+   * 从 AI Agent 区块就近触发的保存。
+   *
+   * 走的是**与主保存按钮完全相同**的提交路径（`form.submit()` → antd 的 onFinish），
+   * 而不是自己拼 PUT：
+   * - 校验必须一起跑，否则这里就成了「绕过校验的后门」—— 比如把 Key 填进地址栏
+   *   在主按钮上会被拦下，在这里却能存进去
+   * - 失败提示、滚动定位到第一个出错项的行为也一并复用
+   *
+   * `form.submit()` 而非 `form.validateFields()`：前者走 antd 的原生提交事件，
+   * 会触发 onFinish / onFinishFailed 两条既定路径，失败时的滚动定位与提示都自动生效。
+   */
+  const submitFormNow = useCallback(() => {
+    form.submit()
+  }, [form])
 
   /**
    * SMTP 三件套的**条件必填**。
@@ -635,8 +808,10 @@ export default function Settings() {
     try {
       // 用表单当前值（可能未保存）做检测，避免选了云端却按已保存的旧后端探活
       const aiAgentForm = (form.getFieldValue('aiAgent') as Record<string, unknown>) || {}
-      const s = await api.post<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string }>('/api/ai-agent/status', { aiAgent: aiAgentForm })
+      const s = await api.post<{ reachable: boolean; modelPulled: boolean; model?: string; error?: string; models?: string[]; backend?: 'local' | 'cloud'; visionModel?: string; visionReachable?: boolean; visionError?: string; errorKind?: string; visionErrorKind?: string; visionSupports?: boolean }>('/api/ai-agent/status', { aiAgent: aiAgentForm })
       setAiStatus(s)
+      // 探活响应自带本机模型清单，顺带刷新下拉候选（用户可能刚 pull 了新模型）
+      if (s.models?.length) setOllamaModels(s.models)
       if (!s.reachable) message.warning(s.error || t('aiAgent.statusUnreachable'))
       else if (s.error) message.warning(s.error)
       else message.success(s.backend === 'cloud' ? t('aiAgent.statusCloudReachable') : t('aiAgent.statusReachable'))
@@ -1057,11 +1232,36 @@ export default function Settings() {
         {backend === 'local' && (
           <>
             <Space wrap size={12}>
+              {/* 模型输入框用 AutoComplete：下拉列出本机**实际已安装**的模型，
+                  同时保留自由输入（用户可能想填尚未 pull 的模型名）。
+                  之前是纯 Input，用户只能手打 —— 很容易写成同 base 但不同 tag 的名字
+                  （如本机装的是 qwen2.5:3b，却填了 qwen2.5:7b），
+                  而 Ollama 按完整名找模型 → 探活显示正常、真正调用 404。 */}
               <Form.Item name={['aiAgent', 'localModel']} label={t('aiAgent.localModel')} extra={t('aiAgent.localModelExtra')}>
-                <Input style={{ width: 220 }} placeholder="qwen2.5:7b" />
+                <AutoComplete
+                  style={{ width: 220 }}
+                  options={ollamaModels.map((m) => ({ value: m }))}
+                  placeholder="qwen2.5:7b"
+                  // notFoundContent 必须恒为非空字符串：rc-select 里有
+                  // `emptyListContent = !notFoundContent && emptyOptions` —— 选项为空且
+                  // notFoundContent 为空时**禁止展开下拉**，那 onOpenChange 就永远不触发，
+                  // 形成「下拉开不了 → 加载不到模型 → 还是开不了」的死锁。
+                  notFoundContent={t('aiAgent.modelsNotFound')}
+                  // 不能按输入框内容过滤：模型名是**完整标识符**而不是搜索词。
+                  // 输入框里本来就有值（当前配置的模型名），一过滤就把候选全滤没了 ——
+              // 下拉里会显示「未检测到已安装模型」，而本机明明装了 4 个。
+              // 所以恒定显示全部已装模型，让用户从列表里挑。
+                  filterOption={() => true}
+                />
               </Form.Item>
               <Form.Item name={['aiAgent', 'localVisionModel']} label={t('aiAgent.visionModel')} extra={t('aiAgent.visionModelExtra')}>
-                <Input style={{ width: 220 }} placeholder="minicpm-v:latest" />
+                <AutoComplete
+                  style={{ width: 220 }}
+                  options={ollamaModels.map((m) => ({ value: m }))}
+                  placeholder="minicpm-v:latest"
+                  notFoundContent={t('aiAgent.modelsNotFound')}
+                  filterOption={() => true}
+                />
               </Form.Item>
             </Space>
             {/* 「检测连接」单独成行：放进上面那个 Space 里，窄窗口下换行后会紧贴下方的
@@ -1076,31 +1276,71 @@ export default function Settings() {
           </>
         )}
         {backend === 'cloud' && (
-          <Space wrap size={12}>
-            <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
-              <Select
-                style={{ width: 160 }}
-                options={[
-                  { value: 'deepseek', label: 'DeepSeek' },
-                  { value: 'qwen', label: 'Qwen' },
-                  { value: 'glm', label: 'GLM' },
-                  { value: 'openai', label: 'OpenAI' }
+          <>
+            <Space wrap size={12}>
+              <Form.Item name={['aiAgent', 'cloudProvider']} label={t('aiAgent.cloudProvider')}>
+                <Select
+                  style={{ width: 160 }}
+                  options={[
+                    { value: 'deepseek', label: 'DeepSeek' },
+                    { value: 'qwen', label: 'Qwen' },
+                    { value: 'glm', label: 'GLM' },
+                    { value: 'openai', label: 'OpenAI' }
+                  ]}
+                />
+              </Form.Item>
+              {/* 「API 地址」做形状校验：用户实测把 API Key 误填进了这一栏，
+                  该值会被拼成 `sk-xxx/chat/completions` 这种非法 URL，
+                  之后每次调用都失败，而报错是厂商的 DNS/连接错误 —— 完全看不出是填错栏位。
+                  这里在**保存那一刻**就拦下来并点名说「这看起来是 API Key」。 */}
+              <Form.Item
+                name={['aiAgent', 'cloudBaseUrl']}
+                label={t('aiAgent.cloudBaseUrl')}
+                extra={t('aiAgent.cloudBaseUrlExtra')}
+                rules={[
+                  {
+                    validator: (_rule, value) => {
+                      const r = checkCloudBaseUrl(String(value ?? ''))
+                      if (r.ok) return Promise.resolve()
+                      return Promise.reject(new Error(t(r.problem === 'looksLikeKey' ? 'aiAgent.cloudBaseUrlLooksLikeKey' : 'aiAgent.cloudBaseUrlInvalid')))
+                    }
+                  }
                 ]}
-              />
+              >
+                <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')} extra={t('aiAgent.cloudModelExtra')}>
+                <Input style={{ width: 200 }} placeholder="deepseek-v4-flash" />
+              </Form.Item>
+              <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
+                <Input style={{ width: 220 }} placeholder="deepseek-v4-flash-vision-exp / gpt-4o" />
+              </Form.Item>
+              {/* 云端模式必须有 Key：没 Key 必然 401。与其等到调用时报错，不如在保存时拦下。
+                  注意是「云端模式下必填」而非无条件必填 —— 切回本地后它被卸载，不该拦整表保存。 */}
+              <Form.Item
+                name={['aiAgent', 'cloudApiKey']}
+                label={t('aiAgent.cloudApiKey')}
+                extra={t('aiAgent.cloudApiKeyExtra')}
+                rules={[{ required: true, message: t('aiAgent.cloudApiKeyRequired') }]}
+              >
+                <Input.Password style={{ width: 260 }} placeholder="sk-..." />
+              </Form.Item>
+            </Space>
+            {/* 就近的保存入口：主「保存设置」按钮在**整张表单的最末尾**（要滚过
+                快照备份、AI 自动任务、Webhook、通知等所有区块），而 AI Agent 配置在表单中部。
+                用户在这里改完参数，屏幕上的「保存设置」根本不在视野内 → 很容易改完直接
+                切走，切走时未提交 → 回 AI Agent 页还是旧值、再回设置页被 load() 覆盖成旧值，
+                观感就是「存不进去、还变回去了」。
+                故在 AI Agent 区块内给一个就近的保存按钮，保存范围与主按钮一致（整表提交）。 */}
+            <Form.Item>
+              <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => void submitFormNow()}>
+                {t('aiAgent.saveNow')}
+              </Button>
+              <Typography.Text type="secondary" style={{ marginLeft: 12 }}>
+                {t('aiAgent.saveNowHint')}
+              </Typography.Text>
             </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudBaseUrl']} label={t('aiAgent.cloudBaseUrl')}>
-              <Input style={{ width: 260 }} placeholder="https://api.deepseek.com/v1" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudModel']} label={t('aiAgent.cloudModel')}>
-              <Input style={{ width: 200 }} placeholder="deepseek-chat" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudVisionModel']} label={t('aiAgent.cloudVisionModel')} extra={t('aiAgent.cloudVisionModelExtra')}>
-              <Input style={{ width: 220 }} placeholder="gpt-4o / qwen-vl-max / glm-4v" />
-            </Form.Item>
-            <Form.Item name={['aiAgent', 'cloudApiKey']} label={t('aiAgent.cloudApiKey')}>
-              <Input.Password style={{ width: 260 }} placeholder="sk-..." />
-            </Form.Item>
-          </Space>
+          </>
         )}
 
         <Divider>{t('snapshot.backupSection')}</Divider>
@@ -1303,13 +1543,41 @@ export default function Settings() {
           </Button>
         </Form.Item>
 
-        <Form.Item>
-          {/* htmlType="submit"：交给 antd 的表单提交流程统一处理校验与失败提示，
-              避免手写 validateFields() 时校验失败被静默吞掉 */}
-          <Button type="primary" icon={<SaveOutlined />} loading={saving} htmlType="submit">
-            {t('settings.save')}
-          </Button>
-        </Form.Item>
+        {/*
+          保存栏 **吸底固定**（position: sticky）。
+          原因：这张表单很长（指纹 / 外观 / 网络 / AI Agent / 快照 / 自动任务 / Webhook /
+          通知 …），而主保存按钮原本在**表单最末尾**。用户在中部（比如 AI Agent 区）
+          改完参数，屏幕上的「保存设置」根本不在视野内 → 很容易改完直接切走，
+          未提交 → 回 AI Agent 页看到旧值、再回设置页被 load() 覆盖，
+          观感就是「存不进去、还变回去了」。
+          吸底后按钮在**任何滚动位置**都可见，不再依赖用户滚到最底。
+        */}
+        <div
+          style={{
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 5,
+            marginTop: 24,
+            padding: '12px 0 8px',
+            // 用 antd token 取色，自动适配深浅色主题（不自己判断主题，避免与全局主题逻辑脱节）
+            background: token.colorBgContainer,
+            borderTop: `1px solid ${token.colorBorderSecondary}`
+          }}
+        >
+          <Space size={12} wrap>
+            {/* htmlType="submit"：交给 antd 的表单提交流程统一处理校验与失败提示，
+                避免手写 validateFields() 时校验失败被静默吞掉 */}
+            <Button type="primary" icon={<SaveOutlined />} loading={saving} htmlType="submit">
+              {t('settings.save')}
+            </Button>
+            {/* 有未保存改动时给出显式提示：这是「改了没生效」最容易被误读成
+                「系统把配置恢复回去」的地方，明确告知「改动还在，没保存」。
+                组件已在 useWatch 的订阅下随任意字段变化重渲染，故这里直接判定即可。 */}
+            {hasUnsavedChanges() && (
+              <Tag color="warning">{t('settings.unsavedChanges')}</Tag>
+            )}
+          </Space>
+        </div>
       </Form>
 
       {/* 调试端口（CDP）：独立 Card 而非塞进上面的表单 ——
@@ -1326,7 +1594,13 @@ export default function Settings() {
         extra={
           <Space>
             <Button size="small" onClick={loadCdp}>{t('cdp.refresh')}</Button>
-            <Button size="small" type="primary" loading={savingCdp} onClick={saveCdp}>{t('settings.save')}</Button>
+            {/* 文案**不能**用 t('settings.save')（"保存设置"）——它与上方主表单的保存按钮
+                完全同名同形，而 CDP 保存只写调试端口配置（PUT /api/cdp），**不提交表单**。
+                用户在设置页改完别的东西（含 AI Agent 的云端后端）后若误点这个按钮，
+                只会看到"已保存"的提示，实际改动一个都没存 —— 表现为「改了配置回到 AI Agent
+                页还是旧值、再回设置页又变回原样」，且零 DB 写入痕迹（PUT /api/cdp 只补写
+                cdpEnabled/cdpPort 两个键，不碰 aiAgent）。故用独立文案「保存调试端口」。 */}
+            <Button size="small" type="primary" loading={savingCdp} onClick={saveCdp}>{t('cdp.saveOnly')}</Button>
           </Space>
         }
       >
