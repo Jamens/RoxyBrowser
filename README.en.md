@@ -46,7 +46,7 @@ pnpm build        # production build (outputs to out/)
 pnpm app          # launch the client from the production build
 pnpm dist         # build the Windows installer (outputs to release/)
 
-pnpm test         # run the full offline test suite (47 tests: compile shared modules + run each)
+pnpm test         # run the full offline test suite (50 tests: compile shared modules + run each)
 pnpm db:check     # read-only check for schema/entity drift (executes no DDL)
 pnpm db:sync      # create tables + seed data (default admin / 123456, idempotent)
 pnpm migrate:secrets        # encrypt legacy plaintext credentials (dry-run by default)
@@ -907,6 +907,52 @@ Offline tests: `tests/secretCrypto.test.cjs` (40 cases) covering round-trips (in
 Chinese / emoji / newlines / 256 chars), random IVs, tamper detection, wrong-key fail-closed,
 legacy plaintext compatibility, empty-value semantics and key precedence.
 
+### Test credentials must not live in the repo either (credential-leak guard)
+
+The previous section covers credentials **at runtime**. This one covers an easier-to-miss hole
+with equally serious consequences: **credentials in test code**.
+
+While debugging the "cloud config never saves" bug I needed a value that "looks like an API key"
+to trigger the frontend's key-detection branch — and wrote the user's **real key** from the
+screenshot. It ended up in `tests/cloudConfigValidation.test.cjs` and a verification script.
+
+**Checked afterwards**: that string **never entered the git history** (`git log --all -S` finds
+nothing), and both files were still untracked at the time — but it was **one `git add` away** from
+being committed. A real credential in a version control system is permanently public: history
+cannot truly be erased, and every clone carries it.
+
+**Swapping in a placeholder such as `sk-0123...` is not enough either**:
+
+- **Secret scanner false positives** — scanners matching on "prefix + length" would flag it as a
+  real credential; once warnings pile up people learn to ignore them, and **the warnings stop
+  meaning anything**.
+- **The slide into real credentials** — once the source contains a perfectly key-shaped string,
+  the next person swapping in their own real key to "just verify it" faces almost no friction.
+  **This is the most common credential-leak path.**
+- **Scattered everywhere, impossible to audit** — one literal per script means every change means
+  sweeping the whole repo, with no way to guarantee all of them were fixed.
+
+So the right fix is not "use a different value" but **changing how the value is produced**: the
+source only holds prefix fragments, and the complete form **only materializes at runtime**, where
+static scanning cannot see it.
+
+- **One source of truth**: `scripts/lib/fake-credentials.mjs` is the repo's only source of fake
+  credentials (`fakeKey()` / `fakeKeyWithTag()` / `INVALID_KEY`). The mock server and its callers
+  **take the same value**, so "exact match" assertions still hold.
+- **Semantically equivalent**: the frontend's key detection is a **prefix match**
+  (`/^(sk-|sk_ant-|AIza|gsk_|xai-|...)/i`), and the mock's invalid-key detection is an **exact
+  match** over a shared constant — so the assembled value and a hand-written literal behave
+  **identically** under test. This is not "some value that roughly works".
+- **The guard test** `tests/noCredentials.test.cjs` (4 assertions) turns the rule from "a habit"
+  into an **executable gate**: it matches literals by vendor prefix + ≥8 random characters, scans
+  **literals only** (not runtime-assembled values), and skips obvious placeholder shapes
+  (`xxx` / `test` / `dummy` / `example`) to stay high-confidence — **a false positive is worse than
+  a false negative**. It also asserts that the JWT secret has no hardcoded fallback, so nobody can
+  forge tokens with a known value.
+- **The guard is validated by injection**: planting a key-shaped string in the source makes the
+  guard fail immediately, pointing at the **line number and the matched text** with exit code 1;
+  removing it restores green — a guard that has never fired is no guard at all.
+
 ### Session Revocation (logout really invalidates / sign out all devices)
 
 Session tokens are `jwt.sign({...}, secret, { expiresIn: '7d' })` — **stateless**. Two
@@ -1282,6 +1328,170 @@ so all the user saw was a red line on some unrelated field far away.
   lives in `scripts/verify-settings-save-guard.mjs` (real window + CDP, 15 assertions, backs up and
   restores the database settings it touches).
 
+### "I changed it but it never saved, and going back it reverted" (a same-named button + an out-of-reach save button)
+
+The user reported: "I set the cloud model and filled in every parameter, but the AI Agent page still
+shows the local model, and going back to settings it is local again." Decomposed, three things stack:
+**nothing was written to the database** -> **the AI Agent page reads the old value** -> **returning to
+settings gets overwritten by that old value**. It looks like "the system restored my config", but the
+root cause sits in the **save step**.
+
+The evidence was not guesswork — it came from **reading the MySQL binlog**. This project runs
+`binlog_format=ROW` with `binlog_row_image=FULL`, so the row images survive in the binlog file, and
+`SHOW BINLOG EVENTS` does not decode row values. So the binlog file was read directly, walking the
+events by their 4-byte Unix timestamp and extracting the `aiAgent` object before/after:
+
+| Time | binlog row image | Conclusion |
+| -- | -- | -- |
+| **20:38** | **no write at all** | that save wrote **not a single byte** |
+| 20:49:18 | `local` -> `cloud` + `deepseek-flash` + `rb1:` ciphertext | the path itself is fine (a later save worked) |
+| 20:51:56 | `cloud` -> `local` + key cleared | switched back to local and saved |
+
+Two decisive details: `api.deepseek.com` appears **zero times** in the whole binlog (the `sk-...`
+string the user had mistakenly typed into the "API address" field never reached the database), and
+`PUT /api/cdp` only writes back `cdpEnabled` / `cdpPort` and **never touches `aiAgent`** — yet it does
+refresh `updatedAt`, which explains "there was a write, but `aiAgent` did not change".
+
+So the button the user clicked was the **"Save settings" button inside the CDP card, bearing exactly
+the same name as the main save button**: it only writes the debug-port config, **does not submit the
+form**, and still pops up "Saved". A same-named button is the real culprit here — it does not merely
+fail to save, it *pretends* to save, and the user has no clue which of the two they hit.
+
+**Four layers of defense**:
+
+- **The same-named button was renamed**: the CDP card now says "Save debug port" (`cdp.saveOnly`, four
+  languages), so the main save button appears **exactly once** on the page.
+- **Save entry points brought within reach**: the main save bar became `position: sticky` and **pins
+  to the bottom** (background / border taken from antd `theme.useToken()`, so it follows the theme),
+  visible at any scroll position; inside the AI Agent block there is now an inline "Save AI Agent
+  settings" button that calls `form.submit()` — **the exact same** submission path as the main button
+  (same validation, same failure toast and scroll-to-error), not a backdoor around validation. The
+  main button used to sit at the **very end** of a very long form while the AI Agent config lives in
+  the **middle** — after editing, there was no "Save settings" on screen at all.
+- **Shape validation on the API address field**: a new pure function
+  `src/shared/cloudConfigValidation.ts` (`checkCloudBaseUrl`) points out a mis-filled field the moment
+  you save — "This looks like an API key, not an address. Put the key in the 'API Key' field, and put
+  an https:// address here (or leave it empty for the default)." An empty value passes (empty = use the
+  provider's default address).
+- **Conditional required key + an explicit unsaved-changes hint**: in cloud mode the API key is
+  `required` (**conditionally** required — switching back to local must not block the whole form; the
+  guard in `tests/settingsSaveGuard.test.cjs` asserts that allow-listed fields really live inside a
+  conditional block). The bottom bar shows an "Unsaved changes" tag, decided by **comparing the form
+  value field-by-field against what is already stored** (the baseline merges the server value with the
+  form store, because fields unmounted by conditional rendering still linger in the store).
+
+  Three "why not the other approach" worth remembering: `JSON.stringify` comparison **depends on key
+  order**, so two equal objects with different key order compare unequal — a false positive is worse
+  than a false negative, because **once the hint stops being trustworthy, the user stops looking at it**
+  (hence the module-level `deepEqual`); `isFieldsTouched()` only reflects "which field did the user
+  touch", not "does the current value differ from the stored one", so it stays `true` after the user
+  types the original value back (hence the field-by-field comparison); `useBlocker` requires a data
+  router, while this project uses `HashRouter` + `<Routes>` in declarative mode and would throw
+  outright (hence in-app navigation cannot be intercepted, and we rely on the inline button plus the
+  explicit hint — `beforeunload` only covers closing the app / reloading).
+
+- **Verification**: pure-function level `tests/cloudConfigValidation.test.cjs` (11) + behavior level
+  `scripts/verify-settings-save-visibility.mjs` (**13** assertions, CDP driving the real UI; backs up
+  and restores the database settings it touches); **51 passed / 0 failed** in the offline suite.
+
+> Side note: for DeepSeek, **the text model and the vision model can share one name**. They remain two
+> separate fields (probed and called separately), but `deepseek-v4-flash` actually routes to
+> **V4.1-Flash**, and V4.1-Flash **natively accepts image input**; `deepseek-v4-flash-vision-exp` is the
+> experimental multimodal vision model released on 2026-08-21.
+
+### AI Agent model selection (pick from what is installed, don't type it by hand)
+
+The model fields used to be plain text inputs, so the model name had to be typed by hand. Ollama
+looks models up by their **exact** `base:tag`, and typing by hand easily produces "same base, wrong
+tag" (the machine had `qwen2.5:3b` installed, the user typed `qwen2.5:7b`). That exposed a subtle
+bug: the connectivity probe reported "model ready" while the actual chat call returned 404 — the
+probe only compared base names, so it mistook a missing model for an installed one.
+
+- **Model names are matched in full**: the decision logic is centralized in the pure function
+  `src/shared/ollamaModels.ts` (`isModelInstalled`), allowing only one equivalence — "omitted tag ≡
+  `:latest`". The frontend dropdown and the backend probe share the same rules.
+- **Models are selectable from a dropdown**: the model inputs became `AutoComplete`, listing the
+  models **actually installed on this machine** (`GET /api/ai-agent/models` → Ollama `/api/tags`),
+  while still accepting free-form input (the user may want a model they haven't pulled yet).
+- **Errors point at the fix**: when a model isn't installed (or a chat call 404s), the message lists
+  the locally installed models; if a sibling tag of the same base exists, it names that one directly.
+- **Verification**: pure-function tests `tests/ollamaModels.test.cjs` (13) + source-level guard
+  `tests/aiAgentModelSelect.test.cjs` (10) + behavior-level
+  `scripts/verify-ai-agent-model-select.mjs` (11, including an end-to-end assertion that really calls
+  Ollama; backs up and restores the database settings it touches).
+
+### AI execution failing with "exceeds the available context size" (not a small model — Ollama's default 4K window)
+
+User report: the AI execution panel failed three times in a row with
+`{"error":"request (5290 tokens) exceeds the available context size (4096 tokens), try increasing it"}`.
+The message looks like "the model isn't capable enough", but the real cause is a **configuration
+default**:
+
+| Where | Measured | Meaning |
+| ---- | ---- | ---- |
+| `/api/show` → `model_info.qwen25vl.context_length` | **128000** | the model itself supports 128K |
+| `/api/ps` → `context_length` | **4096** | Ollama runner's **runtime** window |
+
+Ollama's llama.cpp runner defaults to a 4096-token `num_ctx`, **regardless of what the model
+supports**. Vision requests carry "screenshot + DOM element list + system prompt" — measured, the
+image part of a 1920x1080 screenshot alone costs **2715** tokens, and together with the DOM and the
+system prompt the total reaches ~5290 → hits the wall.
+
+- **Explicitly pass `options.num_ctx` per request**: `VISION_MIN_NUM_CTX = 8192`; measured to work at
+  request level, so **no Ollama startup-flag changes are needed**.
+- **Shrinking the screenshot is not an option**: image tokens scale with resolution (1920 wide →
+  2715, 1280 wide → 1220 — 55% less), but DOM coordinates are **viewport pixels** and the system
+  prompt requires coordinates to match the screenshot 1:1. Rescaling shifts every click target and
+  trades "context overflow" for a far harder-to-debug "clicked the wrong thing". Hence "**widen the
+  window**" rather than "compress the input".
+- **Overflow errors are recognizable and actionable**: `parseContextOverflow` extracts the requested
+  token count and the window size; `describeContextOverflow` states plainly that "the bottleneck is
+  Ollama's default `num_ctx`, not the model's capability" and gives the model's real context length —
+  otherwise users assume the model is too small and swap models, and *every* model hits the same wall
+  at the default `num_ctx`.
+- **No more pointless retries**: a context overflow is **deterministic** — retrying three times fails
+  identically, just burning 3-6 seconds and burying the real cause under the uninformative
+  "vision model failed 3 times in a row". It now aborts immediately with a targeted message.
+- **Verification**: pure-function tests `tests/ollamaModels.test.cjs` (46) + behavior-level
+  `scripts/verify-ollama-context.mjs` (15, reproduces the overflow and verifies the fix) +
+  end-to-end `scripts/verify-agent-context-e2e.mjs` (drives the real UI over CDP to run one Agent
+  execution).
+
+### Cloud BYOK (API key) path
+
+Switching "Settings → AI Agent → model backend" to "Cloud BYOK" moves both chat and screen
+understanding to a cloud provider (DeepSeek / Alibaba Qwen / Zhipu GLM / OpenAI, all speaking
+OpenAI-compatible chat/completions). The cloud path is easier to get wrong than the local one,
+because **the cloud has no equivalent of Ollama's `/api/show` `capabilities`** — the only way to
+find out is to actually send a request:
+
+- **Vision probing must send a real image.** The only way to verify a cloud model accepts image
+  input is to send a 1x1 image. Probing with plain text would let a text-only model (e.g.
+  `deepseek-chat`) pass the probe and only fail later with 400 `does not support image input`.
+  Text and vision models are probed **separately**; if either fails the whole check fails, and
+  the message **names which field** is at fault (text model / vision model).
+- **Image MIME must match the bytes**: the probe image is PNG (`image/png`), while real
+  screen-capture is an Electron JPEG (`image/jpeg`). A mismatch makes providers (the OpenAI
+  family in particular) reject the request with 400.
+- **Automatic parameter downgrade for reasoning models**: the probe sends `max_tokens: 16` to save
+  tokens, but OpenAI reasoning models (o-series / gpt-5) only accept `max_completion_tokens`. On
+  that specific error the client retries once with the other name — this is a parameter-name
+  incompatibility, not a user configuration error, so it should not be pushed back to the user.
+- **Key and model name are trimmed**: copy-paste routinely brings trailing whitespace and
+  newlines, and a `\n` inside the Bearer token is judged an invalid key by providers.
+- **An empty response does not count as reachable**: some gateways/proxies return HTTP 200 with
+  empty `choices` for an invalid key, which used to be reported as "connected".
+- **Errors are translated into "what went wrong — what to do next"** (`src/shared/cloudErrors.ts`):
+  provider payloads are classified into `auth` / `balance` / `rate_limit` / `model_not_found` /
+  `no_vision` / `bad_param` / `context_length` / `network` / `unknown`, while the raw provider
+  text is preserved (truncated to 600 chars) for filing tickets. The classifier is guarded against
+  false positives: a bare `'429'` is not treated as rate limiting (providers often put business
+  codes in the payload, where 429 may mean a balance problem), and a bare `'multimodal'` is not
+  treated as "model rejects images" (that phrasing often means the account lacks the permission).
+- **Verification**: pure-function tests `tests/cloudErrors.test.cjs` (25) + behavior-level
+  `scripts/verify-cloud-agent.mjs` (25, ships with an OpenAI-compatible mock server, so **no real
+  API key and no token cost are involved**).
+
 ### AI Assistant Planner (product support)
 
 A floating bubble at bottom-right (hidden on the login page and full-screen browser page) that
@@ -1471,7 +1681,7 @@ src/
     could mint JWTs and bypass all auth. After an upgrade, old tokens become invalid and one
     re-login is expected; deleting the file is equivalent to rotating the key.
 11. **Run the tests before changing entities**: `pnpm test` compiles shared modules and runs
-    the full offline suite (47 tests). Invariants like "`normalizeFingerprint` must preserve
+    the full offline suite (50 tests). Invariants like "`normalizeFingerprint` must preserve
     custom keys such as `expiresAt`" are locked by tests and turn red immediately if broken.
 12. **Register new entities in DataSource**: `synchronize` only creates tables for entities
     **registered** in the `entities` array in `server.ts`. Missing one means the table does not

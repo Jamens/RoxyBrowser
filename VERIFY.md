@@ -405,6 +405,217 @@ node scripts/verify-settings-save-guard.mjs   # 起应用 → 操作真实 UI �
 > 合理例外（默认值空串、但只在用户主动进入某模式后才挂载的字段，如 `customProxyHost`）
 > 需在测试里显式登记白名单并写明理由。
 
+---
+
+## 16. AI Agent 模型选择链路验证
+
+```bash
+node scripts/verify-ai-agent-model-select.mjs   # 起应用 → 操作真实 UI → 真实调一次 Ollama
+```
+
+前置：MySQL 已启动（默认账号 `admin` / `123456`），**且 Ollama 已启动并至少装了一个模型**
+（端到端断言需要一个真实可用的模型）。脚本同样**运行前备份 `settings`、结束时无条件还原**。
+
+**验证什么**（11 项断言，退出码 0 = 全通过）：
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| 0a | 模型清单接口可用 | `GET /api/ai-agent/models` 返回本机已装模型 |
+| 0b | 本机至少装了一个模型 | 端到端断言的前提（没装则跳过相关断言） |
+| A1 | 下拉列出了本机已装的模型 | **核心项**：模型名可从列表选，不必手打 |
+| A2 | 下拉不是空列表 | 同上 |
+| B1 | 自定义模型名仍可输入 | 下拉只是辅助，**不能**把输入框锁成只能选 |
+| C1 | 报「未安装」而不是「模型就绪」 | **根因项**：探活不再误报 |
+| C2 | 提示里列出了本机已装的模型 | 报错要能指导下一步 |
+| D1 | 选已装模型后探活显示就绪 | 反向确认判定没矫枉过正 |
+| E1 | 保存的载荷里是选中的模型 | 前端→服务端链路 |
+| E2 | 服务端已落库该模型 | 落库链路 |
+| E3 | 用该模型真实对话成功 | **端到端**：真调一次 Ollama，不是模拟 |
+
+**三个坑（都踩过）**：
+
+1. **模型匹配不能只比 base 名**。原实现 `m.split(':')[0] === model.split(':')[0]`
+   会把没装的模型误判成已装：本机装的是 `qwen2.5:3b`，配置写的是 `qwen2.5:7b` →
+   base 名相同 → 判定「已安装」→ 探活显示「模型就绪」，真正对话时 Ollama 按**完整名**找模型
+   → `404 model not found`。判定必须走 `src/shared/ollamaModels.ts` 的 `isModelInstalled`
+   （完整名匹配，只允许「省略 tag ≡ `:latest`」这一种等价）。
+
+2. **AutoComplete 不能按输入框内容过滤候选**。模型名是**完整标识符**不是搜索词，
+   输入框里本来就有当前配置的模型名 —— 一 filter 就把候选全滤光，
+   下拉里显示「未检测到已安装模型」，而本机明明装了 4 个。必须恒定显示全部已装模型。
+
+3. **`notFoundContent` 必须恒为非空字符串**。rc-select 里
+   `emptyListContent = !notFoundContent && emptyOptions` —— 选项为空且 `notFoundContent` 为空时
+   **禁止展开下拉**，于是 `onOpenChange` 永不触发，形成
+   「下拉开不了 → 加载不到模型 → 还是开不了」的死锁。
+
+**三档验证的分工**：
+
+| 档位 | 文件 | 覆盖时机 |
+| -- | -- | -- |
+| 纯函数级（13 项） | `tests/ollamaModels.test.cjs` | 进 `pnpm test`，CI 可跑 |
+| 源码级守卫（10 项） | `tests/aiAgentModelSelect.test.cjs` | 进 `pnpm test`，防"改代码时无声退化" |
+| 行为级（11 项） | `scripts/verify-ai-agent-model-select.mjs` | 手动跑，防 antd 版本差异这类运行时问题 |
+
+---
+
+## 17. 模型模态能力校验验证
+
+```bash
+node scripts/verify-ollama-capability.mjs   # 直连真实 Ollama，验证能力判定与错配拦截
+```
+
+前置：**Ollama 已启动**（默认 `127.0.0.1:11434`）。脚本自己编译
+`src/shared/ollamaModels.ts` 到临时目录，用完即删，**不碰数据库**。
+
+**验证什么**（18 项断言，退出码 0 = 全通过）：
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| 0 | Ollama 可访问 | 前置条件 |
+| 1 | 能读出各模型的能力 | `capabilities` 字段可读：视觉模型有 `vision`，纯文本模型没有，embedding 只有 `embedding` |
+| 2 | 视觉模型位填纯文本模型 → 被拦 | **核心项**：探活报模态错配，不是「已连接」 |
+| 2b | 错误信息点明是视觉模型 | 定位到具体字段 |
+| 2c | 错误信息含该模型的真实能力 | 如 `completion、tools、insert` |
+| 2d | 错误信息给出可用替代模型 | 如「本机支持该能力的模型有：qwen2.5vl:7b」 |
+| 3 | 文本模型位填 embedding 模型 → 被拦 | 反向错配同样拦住 |
+| 4 | 未安装的模型报「未安装」而非「不支持」 | **不误伤**：能力查不到 ≠ 不支持 |
+| 4b | 能力未知时判定为 undefined | 老版本 Ollama 不该被误判 |
+| 5 | 正确配置探活无错误 | 反向确认没矫枉过正 |
+| 6 | 让纯文本模型看屏，Ollama 确实报错 | **端到端**：证明拦截是有依据的，不是瞎报 |
+
+**为什么要有这道校验**（实测 Ollama 0.40.14）：
+
+「模型已安装」≠「模型能干这活」。三类错配在只查安装时**全部查不出来**：
+
+| 错配 | 已安装？ | 真实后果 |
+| ---- | -- | ---- |
+| 视觉模型位填 `qwen2.5-coder:7b` | ✅ 装了 | HTTP 400 `Multimodal data provided, but model does not support multimodal requests.` |
+| 文本模型位填 `nomic-embed-text:latest` | ✅ 装了 | `{"error":"\"nomic-embed-text:latest\" does not support chat"}` |
+| 视觉模型位填 `qwen2.5:3b` | ✅ 装了 | 同第一种 |
+
+不拦的后果：设置页「检测连接」显示「模型就绪」，用户直到真正跑 Agent 才看到
+一个跟配置毫无关系的 400 报错，还得自己猜是哪个字段填错了。
+
+**两个关键实现细节**：
+
+1. **三态语义，不能二值化**。能力判定返回 `true`（支持）/ `false`（明确不支持）/
+   `undefined`（**能力未知**）。老版本 Ollama 的 `/api/show` 不返回 `capabilities` 字段，
+   此时若一律判为 `false`，会把「本机明明装了视觉模型」的用户挡在门外 ——
+   **误伤比漏报更糟**。所以 `undefined` 一律放行。
+
+2. **查能力必须用已安装的精确名**。`POST /api/show` 只认精确名：
+   查 `qwen2.5vl:7b` → 200；查 `qwen2.5vl:latest` → 404 `model not found`。
+   故先用已装列表反查精确名（`resolveInstalledModelName`）再查能力，
+   否则用户填省略 tag 的写法就查不到能力，退化成「未知」。
+
+**关于「省略 tag ≡ `:latest`」的精确边界**（实测，容易误解）：
+
+省略 tag **不会**回退到任意 tag，只在 `:latest` 那个模型**确实装了**时才等价：
+
+- 本机装了 `nomic-embed-text:latest` → 查 `nomic-embed-text` **能**命中（HTTP 200）
+- 本机只有 `qwen2.5vl:7b`（无 `:latest`） → 查 `qwen2.5vl` **命中不了**（HTTP 404），
+  真正对话同样 404
+
+所以用户填 `qwen2.5vl` 而本机只有 `qwen2.5vl:7b` 时，判定「未安装」是**正确**的
+（Ollama 本身也调不通这个名字），此时应提示改填精确名 —— `findSameBaseModel` 正是干这个的。
+
+**验证的三个层次**：
+
+| 档位 | 文件 | 覆盖时机 |
+| -- | -- | -- |
+| 纯函数级（46 项） | `tests/ollamaModels.test.cjs` | 进 `pnpm test`，CI 可跑 |
+| 行为级（18 项） | `scripts/verify-ollama-capability.mjs` | 手动跑，直连真实 Ollama |
+
+---
+
+## 18. 视觉模型上下文窗口验证
+
+```bash
+node scripts/verify-ollama-context.mjs     # 直连真实 Ollama，复现超限并验证修复
+node scripts/verify-agent-context-e2e.mjs   # 端到端：驱动真实 UI 跑一次 Agent 执行
+```
+
+前置：**Ollama 已启动**且装了视觉模型；端到端脚本还需 MySQL 与至少一个浏览器环境。
+
+### 18.1 这个坑为什么隐蔽
+
+用户报障的错误是：
+
+```
+{"error":"request (5290 tokens) exceeds the available context size (4096 tokens), try increasing it"}
+```
+
+看着像「模型太小了」，但真相是**配置默认值问题**：
+
+| 位置 | 实测值 | 含义 |
+| ---- | ---- | ---- |
+| `/api/show` 的 `model_info.qwen25vl.context_length` | **128000** | 模型本身支持 128K |
+| `/api/ps` 的 `context_length` | **4096** | Ollama runner **运行时**窗口 |
+
+Ollama 的 runner 默认只给 4096 tokens 的 `num_ctx`，**与模型能力无关**。
+不查 `/api/ps` 就发现不了这个落差 —— 而用户会去换模型，
+换了任何模型在默认 num_ctx 下都会撞同一堵墙。
+
+### 18.2 token 构成（实测 1920x1080）
+
+| 组成 | 约需 tokens |
+| ---- | -- |
+| 图像部分 | **2715**（patch 14 + 2x2 spatial merge） |
+| system prompt | 约 554 |
+| DOM 元素列表（最多 80 个） | 约 1500-2000 |
+| 用户指令 + 历史动作 | 数百 |
+
+合计约 **5290** → 撞 4096 的墙。
+
+### 18.3 一个必须守住的设计约束
+
+图像 token 与分辨率成正比，缩放确实能省（1920 宽 → 2715，1280 宽 → 1220，**省 55%**）——
+**但不能这么做**：DOM 坐标是**视口像素**，system prompt 要求「坐标与截图 1:1 对齐」。
+缩放会让点击坐标整体错位，把「上下文超限」换成更难排查的「点错位置」。
+
+故走「**加大窗口**」（请求级 `options.num_ctx = 8192`）而非「压缩输入」。
+
+### 18.4 验证什么
+
+**`verify-ollama-context.mjs`（15 项，直连 Ollama）**：
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| 0 | Ollama 可访问、找到视觉模型 | 前置条件 |
+| 1 | 模型能力与运行时窗口存在落差 | 确认问题根源 |
+| 3 | 默认配置下**复现**上下文超限 | 证明 bug 真实存在 |
+| 3b | 解析出请求 token 数与窗口大小 | 错误可解析 |
+| 4 | 带 `num_ctx` 后**不再超限** | **核心项**：修复有效 |
+| 4b | 带 `num_ctx` 后正常返回内容 | 不是空响应 |
+| 5 | 提示点明 num_ctx 是瓶颈、给出模型真实上下文 | 提示可操作 |
+| 5b | 提示不含 `undefined` 等脏字符 | 提示干净 |
+| 6 | 源码守卫：请求体带 `options.num_ctx` | 防改代码时无声退化 |
+
+**`verify-agent-context-e2e.mjs`（端到端，CDP 驱动真实 UI）**：
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| 3 | 本次运行未出现 context size 超限 | **核心项**：真实场景不再报错 |
+| 3b | Agent 执行已启动（落库 `agent_start`） | 确实跑了 |
+| 3c | 有明确结局（`agent_done` / `agent_failed`） | 不是卡住 |
+
+端到端脚本踩过的坑（都值得记住）：
+
+1. **必须按时间过滤日志**。操作日志表是持久化的，用户之前那次报障的记录还在里面。
+   不按 `createdAt` 过滤就会把**旧记录**误判成「修复没生效」—— 第一次跑就踩了这个坑。
+2. **要等环境状态变成 `running`**。`/api/profiles/:id/open` 返回 `{ok:true}` 时窗口还没完全就绪，
+   太早触发 Agent 会得到「该环境窗口未运行」。
+3. **别用 UI 按钮触发**。「开始」按钮的文案在 antd 的 `<PlayCircleOutlined/>` 里，`textContent` 为空，
+   且它 `disabled={!s.envIds.length}` —— 还得先在 Select 里选环境。直调
+   `window.roxy.agentStart` 走的是完全相同的主进程代码路径，且不受 UI 结构变动影响。
+4. **单实例锁要用独立 `userData` 绕过**。`requestSingleInstanceLock()` 的锁按 userData 路径算，
+   dev 实例在跑时新实例会秒退。换 `--user-data-dir` 即可共存，不必杀掉用户的 dev。
+5. **Node 内置 WebSocket 用 `addEventListener`**，不是 `ws` 的 `on`（项目没装 `ws` 依赖）。
+6. **别与 `npm run build` 并行**。`npm run dev` 与 `npm run build` 都写 `out/` 目录，
+   并行会互相覆写 → dev 直接崩（Vite 返回 502）。正确顺序：先 build → 再起 dev → 最后跑验证。
+7. **复合指令要跑十几分钟**。每步都真调一次本地视觉模型（单步几十秒），
+   默认等待窗口 `CTX_VERIFY_WAIT_MS`（900 秒），可用环境变量调大。
 
 ---
 
@@ -670,6 +881,87 @@ node scripts/verify-profile-form-ux.mjs      # 真实 UI 全流程
 
 ---
 
+## 15. 云端 BYOK（API Key）链路验证
+
+> 用途：确认「填了厂商 Key 之后真的能调通」——
+> 包括**探活口径**与**真实调用口径**是否一致，以及报错能不能指导用户改对地方。
+
+### 15.1 为什么云端比本地更容易出问题
+
+本地链路有 `/api/show` 的 `capabilities` 可查，能直接知道模型支不支持视觉。
+**云端没有等价接口** —— 只能靠实际发请求去试。于是「探活」与「真实调用」两种
+请求形态的差异，直接变成了盲区：
+
+| 环节 | 探活发什么 | 真实调用发什么 | 不一致的后果 |
+| -- | -- | -- | -- |
+| 文本模型 | 纯文本 `hi` | 纯文本 | 一致 |
+| 视觉模型 | **必须带一张真图** | 视口 JPEG 截图 | 只发纯文本 → 纯文本模型也「探活通过」，真正看屏才报 400 |
+| 图片 MIME | `image/png`（1x1 探活图） | `image/jpeg`（Electron 截图） | 声明与字节不符 → 厂商直接 400 拒收 |
+| 长度参数 | `max_tokens: 16`（省 token） | 不传 | 推理模型只认 `max_completion_tokens` → 400 |
+
+### 15.2 两档验证
+
+| 档位 | 文件 | 覆盖内容 |
+| -- | -- | -- |
+| 纯函数级（25 项断言） | `tests/cloudErrors.test.cjs` | 错误分类（状态码 + 语义特征 + **防误判**）+ 原文保留 + 「下一步」文案。已进 `pnpm test` |
+| 行为级（25 项断言） | `scripts/verify-cloud-agent.mjs` | 自带 OpenAI 兼容 mock 服务，**不需要真实 API Key、不产生任何费用** |
+
+```bash
+pnpm test                              # 含 cloudErrors（25 项）
+node scripts/verify-cloud-agent.mjs    # 自拉 mock 跑全部云端用例
+```
+
+### 15.3 行为级脚本验证什么
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| 1 | 文本 / 视觉（PNG / JPEG 两种格式）调用均正常返回 | 基本链路通 |
+| 2 | **MIME 与字节错配会被厂商拒** | 复现真实厂商行为，证明「格式标错必失败」不是假设 |
+| 3 | **纯文本模型当视觉模型 → 视觉探活判为不可达** | **核心项**：堵住「探活通过、一用就报错」的云端盲区 |
+| 3b | 该错误分类为 `no_vision`，文案点名「视觉模型」这一栏 | 引导能落到具体字段 |
+| 4 | 文本探活对纯文本模型仍可达 | 不能因为修了视觉就把文本也判死 |
+| 5 | 多模态模型视觉探活可达、`supportsVision=true` | 不能因为带图就判不通 |
+| 6 | Key 无效 → `auth`，含厂商原文 + 明确的下一步 | 401 能定位 |
+| 7 | 余额不足 → `balance` | 402 能定位 |
+| 8 | **推理模型 → 自动降级 `max_completion_tokens` 后可达** | **核心项**：Key 与模型名都对，不该甩参数错误给用户 |
+| 9 | 未填 Key / 模型名 / 视觉模型名 → 不可达且提示去设置填 | 填错位置能被指出来 |
+| 10 | base 带尾斜杠 / 已是完整 `chat/completions` 地址 → 都不重复拼接 | 端点拼接 |
+| 11 | Key 带首尾空白 → 自动 trim | 复制粘贴常见坑 |
+| 12 | 网络不可达 → 提示检查 API 地址 / 网络 | 与「Key 错」区分开 |
+
+### 15.4 手动验证真机（需要真实 Key）
+
+```bash
+# 设置页 → AI Agent → 模型后端选「云端 BYOK」→ 填厂商 / Key / 模型名 / 视觉模型名
+# 点「检测连接」，然后跑一次 AI 执行
+```
+
+判读要点：
+
+1. **「检测连接」应分别报出文本与视觉两个模型的结果**。
+   视觉那栏失败时，文案必须点名「视觉模型」并说明该模型不支持图像输入 ——
+   而不是笼统地说「连接失败」。
+2. **厂商返回的原文应透出**（报错末尾的「厂商返回：…」），
+   便于用户拿这段去厂商控制台 / 工单里查。
+3. **不要照抄示例模型名**。各厂商的视觉模型名差异极大且会更新
+   （`gpt-4o` / `qwen-vl-max` / `glm-4v` 只是示例），
+   务必到厂商官网确认自己账号下可用的名字。
+
+### 15.5 踩过的坑
+
+1. **残留的 mock 进程会让验证结果失真**。脚本用固定端口（默认 4599），
+   若上次跑完没退干净，新脚本连到的是**旧版本 mock** —— 症状是
+   「明明修了却还有一条用例不过」，而实际是测了旧代码。
+   排查：`netstat -ano | grep 4599` 看端口被谁占着。
+2. **`.tmp_cloud/` 编译产物**由脚本自己建、自己删。
+   若手工跑过一半中断，残留目录会被下次 `tsc` 覆盖，不影响结果。
+3. **错误分类的「防误判」比「分类得多准」更重要**。
+   裸 `'429'` 会把「余额不足」误判成「限流」，裸 `'multimodal'` 会把
+   「权限未开通」误判成「模型是纯文本模型」—— 两者都会把用户引向错误的修复方向，
+   比不分类更糟。
+
+---
+
 # 指纹基线与内核升级回归（Electron 45 / Chromium 156）
 
 > 用途：**升级 Chromium 内核前后，用同一套探针逐项对比窗口内的实测值**，
@@ -833,3 +1125,84 @@ catch (e) { console.log('正常：已按版本隐藏 →', e.name) }
 | 窗口标题正常但内容全白 | 渲染进程沙箱起不来（`render-process-gone` / `0x80000003`） | 启动时加 `ROXY_DISABLE_SANDBOX=1` |
 
 两者都不涉及业务代码，只是宿主环境的限制。
+
+---
+
+## 19. 设置页保存可见性验证（同名按钮误点 + 保存入口不可见）
+
+```bash
+node scripts/verify-settings-save-visibility.mjs   # CDP 驱动真实 UI，13 项断言
+```
+
+### 19.1 这个坑为什么必须靠 binlog 才能定案
+
+用户报障「设置线上模型 → 回 AI Agent 页还是本地 → 再回设置页又变本地」。
+表面看有三种可能：**没点保存** / **点错按钮** / **保存了但被覆盖**。
+前两种靠读代码能猜，第三种必须看**落库事实**。
+
+本项目 `binlog_format=ROW` + `binlog_row_image=FULL`，行镜像完整留在 binlog 文件里，
+而 `SHOW BINLOG EVENTS` **不解码行值** —— 所以直接读 binlog 文件、按 4 字节 Unix 时间戳遍历事件，
+以 `needApprovalByDefault` 为锚点把 `aiAgent` 对象的前后值抠出来。
+
+**取证结果**：
+
+| 时刻（北京时间） | binlog 行镜像 | 结论 |
+| -- | -- | -- |
+| **20:38** | **无任何写入** | 那次保存**一个字节都没落库** |
+| 20:49:18 | `local` → `cloud` + `deepseek-flash` + `rb1:` 密文 | 链路本身没问题（后来保存成功） |
+| 20:50:17 / 20:50:25 | cloud → cloud（换 Key 重存） | 用户在重试 |
+| 20:51:56 | `cloud` → `local` + Key 被清空 | 切回本地后保存 |
+
+两条决定性证据：
+
+1. 整个 binlog 里 `api.deepseek.com` 出现 **0 次**；用户误填进「API 地址」栏的那个 `sk-...` 串
+   **从未落过库**，`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` 也一次都没出现。
+2. `PUT /api/cdp` 只补写 `cdpEnabled` / `cdpPort`（`row.settings = { ...row.settings, cdpEnabled, cdpPort }`），
+   **不碰 `aiAgent`** —— 但它会刷新 `updatedAt`，正好解释 20:51 那次「有写入但 aiAgent 没变」。
+
+→ 用户点的是 **CDP 卡片里那个和主保存按钮完全同名的「保存设置」**：只写调试端口、不提交表单、
+还弹「已保存」。**同名按钮是元凶**：它不只不保存，还假装保存了。
+
+> ⚠️ binlog 时间戳是 **Unix 时间戳**（UTC 语义）。直接当本地时间读会差 8 小时，
+> 导致「binlog 显示 19:13，而 `updatedAt` 是 20:51」这种看似矛盾的现象。按 `Asia/Shanghai` 呈现即对齐。
+
+### 19.2 验证什么（13 项）
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| V1 | 页面「保存设置」只出现 1 次；含「保存」的按钮为「保存设置 / 保存调试端口」 | 同名按钮已消除 |
+| V0 | 模型后端能切到「云端 BYOK（需 Key）」 | 前置操作 |
+| V3 | **地址栏填 API Key → 被拦下**，错误文案点名「这是 API Key 不是地址」 | 填错栏当场发现 |
+| V4 | **云端模式下不填 Key → 被拦下**，提示「必须填写 API Key」 | 条件必填生效 |
+| V2 | 点就近保存按钮 → **真的发出 `PUT /api/settings`**（PUT 计数 0 → 1） | **核心项**：保存真的发生了 |
+| V2b | PUT 载荷里 `aiAgent.backend === "cloud"` 且云端字段齐全 | 载荷完整 |
+| V2c | **服务端落库** `backend=cloud` | **核心项**：真的写进 DB |
+| V2d | 落库的 `cloudBaseUrl` 是合法 URL（没被 Key 覆盖） | 地址栏没被污染 |
+| V5 | AI Agent 页显示「云端 BYOK（需 Key）」+ `deepseek-v4-flash` | 跨页读到的是新值 |
+| V5b | 回设置页云端模型名没丢 | 参数没被 `load()` 抹掉 |
+| V4b | 保存成功后「有未保存的改动」提示消失 | 提示不误报 |
+| V4c | 改动后提示出现 | 提示不漏报 |
+
+### 19.3 脚本踩过的坑（都值得记住）
+
+1. **antd 6 的 Select DOM 变了**：不再有 `.ant-select-selection-item`，改为 `.ant-select-content`
+   （文本在 `textContent` 与 `title` 属性中）；option class 为 `.ant-select-option-item`。
+2. **CDP `Runtime.evaluate` 的表达式解析**：以 `{` 开头会被当模板字面量 →
+   `Invalid parameters - Failed to deserialize params.expression`。
+   修法：所有页面原语改成**字符串常量** + `fill(tpl, { '__TEXT__': ... })` 运行时替换占位符。
+3. **CDP 返回对象 / 数组会丢成 `{}`**：需用 `JSON.stringify(...)` 包装，返回后再 `JSON.parse`。
+4. **按钮文案比对要先去空格**：页面侧比较时做了 `.replace(/\s/g, '')`，传值也必须带去空格版本。
+5. **脚本会污染真实配置**：验证脚本启动时**备份 settings**，`finally` 里**无条件还原**。
+   诊断过程中曾用一次性脚本把 `aiAgent` 还原为用户原始状态
+   （`backend=local`、`localModel=qwen2.5-coder:7b`、`localVisionModel=qwen2.5vl:7b`、云端字段全空）。
+6. **未保存改动判定不能用 `JSON.stringify` 字符串比较**：它**依赖键序**，
+   内容相同但键序不同 → 刚进页面就误报。基线改存**对象**，比较改用模块级 `deepEqual`。
+   实测「刚进设置页」「切云端再切回本地」均不误报。
+
+### 19.4 纯函数与守卫层
+
+| 档位 | 文件 | 断言数 |
+| -- | -- | -- |
+| 纯函数 | `tests/cloudConfigValidation.test.cjs` | 11 |
+| 源码守卫 | `tests/settingsSaveGuard.test.cjs`（新增「白名单字段确实位于条件渲染块内」） | — |
+| 离线单测总计 | `node scripts/run-tests.mjs` | **51 passed / 0 failed** |

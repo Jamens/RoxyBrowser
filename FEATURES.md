@@ -1431,6 +1431,45 @@ Access 的配套头，缺了自家前端会多出无谓的权限提示）。
     源码级回归守卫 `tests/settingsSaveGuard.test.cjs` 会拦下「默认值是空串 + 无条件 `required`」的致命字段；
     行为级验证 `scripts/verify-settings-save-guard.mjs`（真窗口 + CDP，15 项断言）。
 
+- **设置页保存可见性与防误操作**（「改了存不进去、回来看又变回去」的根因修复）
+  - **根因**：设置页 CDP 卡片里有一个和主保存按钮**完全同名**的「保存设置」。
+    它只写调试端口配置（`PUT /api/cdp`，仅补写 `cdpEnabled` / `cdpPort`，**不碰 `aiAgent`**）、
+    **不提交表单**，却弹「已保存」—— 云端配置零落库 → AI Agent 页读到服务端旧值显示「本地」
+    → 回设置页 `load()` 又被旧值覆盖 → 观感就是「系统把配置恢复回去了」。
+    经 MySQL binlog（`binlog_format=ROW` + `binlog_row_image=FULL`，行镜像完整留存）逐事件比对确认：
+    用户报障时刻**零写入**，且 `api.deepseek.com` 在整个 binlog 中出现 **0 次**。
+  - **同名按钮改名**：CDP 卡片改为「保存调试端口」（`cdp.saveOnly`，四语），主保存按钮页面内**只出现一次**。
+  - **保存入口吸底 + 就近保存**：主保存栏改 `position: sticky` 吸底固定（底色 / 边框取 antd
+    `theme.useToken()`，自动适配深浅色）；AI Agent 区块内加「保存 AI Agent 设置」就近按钮，
+    走 `form.submit()` 与主按钮**完全相同**的提交路径（同一套校验与失败提示，非绕过校验的后门）。
+  - **API 地址栏形状校验**：`src/shared/cloudConfigValidation.ts`（`checkCloudBaseUrl`）识别
+    「误填成 API Key」与「不是合法 URL」两类问题，保存时拦下并点名说明；留空放行（= 用厂商默认地址）。
+  - **云端 Key 条件必填 + 未保存改动提示**：云端模式下 API Key `required`（条件必填，切回本地不拦整表；
+    守卫用例校验白名单字段确实位于条件渲染块内）。吸底栏显示「有未保存的改动」，
+    判定为**与服务端已落库值逐字段比对**（模块级 `deepEqual`，避免 `JSON.stringify` 的键序敏感误报；
+    不用 `isFieldsTouched()`——改回原值仍为 true；不用 `useBlocker`——本项目 `HashRouter` 声明式模式下会抛错）。
+  - **验证**：`tests/cloudConfigValidation.test.cjs`（11 项）+ `scripts/verify-settings-save-visibility.mjs`
+    （13 项，CDP 驱动真实 UI）；离线单测 **52 passed / 0 failed**。
+
+- **凭据泄漏守卫（测试凭据也绝不入库）**
+  - 排查「云端配置存不进去」时，**用户截图里的真实 API Key 被写进了测试文件与验证脚本**。
+    核查：该串**从未进入 git 历史**（`git log --all -S` 无命中）、当时文件均未跟踪 ——
+    但**只差一次 `git add`** 就会入库。真实凭据进版本库等于永久公开（历史无法真正抹除）。
+  - **换成占位串也不够**（两个实际风险）：
+    - **secret scanner 误报** → 告警多了就学会忽略 → **告警失去意义**；
+    - **真实凭据的滑坡入口** → 源码里已有一个「格式完全正确的 key」时，
+      下一个人顺手换成自己真实 Key 去验证几乎零阻力 —— **这是泄漏最常见的路径**。
+  - **改为运行时拼装**：源码里只有前缀片段，完整形态**运行时才成形**，静态扫描扫不到。
+    - 统一来源 `scripts/lib/fake-credentials.mjs`（`fakeKey()` / `fakeKeyWithTag()` / `INVALID_KEY`）；
+      mock 服务与调用方取同一常量，保证「精确比对」断言仍成立。
+    - **语义等价**：前端识别是**前缀匹配**、mock 识别是**精确比对**（双方同源），
+      故拼装值与手写字面量在**被测行为上完全一致**。
+  - **守卫测试** `tests/noCredentials.test.cjs`（4 项）：按厂商前缀 + ≥8 位随机体匹配字面量、
+    **只扫字面量**、排除明显占位形态（`xxx` / `test` / `dummy` / `example`）以保持高置信
+    （**误报比漏报更糟**）；另含「JWT 密钥无硬编码回落」断言。
+    **有效性已做注入验证**：塞入形似凭据 → 报错并定位行号 + 命中内容、退出码 1 → 移除恢复通过
+    （**从没触发过的守卫等于没有守卫**）。
+
 ### 10.0 账号与会话（登录 / 登出 / 设备级撤销）
 
 - **普通「退出登录」只让本设备失效**：`POST /api/auth/logout` 仅撤销当前设备。
@@ -1520,12 +1559,99 @@ Access 的配套头，缺了自家前端会多出无谓的权限提示）。
 2. 「设置 → AI Agent」：开启 AI Agent，填本地模型名，点「检测连接」——会明确提示 Ollama 未启动 / 模型未拉取 / 就绪三种状态
 3. 侧边栏进入「AI Agent」即可对话；Enter 发送、Shift+Enter 换行，产品客服的回复会带「产品客服」标签
 
+**模型名怎么选**（这一步最容易踩坑）：
+
+- 模型输入框是**可下拉选 + 可自由输入**的组合（`AutoComplete`）。下拉里直接列出**本机实际已安装**的模型
+  （数据来自 `GET /api/ai-agent/models` → Ollama `/api/tags`），点一下即可选中，不用手打。
+- **必须按完整名匹配**：Ollama 是按 `base:tag` 精确找模型的，`qwen2.5:7b` 与 `qwen2.5:3b` 是两个不同模型。
+  探活若按 base 名比较，会把没装的模型误判成已装 —— 表现为「检测连接显示就绪，一对话就 404」。
+  判定逻辑在 `src/shared/ollamaModels.ts`（`isModelInstalled`），只允许「省略 tag ≡ `:latest`」这一种等价。
+- 文本模型与视觉模型是**两个独立字段**：文本模型用于对话 / 客服 / Planner，视觉模型用于执行闭环「看屏」决策
+  （如 `qwen2.5vl:7b`）。两者要各自拉取。
+- 模型没装时，报错会**列出本机已安装的模型**；若是同 base 的另一个 tag，会直接提示可以改用哪个。
+
+**装了 ≠ 支持视觉**（模态错配在探活阶段就会被拦下）：
+
+视觉模型位误填纯文本模型时，「是否已安装」这一关**过得去**（模型确实装了），
+但该模型没有视觉能力 —— 真正让 Agent 看屏时 Ollama 会返回 400：
+
+```
+{"error":"Multimodal data provided, but model does not support multimodal requests."}
+```
+
+同理，文本模型位填 embedding 模型（`nomic-embed-text:latest`）会得到
+`"nomic-embed-text:latest" does not support chat`。这两类错误在「只查是否安装」的探活里**查不出来**，
+只能等真正跑 Agent 时才炸 —— 所以现在探活会一并校验**模型能力**（Ollama `/api/show` 的 `capabilities`）：
+
+| 配置 | 探活结果 |
+| ---- | ---- |
+| 视觉模型位填纯文本模型 | 报「视觉模型『x』的能力为 completion、tools，不支持所需的模态」，并列出本机支持视觉的模型供直接改用 |
+| 文本模型位填 embedding 模型 | 报「文本模型『x』的能力为 embedding，不支持所需的模态」，并列出可用的对话模型 |
+| 视觉模型位填真正的视觉模型 | 正常通过，不受影响 |
+
+判定的三态语义（`supportsVision` / `supportsChat`，**重要**）：
+
+- `true` —— 明确带 `vision` / `completion` 标签，可以看屏 / 对话。
+- `false` —— **明确**不支持，探活拦下并给出替代建议。
+- `undefined` —— **能力未知**（老版本 Ollama 的 `/api/show` 不返回 `capabilities` 字段），**不拦**。
+  误伤比漏报更糟：本机明明装了视觉模型的用户不能因为版本旧而被挡在门外。
+
+> 查 `capabilities` 必须用**已安装的精确名**：`POST /api/show` 只认精确名，
+> 查 `qwen2.5vl:7b` 返回 200，查 `qwen2.5vl:latest` 返回 404。
+> 故先用已装列表反查精确名（`resolveInstalledModelName`）再查能力。
+
+**上下文窗口（`num_ctx`）—— 视觉模型的隐性依赖**：
+
+Ollama 的 llama.cpp runner 默认只给 **4096** tokens 的上下文窗口，
+**与模型自身支持的上下文长度无关**。实测本机 `qwen2.5vl:7b`：
+`/api/show` 里 `context_length = 128000`，但 `/api/ps` 里运行时 `context_length = 4096`。
+
+而视觉请求要带「截图 + DOM 元素列表 + system prompt」，实测 token 构成：
+
+| 组成 | 约需 tokens |
+| ---- | -- |
+| 图像部分（1920x1080） | **2715**（patch 14 + 2x2 spatial merge） |
+| system prompt | 约 554 |
+| DOM 元素列表（最多 80 个） | 约 1500-2000 |
+| 用户指令 + 历史动作 | 数百 |
+
+合计约 **5290** tokens → 撞上 4096 的墙，报
+`{"error":"request (5290 tokens) exceeds the available context size (4096 tokens), try increasing it"}`。
+
+因此视觉请求**必须显式带 `options.num_ctx`**（`VISION_MIN_NUM_CTX = 8192`）——
+请求级覆盖实测生效，无需改 Ollama 启动参数。
+
+且窗口大小是**动态算**的（`computeVisionNumCtx`）：按「估算需求 × 1.5 余量」计算，
+对齐到 1024 的整数倍（llama.cpp 按块分配内存，非整数倍浪费显存），不超过模型自身能力上限。
+固定 8192 对 1080p 够用，但用户把窗口拉到 2560x1440 时图像部分就 5969 tokens ——
+8192 仍不够；复合指令跑十几步后历史动作也会累积顶上去。
+估算用 DOM 快照里的视口尺寸（`dom.vw/vh`）而非去解 JPEG 尺寸 —— 截图就是视口大小。
+
+> **不能靠缩小截图省 token**：图像 token 与分辨率成正比（1920 宽 → 2715，
+> 1280 宽 → 1220，省 55%），但 DOM 坐标是**视口像素**、system prompt 要求
+> 「坐标与截图 1:1 对齐」。缩放会让点击坐标整体错位，把「上下文超限」
+> 换成更难排查的「点错位置」。故走「加大窗口」而非「压缩输入」。
+
+上下文超限是**确定性**错误，重试必然同样失败 —— 现在直接中止并给出针对性提示
+（点明瓶颈是 `num_ctx` 而非模型能力），不再重试 3 次白等 3-6 秒。
+
 **实现要点**：
 
 - 模型适配层 `src/main/agent/ollama.ts`：`/api/tags` 连通探针 + `/api/chat` 对话，纯 `fetch` 零额外依赖；对话接口只携带最近 20 条历史（本地模型上下文有限）
+- 能力查询 `src/main/agent/ollama.ts`：`getModelCapabilities`（查 `/api/show` 的 `capabilities`）、`getCapabilitiesOfInstalled`（自动处理省略 tag）、`listModelsWithCapability`（列支持某能力的模型，用于给替代建议）
+- 模型名判定 `src/shared/ollamaModels.ts`：纯函数（`normalizeModelName` / `isModelInstalled` / `findSameBaseModel` / `resolveInstalledModelName` / `supportsVision` / `supportsChat` / `describeModalityMismatch` / `estimateImageTokens` / `parseContextOverflow` / `describeContextOverflow`），可离线单测；前端下拉与后端探活共用同一套规则
+- 探活与执行前预检**同一口径**：`POST /api/ai-agent/status`（设置页「检测连接」）与 `src/main/agent/runner.ts` 的 `checkVision`（跑 Agent 前的预检）都会报模态错配，避免「设置显示正常、跑一半才失败」
 - 知识检索 `src/main/agent/knowledge.ts`：README 按标题切片（5 分钟缓存），中文 2-gram + 拉丁词打分取 top-6 片段拼入 system prompt，总长 ≤7000 字符
-- 接口：`POST /api/ai-agent/chat`（`mode: auto/chat/support`）、`GET /api/ai-agent/status`（探针）
+- 接口：`POST /api/ai-agent/chat`（`mode: auto/chat/support`）、`GET /api/ai-agent/status`（探活）、`GET /api/ai-agent/models`（本机已装模型清单）
 - 云端 BYOK（自带 Key）为可选兜底配置：在「设置 → AI Agent」选「云端」并填写 API Key 与模型名即可使用（DeepSeek / 通义千问 / 智谱 GLM / OpenAI 均走 OpenAI 兼容的 chat/completions，base URL 可自定义覆盖代理 / 私有部署）；会产生 token 费用，非默认路径，默认仍是本地 Ollama（零费）。云端不仅覆盖 Chat/Support/auto 文本对话，**Agent 执行闭环的视觉模型也可切到云端多模态模型**——需单独填「视觉模型（云端）」（如 gpt-4o / qwen-vl-max / glm-4v），即可零本地算力看屏自动操作
+- **云端探活与真实调用同口径**（`src/main/agent/cloud.ts` + `src/shared/cloudErrors.ts`）：
+  - **视觉探活必须带真图**。云端没有本地 `/api/show` 那样的 `capabilities` 接口，只能实际发一张 1x1 图验证模型是否接受图像输入；若只发纯文本，「纯文本模型当视觉模型」会探活通过、真正看屏才报 400
+  - **文本与视觉模型分别探活**，任一失败即整体判为不可达，且报错**点名具体是哪一栏**（文本模型 / 视觉模型）
+  - **图片 MIME 必须与字节一致**：探活图是 PNG（`image/png`）、真实看屏是 Electron 截的 JPEG（`image/jpeg`），两者不能共用同一个 data URL 前缀——声明与实际不符时厂商（OpenAI 系）直接 400 拒收
+  - **推理模型的参数名自动降级**：探活带 `max_tokens: 16` 省 token，而 OpenAI 推理系列（o-series / gpt-5）只认 `max_completion_tokens`，命中该特征时自动换名重试一次（这是参数名不兼容，不是用户配置错误，不该甩给用户）
+  - **Key / 模型名统一 trim**：复制粘贴常带首尾空格与换行，否则 Bearer 里带 `\n` 会被厂商判为「无效 Key」
+  - **空响应不算连通**：部分网关 / 中继对无效 Key 仍返回 HTTP 200 但 `choices` 为空，原先会误显示「已连接」
+  - **报错翻译成「问题 + 下一步」**（`src/shared/cloudErrors.ts`）：厂商报文分类为 `auth` / `balance` / `rate_limit` / `model_not_found` / `no_vision` / `bad_param` / `context_length` / `network` / `unknown` 九类，同时保留厂商原文（截断 600 字）便于提工单。分类带**防误判**：裸 `'429'` 不判成限流（厂商把业务码塞报文里时可能是余额问题）、裸 `'multimodal'` 不判成「模型不支持图像」（那可能是账号权限未开通）
 - **执行闭环**（看屏自动操作浏览器）：Route A「截图 + DOM → 本地视觉模型 / 云端 BYOK 多模态模型 → sendInputEvent」，支持**矩阵并行**（多选环境并发执行同一条指令）、执行完成后可把动作序列**存为 RPA 模板**离线回放；`session.ts` / `actions.ts` 带主进程 console 日志便于排查
 - 原子动作：`click` / `type` / `navigate` / `scroll` / `wait` / `finish` / `ask`。其中 **`navigate`** 由主进程直接 `webContents.loadURL` 打开目标网址（与 `BrowserTab.go → env-navigate` 同一底层），用于「打开某网站 / 搜索某词」时直接跳转，避免弱视觉模型在地址栏里输入失败；system prompt 同时约束「指令未完成不得提前 finish」，所以环境窗口不会停在预设起始页不动作
 - **执行日志**：AI 执行的开始 / 完成 / 失败写入操作日志（见 §8），日志页可用 `AI 执行开始 / 完成 / 失败` 标签追溯每次运行的指令、环境与结果

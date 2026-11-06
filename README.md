@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（47 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（50 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -418,6 +418,27 @@ app.listen(4000)
 
 离线单测：`tests/secretCrypto.test.cjs`（40 例全绿）覆盖往返一致（含中文 / emoji / 换行 / 256 字符）、随机 IV、篡改检测、错误密钥 fail-closed、历史明文兼容、空值语义、密钥优先级。
 
+### 测试凭据也**不允许**出现在仓库里（凭据泄漏守卫）
+
+上一节讲的是**运行时**的凭据怎么保护。这一节讲一个更容易被忽略、后果却同样严重的口子：**测试代码里的凭据**。
+
+排查「云端配置存不进去」那个 bug 时，我需要往测试里写一个「像 API Key 的值」来触发前端的密钥识别分支——写的时候**顺手用了用户截图里的真实 Key**。它被写进了 `tests/cloudConfigValidation.test.cjs` 与一个验证脚本。
+
+**核查结果**：那个串**从未进入 git 历史**（`git log --all -S` 无命中），当时两个文件也都还是未跟踪状态——但它**只差一次 `git add`** 就会入库。一个真实凭据进了版本库等于永久公开：历史无法真正抹除，且每一份 clone 都带着它。
+
+**换成占位串 `sk-0123...` 也不够**：
+
+- **secret scanner 误报** —— 按「前缀 + 长度」匹配的扫描器会当真实凭据拦截；告警多了大家就学会忽略，**告警随即失去意义**。
+- **真实凭据的滑坡入口** —— 源码里已经躺着一个「格式完全正确的 key」时，下一个人顺手换成自己真实 Key 去「验证一下」几乎零阻力，**这正是凭据泄漏最常见的路径**。
+- **散落各处、无法审计** —— 每个脚本各写一个，改起来要翻遍全仓。
+
+所以正确做法不是「换个值」，而是**改变值的产生方式**：源码里只有前缀片段，完整形态**在运行时才成形**，静态扫描扫不到。
+
+- **统一来源**：`scripts/lib/fake-credentials.mjs` 是全仓唯一的假凭据出处（`fakeKey()` / `fakeKeyWithTag()` / `INVALID_KEY`）。mock 服务与调用方**取同一个值**，保证「精确比对」这类断言仍成立。
+- **语义等价**：前端的密钥识别是**前缀匹配**（`/^(sk-|sk_ant-|AIza|gsk_|xai-|...)/i`，只看前缀），mock 的无效 Key 识别是**精确比对**（双方取同一常量）——故拼装值与手写字面量在**被测行为上完全一致**，不是「换个凑合的值」。
+- **守卫测试** `tests/noCredentials.test.cjs`（4 项）把约束从「自觉」变成**可执行的闸门**：按厂商前缀 + ≥8 位随机体匹配字面量，**只扫字面量**（不扫运行时拼装出来的值），并排除明显的占位形态（`xxx` / `test` / `dummy` / `example`）以保持高置信——**误报比漏报更糟**。另含「JWT 密钥无硬编码回落」断言，防「拿到该值即可伪造令牌」。
+- **守卫有效性做注入验证**：往源码里塞一个形似凭据的串，守卫立刻报错并定位到**行号 + 命中内容**、退出码 1，移除后恢复通过——一个从没触发过的守卫等于没有守卫。
+
 ### 会话撤销（登出真正失效 / 退出所有设备）
 
 会话令牌是 `jwt.sign({...}, secret, { expiresIn: '7d' })`——**无状态**。这带来两个绕不过去的问题：
@@ -568,6 +589,73 @@ for (const ctx of browser.contexts()) {
 - **条件渲染卸载的字段不被默认值覆盖**：设置页大量用条件渲染（如模型后端切到「云端 BYOK」后本地模型字段被卸载），而 `validateFields()` 只返回**已挂载**的字段；保存时合并 `form.getFieldsValue(true)` 的全量 store，用户配好的模型名不会被服务端的默认值补齐抹掉。
 - **判定逻辑纯函数化**：`src/shared/settingsValidation.ts`（零依赖、可离线单测）；源码级守卫 `tests/settingsSaveGuard.test.cjs` 会拦下「默认值是空串 + 无条件 `required`」的致命字段；行为级验证 `scripts/verify-settings-save-guard.mjs`（真窗口 + CDP，15 项断言，运行时备份并还原数据库设置）。
 
+### 设置页「改了存不进去、回来看又变回去」（同名按钮误点 + 保存入口不可见）
+
+用户报障「设置了线上模型，参数也填写了，回到 ai agent 页面还是显示本地模型，再回去设置又变回去本地模型」。
+拆开是三件事叠加：**改动没落库** → **AI Agent 页读到旧值** → **回设置页被旧值覆盖**。看起来像「系统把配置恢复回去了」，但根因在**保存这一步**。
+
+取证不是猜，是**翻 MySQL binlog**（本项目 `binlog_format=ROW` + `binlog_row_image=FULL`，行镜像完整留在文件里；`SHOW BINLOG EVENTS` 不解码行值，故直接读 binlog 文件、按 4 字节 Unix 时间戳遍历事件、把 `aiAgent` 对象的前后值抠出来）：
+
+| 时刻 | binlog 行镜像 | 结论 |
+| -- | -- | -- |
+| **20:38** | **无任何写入** | 用户那一次保存**一个字节都没落库** |
+| 20:49:18 | `local` → `cloud` + `deepseek-flash` + `rb1:` 密文 | 链路本身没问题（后来保存成功） |
+| 20:51:56 | `cloud` → `local` + Key 被清空 | 切回本地后保存 |
+
+两条决定性证据：整个 binlog 里 `api.deepseek.com` 出现 **0 次**（用户误填进「API 地址」栏的那个 `sk-...` 串从未落过库）；`PUT /api/cdp` 只补写 `cdpEnabled` / `cdpPort` 两个键、**不碰 `aiAgent`**，但会刷新 `updatedAt` —— 正好解释「有写入但 aiAgent 没变」。
+
+所以用户点的是 **CDP 卡片里那个和主保存按钮完全同名的「保存设置」**：它只写调试端口配置、不提交表单，**却弹了「已保存」**。同名按钮在这里是真正的元凶 —— 它不只不保存，还假装保存了，用户没有任何线索去怀疑自己点错了哪一个。
+
+**四道防线**：
+
+- **同名按钮改名**：CDP 区块改为「保存调试端口」（`cdp.saveOnly`，四语），主保存按钮在整个页面**只出现一次**。
+- **保存入口放到手边**：主保存栏改 `position: sticky` **吸底固定**（底色 / 边框取 antd `theme.useToken()`，自动适配深浅色），任何滚动位置都可见；AI Agent 区块内再加一个就近的「保存 AI Agent 设置」，走 `form.submit()` —— 与主按钮**完全相同**的提交路径（同一套校验与失败提示），不是绕过校验的后门。原本主按钮在整张表单**最末尾**，而 AI Agent 配置在**中部**，改完参数时屏幕上根本没有「保存设置」。
+- **API 地址栏做形状校验**：新增纯函数 `src/shared/cloudConfigValidation.ts`（`checkCloudBaseUrl`），把「填错栏」在保存那一刻就点出来 —— 「这里填的是 API Key，不是地址。请把 Key 填到「API Key」栏，地址栏填 https 开头的接口地址（或留空用默认）」。留空是放行的（留空 = 用厂商默认地址）。
+- **云端 Key 条件必填 + 未保存提示**：云端模式下 API Key 挂 `required`（**条件必填**，切回本地后不拦整表；`tests/settingsSaveGuard.test.cjs` 加了守卫专门校验白名单字段确实位于条件渲染块内）。吸底栏有改动时显示「**有未保存的改动**」，判定方式是**与服务端已落库的值逐字段比对**（基线取「服务端值 + 表单 store 合并」，因为条件渲染卸载的字段仍留在 store 里）。
+
+  三个「为什么不用另一个方案」值得记住：`JSON.stringify` 比较**依赖键序**，内容相同但键序不同会误报 —— **误报比漏报更糟，提示一旦不可信用户就再也不会注意它**（故用模块级 `deepEqual`）；`isFieldsTouched()` 只反映「碰过哪个字段」，改回原值仍为 `true`（故用逐字段比对）；`useBlocker` 需要 data router，本项目是 `HashRouter` + `<Routes>` 声明式模式，用它会直接抛错（故站内切换拦不住，只能靠就近按钮 + 显式提示，`beforeunload` 只拦关闭应用 / 刷新）。
+
+- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **51 passed / 0 failed**。
+
+> 顺带澄清：DeepSeek 的**文本模型与视觉模型可以是同一个名字**。字段上仍是两个独立字段（分别探活、分别调用），但 `deepseek-v4-flash` 实际路由到 **V4.1-Flash**，而 V4.1-Flash **原生支持图像输入**；`deepseek-v4-flash-vision-exp` 是 2026-08-21 发布的实验性多模态视觉模型。
+
+### AI Agent 模型选择（从本机已装模型里挑，别手打）
+
+设置页的模型字段曾经是纯文本框，只能手打模型名。而 Ollama 是按 `base:tag` **精确**找模型的 —— 手打极易写成「同 base 不同 tag」（本机装的是 `qwen2.5:3b`，手打成了 `qwen2.5:7b`），于是踩到一个很隐蔽的坑：**探活说「模型就绪」，真正对话却 404**。根因是探活只比 base 名，把没装的模型误判成了已装。
+
+- **模型名按完整名匹配**：判定逻辑收口到纯函数 `src/shared/ollamaModels.ts`（`isModelInstalled`），只允许「省略 tag ≡ `:latest`」这一种等价；前端下拉与后端探活共用同一套规则，不会再各说各话。
+- **模型可从下拉里选**：模型输入框改成 `AutoComplete`，下拉直接列出**本机实际已安装**的模型（`GET /api/ai-agent/models` → Ollama `/api/tags`），同时保留自由输入 —— 用户可能想填还没 pull 的模型名。
+- **报错能指导下一步**：模型未安装 / 对话 404 时，提示里会列出本机已安装的模型；若是同 base 的另一个 tag，会直接告诉你可以改用哪个。
+- **验证**：纯函数级 `tests/ollamaModels.test.cjs`（13 项）+ 源码级守卫 `tests/aiAgentModelSelect.test.cjs`（10 项）+ 行为级 `scripts/verify-ai-agent-model-select.mjs`（11 项，含**真实调一次 Ollama** 的端到端断言；运行时备份并还原数据库设置）。
+
+### AI 执行报「exceeds the available context size」（不是模型太小，是 Ollama 的默认 4K 窗口）
+
+用户报障：AI 执行页连续失败 3 次，报 `{"error":"request (5290 tokens) exceeds the available context size (4096 tokens), try increasing it"}`。这错误看着像「模型能力不够」，真相是**配置默认值**：
+
+| 位置 | 实测值 | 含义 |
+| ---- | ---- | ---- |
+| `/api/show` 的 `model_info.qwen25vl.context_length` | **128000** | 模型本身支持 128K |
+| `/api/ps` 的 `context_length` | **4096** | Ollama runner 的**运行时**窗口 |
+
+Ollama 的 llama.cpp runner 默认只给 4096 tokens 的 `num_ctx`，**与模型自身能力无关**。而视觉请求要带「截图 + DOM 元素列表 + system prompt」，实测 1920x1080 截图的图像部分就占 **2715** tokens，加上 DOM 与 system prompt 合计约 5290 → 撞墙。
+
+- **请求级显式带 `options.num_ctx`**：`VISION_MIN_NUM_CTX = 8192`，实测请求级覆盖生效，**无需改 Ollama 启动参数**。
+- **不能靠缩小截图省 token**：图像 token 与分辨率成正比（1920 宽 → 2715，1280 宽 → 1220，省 55%），但 DOM 坐标是**视口像素**、system prompt 要求「坐标与截图 1:1 对齐」——缩放会让点击坐标整体错位，把「上下文超限」换成更难排查的「点错位置」。故走「**加大窗口**」而非「压缩输入」。
+- **超限错误可识别、可操作**：`parseContextOverflow` 解析出请求 token 数与窗口大小；`describeContextOverflow` 生成的提示会**点明「瓶颈是 Ollama 的 num_ctx 默认值，不是模型能力不足」**并给出模型真实上下文长度 —— 否则用户会误以为「模型太小」而去换模型，而换了任何模型在默认 num_ctx 下都会撞同一堵墙。
+- **不再无意义重试**：上下文超限是**确定性**错误，重试 3 次必然同样失败，只是白等 3-6 秒，且把真正的原因埋进「视觉模型连续失败 3 次」这种无信息量的措辞里。现在直接中止并给针对性提示。
+- **验证**：纯函数级 `tests/ollamaModels.test.cjs`（46 项）+ 行为级 `scripts/verify-ollama-context.mjs`（15 项，复现超限并验证修复）+ 端到端 `scripts/verify-agent-context-e2e.mjs`（CDP 驱动真实 UI 跑一次 Agent 执行）。
+
+### 云端 BYOK（API Key）链路
+
+「设置 → AI Agent → 模型后端」选「云端 BYOK」可把对话与看屏都切到云端厂商（DeepSeek / 通义千问 / 智谱 GLM / OpenAI，均走 OpenAI 兼容的 chat/completions）。云端比本地更容易踩坑，原因是**云端没有 `/api/show` 那样的 `capabilities` 接口**，只能靠实际发请求去试：
+
+- **视觉探活必须带真图**。云端只能实际发一张 1x1 图来验证模型是否接受图像输入；若只发纯文本，「纯文本模型当视觉模型」会探活通过、真正看屏才报 400。文本与视觉两个模型**分别探活**，任一失败即整体判为不可达，报错**点名具体是哪一栏**。
+- **图片 MIME 必须与字节一致**：探活图是 PNG（`image/png`）、真实看屏是 Electron 截的 JPEG（`image/jpeg`）。声明与实际不符时厂商（OpenAI 系）直接 400 拒收。
+- **推理模型的参数名自动降级**：探活带 `max_tokens: 16` 省 token，而 OpenAI 推理系列（o-series / gpt-5）只认 `max_completion_tokens`，命中该特征时自动换名重试一次 —— 这是参数名不兼容，不是用户配置错误。
+- **Key / 模型名统一 trim**：复制粘贴常带首尾空格与换行，否则 Bearer 里带 `\n` 会被厂商判为「无效 Key」。
+- **空响应不算连通**：部分网关 / 中继对无效 Key 仍返回 HTTP 200 但 `choices` 为空，原先会误显示「已连接」。
+- **报错翻译成「问题 + 下一步」**（`src/shared/cloudErrors.ts`）：厂商报文分类为 `auth` / `balance` / `rate_limit` / `model_not_found` / `no_vision` / `bad_param` / `context_length` / `network` / `unknown` 九类，并保留厂商原文（截断 600 字）便于提工单。分类带**防误判**：裸 `'429'` 不判成限流（厂商把业务码塞报文里时可能是余额问题）、裸 `'multimodal'` 不判成「模型不支持图像」（那可能是账号权限未开通）。
+- **验证**：纯函数级 `tests/cloudErrors.test.cjs`（25 项）+ 行为级 `scripts/verify-cloud-agent.mjs`（25 项，自带 OpenAI 兼容 mock 服务，**不需要真实 API Key、不产生任何费用**）。
 ### 智能助手 Planner（AI 客服）
 
 右下角悬浮气泡（登录页与全屏浏览器页不显示），打开即用自然语言问全项目的数据，例如「哪些环境快过期了」「哪个代理 3 天内到期」「最近删了哪些环境」。
@@ -682,7 +770,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 47 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 50 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
