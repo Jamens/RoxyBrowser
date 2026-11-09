@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（50 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（51 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -615,9 +615,31 @@ for (const ctx of browser.contexts()) {
 
   三个「为什么不用另一个方案」值得记住：`JSON.stringify` 比较**依赖键序**，内容相同但键序不同会误报 —— **误报比漏报更糟，提示一旦不可信用户就再也不会注意它**（故用模块级 `deepEqual`）；`isFieldsTouched()` 只反映「碰过哪个字段」，改回原值仍为 `true`（故用逐字段比对）；`useBlocker` 需要 data router，本项目是 `HashRouter` + `<Routes>` 声明式模式，用它会直接抛错（故站内切换拦不住，只能靠就近按钮 + 显式提示，`beforeunload` 只拦关闭应用 / 刷新）。
 
-- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **51 passed / 0 failed**。
+- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **53 passed / 0 failed**。
 
 > 顺带澄清：DeepSeek 的**文本模型与视觉模型可以是同一个名字**。字段上仍是两个独立字段（分别探活、分别调用），但 `deepseek-v4-flash` 实际路由到 **V4.1-Flash**，而 V4.1-Flash **原生支持图像输入**；`deepseek-v4-flash-vision-exp` 是 2026-08-21 发布的实验性多模态视觉模型。
+
+### 排版防溢出（「高级设置」里 label 被挤成竖排）
+
+编辑环境抽屉的「指纹配置 → 高级设置」曾出现一排开关的 label **逐字竖排**：
+「追踪器屏蔽」被挤成 6 行，开关也跟着变形，看起来像坏掉了。
+
+- **根因是一条可复用的判据**：antd 的 `Space` 默认 `flex-wrap: nowrap`，
+  当子项自然宽度（704px）超过容器宽度（抽屉 640px）时，flex 只能**压缩每一个子项**；
+  而这些 `Form.Item` 位于 `layout="vertical"` 的表单里，antd 会把 label 的 `white-space`
+  覆盖成 `initial` —— 中文 label 于是逐字换行，竖成一根。
+- **同一判据一次查清三处**：编辑抽屉「高级设置」（704px vs 640px）、
+  设置页「安全阈值」（768px vs 560px）、环境列表「操作」列（354px vs 列声明 276px，
+  内容溢出单元格 78px，把「删除」推出表格右边界）。三处都按「自然宽度」重新定尺。
+- **纯图标按钮必须有 Tooltip**：操作列 11 个按钮里唯独「编辑」既无 Tooltip 也无
+  `aria-label`，悬停没有任何提示；已补「编辑环境（基本信息 / 指纹 / 代理 / 账号）」。
+- **不是所有横向 Space 都要加 `wrap`**：设置页另有 6 处横向 Space 只有 1~3 项，
+  自然宽度远小于容器，实测不溢出 —— 强加 `wrap` 反而让宽屏下的表单显得松散。
+  判据写成了「**子项超过 4 个的横向 Space 必须带 `wrap`**」，进了源码级测试。
+- **验证**：源码级 9 项断言（`tests/envOperationsLayout.test.cjs`，进 `pnpm test`）
+  + 行为级 7 项 CDP 验证（`scripts/verify-env-operations-layout.mjs`）；
+  另做过一次**全仓普查**（12 个主页面 + 27 个抽屉/弹窗逐个量宽度），确认 **0 处残留溢出**。
+  两档都做了反向验证：回退修复后断言确实变红。详见 `VERIFY.md` §20。
 
 ### AI Agent 模型选择（从本机已装模型里挑，别手打）
 

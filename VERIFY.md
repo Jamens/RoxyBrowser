@@ -1206,3 +1206,100 @@ node scripts/verify-settings-save-visibility.mjs   # CDP 驱动真实 UI，13 �
 | 纯函数 | `tests/cloudConfigValidation.test.cjs` | 11 |
 | 源码守卫 | `tests/settingsSaveGuard.test.cjs`（新增「白名单字段确实位于条件渲染块内」） | — |
 | 离线单测总计 | `node scripts/run-tests.mjs` | **51 passed / 0 failed** |
+
+---
+
+## 20. 环境管理「高级设置」与操作列排版验证
+
+用户报障：「环境管理的编辑环境的高级设置 ui 有点问题」。
+
+### 20.1 判据：横向 Space 溢出
+
+一条可复用的判据，本轮在三处都命中：
+
+> **横向 Space（`flex-wrap: nowrap`）+ 子项自然宽度 > 容器宽度 → 溢出。**
+> 若该 Form 是 `layout="vertical"`，antd 会把 label 的 `white-space` 覆盖成 `initial`，
+> label 就逐字换行 —— 中文直接竖排（「追踪器屏蔽」竖成 6 行）。
+
+| 位置 | 子项自然宽度 | 容器宽度 | 症状 |
+| -- | -- | -- | -- |
+| 编辑抽屉「高级设置」 | 704px | 640px | label 竖排 3~6 行 |
+| 设置页「安全阈值」 | 768px | 560px | label 被压成 2 行 |
+| 环境管理表格「操作」列 | 354px | 276px（列声明） | 内容溢出单元格 78px |
+
+### 20.2 全仓普查：0 处残留
+
+一次性普查脚本遍历 12 个主页面 + 27 个抽屉/弹窗，量每处横向 Space 的
+子项自然宽度（用 `scrollWidth`，不受 flex 压缩影响）与容器可用宽度：
+
+```
+主页面 0 处 + 抽屉/弹窗 0 处 = 0 处
+其中 0 处已把 label 压成多行
+```
+
+设置页另有 6 处横向 Space 未加 wrap，但它们只有 1~3 项、自然宽度远小于容器，
+实测均不溢出 —— 强加 wrap 反而让宽屏下的表单显得松散，故保留现状。
+该判断已写入 `tests/envOperationsLayout.test.cjs` 的注释与断言。
+
+### 20.3 行为级验证（7 项）
+
+`scripts/verify-env-operations-layout.mjs` —— 真窗口 + CDP 驱动真实 UI。
+
+| 编号 | 断言 | 意义 |
+| -- | -- | -- |
+| A0 | 「高级设置」折叠面板存在并可展开 | 前置操作（见下方踩坑 1） |
+| A1 | 编辑抽屉内所有 label 单行（无一高度 > 32px） | **核心项**：不再竖排 |
+| A2 | 高级设置的 5 个开关都在屏上 | 确认 A1 不是空断言 |
+| B1 | 设置页所有 label 单行 | 安全阈值区同样修好 |
+| C1 | 操作列单元格内容宽度 ≤ 单元格宽度 | 内容不再溢出 78px |
+| D1 | 横向滚动到底后无按钮被表体裁切 | 「删除」不再被推出可视区 |
+| E1 | 编辑按钮悬停出现 Tooltip，文案含「编辑环境」 | 纯图标按钮有说明书 |
+
+### 20.4 源码级验证（9 项）
+
+`tests/envOperationsLayout.test.cjs` —— 纯读源码，进 `pnpm test`。
+
+| 断言 | 锁住什么 |
+| -- | -- |
+| 高级设置的 Space 必须带 `wrap` | 不被「顺手删掉」 |
+| 高级设置的 Space 必须显式 `display:flex` | antd 默认 `inline-flex` 不换行 |
+| 5 个开关的 label 都还在 | 不被误删 |
+| 设置页安全阈值的 Space 必须带 `wrap` | 同上 |
+| 操作列声明宽度 ≥ 360px | 11 个按钮的自然宽度是 354px |
+| 编辑按钮必须有 Tooltip | 纯图标按钮必须有说明 |
+| 所有纯图标按钮都必须有 Tooltip / Popconfirm | 防止以后又漏一个 |
+| 已实测会溢出的区域都带 `wrap` | 三处重点区域 |
+| 横向 Space 子项 > 4 个就必须带 `wrap` | **泛化判据**：子项多的必溢出 |
+
+### 20.5 反向验证（探针真的会红）
+
+两档都做过「回退修复 → 确认断言失败 → 恢复」：
+
+| 回退的动作 | 被哪条断言抓到 |
+| -- | -- |
+| 去掉高级设置的 `wrap` | A1 检出 5 个多行 label（「追踪器屏蔽」高 118px）；C1 检出内容宽 354px vs 单元格 292px |
+| 操作列宽度改回 276 | C1 检出溢出 |
+| 移除编辑按钮的 Tooltip | 源码级 2 条断言同时变红 |
+
+### 20.6 脚本踩过的坑（都值得记住）
+
+1. **「高级设置」不是 Tab，是 Collapse 折叠面板**（`key="advanced"`，在「指纹配置」Tab 内部）。
+   按 `.ant-tabs-tab` 找会永远点不到 → 断言变成「抽屉里没渲染出任何多行 label」的**假通过**。
+   修法：先断言面板能被点到（`A0`），再断言排版（`A1`）—— **顺序不能颠倒**。
+2. **antd Tooltip 用 `cloneElement`，不产生 DOM 包裹**：查 `button.closest('.ant-tooltip')`
+   永远返回 `null`，这不是「没有 Tooltip」。必须用**真实鼠标事件**
+   （`Input.dispatchMouseEvent`）悬停，再查 `.ant-tooltip`。
+   且选择器要放宽：实际结构是 `.ant-tooltip`（外层）+ `.ant-tooltip-container`（`role="tooltip"`），
+   只查其中一个会漏。
+3. **悬停前先把鼠标挪开**（`mouseMoved` 到 `10,10` 再移到目标）：
+   若鼠标「本来就在」目标上，`mouseenter` 不会重新触发，Tooltip 不出现。
+4. **注入 token 后必须 `location.reload()`**：应用启动时停在 `/login`，
+   HashRouter 不会因为改了 `hash` 就重走路由守卫，token 注入后页面不会跳走。
+5. **列宽测量要看 `scrollWidth` 而不是 `getBoundingClientRect()`**：
+   后者反映的是**被 flex 压缩后**的宽度（操作列量到 276，实际内容 354）。
+   `scrollWidth` 才是不受压缩影响的自然宽度。
+6. **本仓库文件是 CRLF 换行**：源码级正则必须同时兼容 `\r\n` 与 `\n`，
+   否则「定位不到列定义结尾」这类报错会让人以为是逻辑写错了。
+7. **JSX 里的 `onClick={() => ...}` 会破坏 `<Button ...>...</Button>` 整块正则**：
+   `[^<>]*` 跨不过箭头函数与花括号，12 个图标按钮只能匹配到 5 个。
+   修法：先扫 `icon={<XxxOutlined />}`，再**向前回溯**找最近的 `<Button`。

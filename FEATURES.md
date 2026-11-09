@@ -21,6 +21,11 @@
   - 收起 ≠ 丢值：折叠面板带 `forceRender`，三个 `Form.Item` 在收起状态下也已挂载，未挂载的字段不会出现在 `onFinish` 的 `values` 里，而后端 `PUT` 是全量覆盖——否则「点编辑 → 什么都不改 → 保存」会把用户的备注悄悄抹掉。已用对照实验实测确认（去掉 `forceRender` 后备注确实被清空）。
   - 验证：源码级 9 项断言（`tests/profileFormUx.test.cjs`，进 `pnpm test`）+ 行为级 7 项 CDP 验证（`scripts/verify-profile-form-ux.mjs`，含「备注保值」端到端核对），详见 `VERIFY.md` §11。
 - **状态自愈**：Electron 进程退出时所有窗口都会销毁，启动时自动把 DB 中残留的 `running` 状态重置为 `idle`，避免「界面显示运行中、实际无窗口」导致打开 / 关闭 / RPA 回放全部失灵（重启不会自动重开之前运行的环境，需手动重新打开）
+- **排版防溢出（2026-11-09）**：编辑抽屉「高级设置」与设置页「安全阈值」的开关排、以及环境列表「操作」列，都按**子项自然宽度**而非容器宽度来定尺寸：
+  - 横向 `Space` 必须带 `wrap`——antd 默认 `flex-wrap: nowrap`，子项总宽超过容器时 flex 只能压缩每一项，而 `layout="vertical"` 的表单里 antd 会把 label 的 `white-space` 覆盖成 `initial`，中文 label 就会**逐字竖排**（「追踪器屏蔽」曾被挤成 6 行）。
+  - 表格列的声明宽度必须容得下按钮组的自然宽度——操作列 11 个按钮实宽 354px，声明 276px 会让内容溢出单元格 78px，把「删除」推到表格右边界之外。
+  - 纯图标按钮必须配 `Tooltip`——操作列 11 个按钮里唯独「编辑」原本没有，悬停无任何提示。
+  - 验证：源码级 9 项断言（`tests/envOperationsLayout.test.cjs`，进 `pnpm test`）+ 行为级 7 项 CDP 验证（`scripts/verify-env-operations-layout.mjs`），并做过全仓普查（12 个主页面 + 27 个抽屉/弹窗，0 处残留溢出），详见 `VERIFY.md` §20。
 
 #### 1.1 整环境迁移（导出 / 导入单环境）
 

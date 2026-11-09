@@ -46,7 +46,7 @@ pnpm build        # production build (outputs to out/)
 pnpm app          # launch the client from the production build
 pnpm dist         # build the Windows installer (outputs to release/)
 
-pnpm test         # run the full offline test suite (50 tests: compile shared modules + run each)
+pnpm test         # run the full offline test suite (51 tests: compile shared modules + run each)
 pnpm db:check     # read-only check for schema/entity drift (executes no DDL)
 pnpm db:sync      # create tables + seed data (default admin / 123456, idempotent)
 pnpm migrate:secrets        # encrypt legacy plaintext credentials (dry-run by default)
@@ -1392,12 +1392,41 @@ fail to save, it *pretends* to save, and the user has no clue which of the two t
 
 - **Verification**: pure-function level `tests/cloudConfigValidation.test.cjs` (11) + behavior level
   `scripts/verify-settings-save-visibility.mjs` (**13** assertions, CDP driving the real UI; backs up
-  and restores the database settings it touches); **51 passed / 0 failed** in the offline suite.
+  and restores the database settings it touches); **53 passed / 0 failed** in the offline suite.
 
 > Side note: for DeepSeek, **the text model and the vision model can share one name**. They remain two
 > separate fields (probed and called separately), but `deepseek-v4-flash` actually routes to
 > **V4.1-Flash**, and V4.1-Flash **natively accepts image input**; `deepseek-v4-flash-vision-exp` is the
 > experimental multimodal vision model released on 2026-08-21.
+
+### Layout overflow protection (labels squeezed into a vertical strip)
+
+The "Fingerprint → Advanced settings" row of the edit-profile drawer used to render its labels
+**one character per line**: "Block trackers" was squeezed into 6 lines and the switches deformed
+along with them, making the whole thing look broken.
+
+- **The root cause is a reusable rule**: antd's `Space` defaults to `flex-wrap: nowrap`, so when
+  the children's natural width (704px) exceeds the container (the drawer is 640px), flex can only
+  **compress each child**. Because those `Form.Item`s live in a `layout="vertical"` form, antd
+  overrides the label's `white-space` to `initial` — so CJK labels wrap character by character and
+  stand up like a pole.
+- **One rule, three hits**: the drawer's "Advanced settings" (704px vs 640px), the settings page
+  "Security thresholds" (768px vs 560px), and the environment list "Actions" column (354px vs a
+  declared 276px — the content overflowed the cell by 78px and pushed "Delete" past the table's
+  right edge). All three are now sized by **natural width** instead of by guesswork.
+- **Every icon-only button needs a Tooltip**: of the 11 buttons in the Actions column, only "Edit"
+  had neither a Tooltip nor an `aria-label`, so hovering it revealed nothing. It now reads
+  "Edit profile (basic info / fingerprint / proxy / accounts)".
+- **Not every horizontal `Space` needs `wrap`**: six more in the settings page hold only 1–3 items
+  whose natural width is far below the container, and measurements show they do not overflow —
+  forcing `wrap` there would only make the form look loose on wide screens. The rule was
+  therefore written as "**any horizontal `Space` with more than 4 items must carry `wrap`**" and
+  locked in by a source-level test.
+- **Verification**: source-level assertions (`tests/envOperationsLayout.test.cjs`, runs in
+  `pnpm test`) + behavior-level CDP verification (`scripts/verify-env-operations-layout.mjs`).
+  A **repository-wide sweep** (12 main pages + 27 drawers/modals, each measured) confirmed
+  **0 remaining overflows**. Both layers were **reverse-verified**: reverting the fix turns the
+  assertions red. See `VERIFY.md` §20.
 
 ### AI Agent model selection (pick from what is installed, don't type it by hand)
 
@@ -1681,7 +1710,7 @@ src/
     could mint JWTs and bypass all auth. After an upgrade, old tokens become invalid and one
     re-login is expected; deleting the file is equivalent to rotating the key.
 11. **Run the tests before changing entities**: `pnpm test` compiles shared modules and runs
-    the full offline suite (50 tests). Invariants like "`normalizeFingerprint` must preserve
+    the full offline suite (51 tests). Invariants like "`normalizeFingerprint` must preserve
     custom keys such as `expiresAt`" are locked by tests and turn red immediately if broken.
 12. **Register new entities in DataSource**: `synchronize` only creates tables for entities
     **registered** in the `entities` array in `server.ts`. Missing one means the table does not
