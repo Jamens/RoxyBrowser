@@ -630,7 +630,11 @@ export default function ProfileForm({ open, onClose, onSaved, initial, isTemplat
                     </Form.Item>
                     <Input value={fp.webglRenderer} onChange={(e) => setFpField('webglRenderer', e.target.value)} placeholder="Renderer" />
                   </div>
-                  <Space size="large" style={{ marginTop: 20 }}>
+                  {/* 这一排必须有 wrap：7 个表单项自然宽度约 704px，而抽屉只有 640px。
+                      不换行时 flex 只能压缩每一项，把 label 压到 ~45px，
+                      中文就会逐字换行（追踪器屏蔽竖成 6 行）。
+                      其它几排 Space 都带 wrap，这里漏了才出的问题。 */}
+                  <Space size="large" style={{ display: 'flex', marginTop: 20 }} wrap>
                     <Form.Item label="Canvas 噪声" style={{ marginBottom: 0 }} valuePropName="checked">
                       <Switch checked={fp.canvasNoise} onChange={(v) => setFpField('canvasNoise', v)} />
                     </Form.Item>

@@ -1103,7 +1103,10 @@ export default function Settings() {
 
         <Divider>{t('security.section')}</Divider>
         <Typography.Paragraph type="secondary">{t('security.desc')}</Typography.Paragraph>
-        <Space size="large" style={{ display: 'flex' }}>
+        {/* 必须 wrap：三个 InputNumber 各 170px + extra 说明文字，
+            自然宽度约 768px，而设置页可用宽度只有 560px。
+            不换行时 flex 压缩每一项，label 被压到 2 行。 */}
+        <Space size="large" style={{ display: 'flex' }} wrap>
           <Form.Item
             name="rateLimitPerMin"
             label={t('security.rateLimit')}

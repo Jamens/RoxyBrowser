@@ -177,7 +177,11 @@ const TESTS = [
   // 凭据泄漏守卫：仓库里不得出现任何真实或形似真实的密钥字面量。
   // 纯读源码，无需编译。这条守卫是为了**防止回归**——
   // 用户实测填错栏位的那串 Key 曾被原样写进测试文件，差点随下次提交入库。
-  { name: 'noCredentials', file: 'tests/noCredentials.test.cjs' }
+  { name: 'noCredentials', file: 'tests/noCredentials.test.cjs' },
+  // 横向 Space 溢出与操作列可访问性的源码级守卫：
+  // 「横向 Space 不换行 + 子项自然宽度 > 容器宽度」→ label 被压成多行（中文竖排）。
+  // 纯读源码，无需编译。行为级验证见 scripts/verify-env-operations-layout.mjs。
+  { name: 'envOperationsLayout', file: 'tests/envOperationsLayout.test.cjs' }
 ]
 
 function run(bin, args, label) {

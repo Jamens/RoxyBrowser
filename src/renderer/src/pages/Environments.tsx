@@ -1284,7 +1284,9 @@ export default function Environments() {
     },
     {
       title: '操作',
-      width: 276,
+      // 11 个按钮的自然宽度是 354px：声明 276 会让内容溢出单元格 78px，
+      // 把「删除」推到表格右边界之外。这里按内容留足宽度，并同步调 scroll.x。
+      width: 360,
       render: (_, r) => (
         <Space size={4}>
           {r.status === 'running' ? (
@@ -1296,7 +1298,9 @@ export default function Environments() {
               打开
             </Button>
           )}
-          <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); setFormOpen(true) }} />
+          <Tooltip title="编辑环境（基本信息 / 指纹 / 代理 / 账号）">
+            <Button size="small" icon={<EditOutlined />} onClick={() => { setEditing(r); setFormOpen(true) }} />
+          </Tooltip>
           <Popconfirm
             title="切换线路"
             description="从 IP 池分配一条不同的可用代理替换当前绑定"
@@ -1526,7 +1530,7 @@ export default function Environments() {
           rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
           onRow={(r: ProfileDTO) => ({ 'data-dl-id': r.id } as Record<string, unknown> as never)}
           pagination={{ pageSize: 10, showTotal: (tt) => `共 ${tt} 个环境` }}
-          scroll={{ x: 1170 }}
+          scroll={{ x: 1536 }}
         />
       </Card>
 
