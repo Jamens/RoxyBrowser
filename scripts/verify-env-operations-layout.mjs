@@ -121,6 +121,11 @@ async function main() {
     { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] }
   )
 
+  // 自举创建的测试环境，finally 里要删掉 —— 声明必须在 try 外，
+  // 否则 finally 块访问不到（块级作用域）。
+  let seededProfileId = null
+  let authHeaders = null
+
   try {
     // ---------- 1. 登录 ----------
     const login = await waitFor(
@@ -138,6 +143,30 @@ async function main() {
       60000
     )
     console.log('登录成功，用户:', login.user?.username)
+
+    // ---------- 1.5 数据自举 ----------
+    // 断言依赖「至少有一条环境数据」（列表里要能取到 .ant-table-row）。
+    // 空库（首次安装、或 MySQL 被重置后自动重建）下直接跑会卡在
+    // 「等待超时：环境列表渲染」——看起来像 UI 坏了，其实是**没有数据**。
+    // 这里补一条最小环境数据，脚本结束时再删掉，不污染用户的库。
+    authHeaders = { 'Content-Type': 'application/json', Authorization: `Bearer ${login.token}` }
+    const listRes = await fetch(`${API_BASE}/api/profiles`, { headers: authHeaders }).catch(() => null)
+    const listJson = listRes && listRes.ok ? await listRes.json() : null
+    const existing = Array.isArray(listJson) ? listJson : listJson?.items || listJson?.data || []
+    if (!existing.length) {
+      const seedRes = await fetch(`${API_BASE}/api/profiles/quick-create`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({})
+      }).catch(() => null)
+      if (seedRes && seedRes.ok) {
+        const seeded = await seedRes.json()
+        seededProfileId = seeded?.id ?? null
+        console.log('环境列表为空，已自动创建一条测试数据 (id=' + seededProfileId + ')，结束时清理')
+      } else {
+        console.warn('⚠ 自动创建测试数据失败：', seedRes ? seedRes.status : '请求失败')
+      }
+    }
 
     // ---------- 2. 连主窗口 ----------
     const target = await waitFor(
@@ -395,6 +424,24 @@ async function main() {
     console.error('\n验证失败:', e.message)
     process.exitCode = 1
   } finally {
+    // 清理自举时创建的测试数据。
+    // 注意：DELETE /profiles/:id 是**软删除**（进回收站），行还在表里。
+    // 要真正不残留，得再调一次 purge 永久删除。
+    if (seededProfileId) {
+      try {
+        await fetch(`${API_BASE}/api/profiles/${seededProfileId}`, {
+          method: 'DELETE',
+          headers: authHeaders
+        })
+        await fetch(`${API_BASE}/api/profiles/${seededProfileId}/purge`, {
+          method: 'DELETE',
+          headers: authHeaders
+        })
+        console.log('已清理测试数据 (id=' + seededProfileId + ')')
+      } catch {
+        /* ignore */
+      }
+    }
     try {
       ws && ws.close()
     } catch {
