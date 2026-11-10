@@ -36,6 +36,18 @@ export interface SessionClaims {
    * 但也绝不能因此被误判失效（升级不能踢人）。
    */
   dev?: string
+  /**
+   * 签发时刻（**毫秒**），由 `signSessionToken` 统一注入。
+   *
+   * 为什么不能用 JWT 自带的秒级 `iat`：设备级撤销要按「撤销时间 > 签发时间」
+   * 区分同一设备上的新旧令牌，而「登出 → 立刻重新登录」常落在同一秒内，
+   * 秒级精度会把新令牌误判成「登出前签发的」并再次拒绝（本 bug 的秒级版本）。
+   *
+   * 旧令牌没有此字段时退回 `iat * 1000` 兜底，见 `sessionIssuedAtMs`。
+   */
+  iatMs?: number
+  /** JWT 标准签发时间（秒）；无 `iatMs` 时用于兼容旧令牌 */
+  iat?: number
   /** 分步挑战令牌标记：有值即表示它不是完整会话令牌（2FA 中间态） */
   purpose?: string
 }
@@ -44,7 +56,13 @@ export interface SessionClaims {
 export interface RevokedDevice {
   /** 设备指纹 */
   dev: string
-  /** 撤销时间戳（毫秒）；用于按令牌有效期过期回收 */
+  /**
+   * 撤销时间戳（毫秒）。两个用途：
+   * 1. 按令牌有效期过期回收（见 `pruneRevokedDevices`）；
+   * 2. **判定该撤销是否命中本令牌** —— 只有晚于令牌签发时刻的记录才生效。
+   *    这使「登出」的语义成为「吊销该时刻之前在此设备签发的会话」，
+   *    而不是「永久封禁该设备」。
+   */
   at: number
 }
 
@@ -119,17 +137,56 @@ export function checkSession(
   }
   // 设备级撤销：普通「登出」只吊销本设备，其他设备的会话不受影响。
   // 令牌无 dev 字段（旧令牌）时跳过——升级不能踢人。
+  //
+  // **必须带上签发时刻**：撤销记录的含义是「某时刻吊销此设备当时的会话」，
+  // 不是「此设备永久禁用」。若只按 dev 匹配，用户重新登录拿到的新令牌
+  // 因 UA 未变、dev 相同，会被自己刚才的登出记录立刻拒绝 —— 前端收到 401
+  // 清 token 跳登录页，用户再登录又被拒，形成「登出后永远登不回来」的死循环。
   const dev = claims.dev || ''
-  if (dev && isDeviceRevoked(dev, revokedDevices)) {
+  if (dev && isDeviceRevoked(dev, revokedDevices, sessionIssuedAtMs(claims))) {
     return { valid: false, reason: '本设备已登出，请重新登录', code: 'session_revoked' }
   }
   return { valid: true }
 }
 
-/** 该设备是否已被撤销 */
-export function isDeviceRevoked(dev: string, revokedDevices: RevokedDevice[]): boolean {
+/**
+ * 取令牌的签发时刻（毫秒），用于判断一条撤销记录是否命中本令牌。
+ *
+ * 优先级：`iatMs`（本功能引入的毫秒字段） > JWT 标准的秒级 `iat` > 0。
+ * 两者都没有时按 0 —— 此时任何撤销记录都晚于它，即**保守拒绝**。
+ * 安全优先：无法判定新旧时宁可错杀旧令牌，也不能放行一个可能已被撤销的令牌。
+ */
+export function sessionIssuedAtMs(claims: SessionClaims): number {
+  const ms = Number(claims.iatMs)
+  if (Number.isFinite(ms) && ms > 0) return ms
+  const sec = Number(claims.iat)
+  if (Number.isFinite(sec) && sec > 0) return sec * 1000
+  return 0
+}
+
+/**
+ * 该设备是否已被撤销。
+ *
+ * `issuedAtMs` 给出令牌的签发时刻时，只有**晚于该时刻**的撤销记录才命中：
+ *
+ *   - 登出前签发的旧令牌（含被截获的那份）→ 仍被吊销，安全不破防；
+ *   - 重新登录后签发的新令牌 → 放行，用户可以正常登回来。
+ *
+ * 这正是「登出后无法再登录」的根治点。此前只比对 dev，等于把「登出」
+ * 实现成了「永久封禁这个 User-Agent」：UA 不变，新令牌必被拒。
+ *
+ * 不传 `issuedAtMs` 时保持旧语义（任何匹配都算撤销）——用于兼容没有时间
+ * 信息的调用方，以及现有单测里的直接调用。保守，安全优先。
+ */
+export function isDeviceRevoked(dev: string, revokedDevices: RevokedDevice[], issuedAtMs?: number): boolean {
   if (!dev || !Array.isArray(revokedDevices)) return false
-  return revokedDevices.some((d) => !!d && d.dev === dev)
+  if (issuedAtMs === undefined) {
+    return revokedDevices.some((d) => !!d && d.dev === dev)
+  }
+  const issued = Number(issuedAtMs) || 0
+  // 严格大于：同一毫秒内「登出 → 重登录」时新令牌不该被误杀；
+  // 而旧令牌的签发时刻必然严格早于撤销时刻（同一服务端时钟、单调递增）。
+  return revokedDevices.some((d) => !!d && d.dev === dev && (Number(d.at) || 0) > issued)
 }
 
 /**

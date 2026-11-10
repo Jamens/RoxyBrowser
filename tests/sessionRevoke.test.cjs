@@ -16,6 +16,7 @@ const {
   isDeviceRevoked,
   addRevokedDevice,
   pruneRevokedDevices,
+  sessionIssuedAtMs,
   MAX_REVOKED_DEVICES
 } = require('../.tmp_sr/shared/sessionRevoke.js')
 
@@ -151,6 +152,53 @@ const claims = (o) => ({ uid: 1, tid: 1, username: 'u', role: 'owner', ...o })
   const pruned = pruneRevokedDevices([...old, ...fresh], now)
   check('超过令牌有效期的记录被回收', pruned.length === 1 && pruned[0].dev === 'd-fresh')
   check('非数组输入安全返回空', JSON.stringify(pruneRevokedDevices(null, now)) === '[]')
+}
+
+// ============ 14) 回归：登出后重新登录必须能登得回来 ============
+// 真实故障：用户点「退出登录」后，再输账号密码登录，接口返回 token 却立刻被 401 拒绝，
+// 前端清 token 跳登录页 → 再登录 → 再被拒，形成死循环。
+//
+// 根因：设备级撤销此前只比对 dev，等于把「登出」实现成了「永久封禁这个 User-Agent」。
+// UA 不变，重新登录签发的新令牌 dev 相同，于是被自己刚才的登出记录误杀。
+// 修法：撤销记录带 at，只吊销「at 之前签发的」令牌 —— 旧令牌仍失效，新令牌放行。
+{
+  const devA = deviceFingerprint('device-A')
+  const devB = deviceFingerprint('device-B')
+  const t0 = 1_700_000_000_000
+  const logoutAt = t0 + 5_000
+
+  const oldToken = claims({ ver: 0, dev: devA, iatMs: t0 })
+  const revoked = addRevokedDevice([], devA, logoutAt)
+
+  check('登出前签发的旧令牌仍被吊销（安全不破防）', checkSession(oldToken, 0, revoked).valid === false)
+  // 核心回归项
+  const newToken = claims({ ver: 0, dev: devA, iatMs: logoutAt + 1_000 })
+  check('★ 同一设备重新登录签发的新令牌有效', checkSession(newToken, 0, revoked).valid === true)
+  check('旧令牌不会因重新登录而复活', checkSession(oldToken, 0, revoked).valid === false)
+  check('其他设备的令牌始终不受影响', checkSession(claims({ ver: 0, dev: devB, iatMs: t0 }), 0, revoked).valid === true)
+
+  // 再次登出 → 第二次撤销仍能吊销这一轮的新令牌，且再登录还能回来
+  const logout2At = logoutAt + 4_000
+  const revoked2 = addRevokedDevice(revoked, devA, logout2At)
+  check('第二次登出能吊销上一轮的新令牌', checkSession(newToken, 0, revoked2).valid === false)
+  check('第二次重新登录依然有效', checkSession(claims({ ver: 0, dev: devA, iatMs: logout2At + 1 }), 0, revoked2).valid === true)
+
+  // 边界：撤销与签发落在同一毫秒 → 新令牌不该被误杀（严格大于）
+  check('同一毫秒边界不误杀新令牌', checkSession(claims({ ver: 0, dev: devA, iatMs: logoutAt }), 0, revoked).valid === true)
+
+  // 旧令牌（无 iatMs）用秒级 iat 兜底，仍要能被后续撤销命中
+  const legacyToken = claims({ ver: 0, dev: devA, iat: Math.floor(t0 / 1000) })
+  check('无 iatMs 的旧令牌按秒级 iat 兜底并被撤销', checkSession(legacyToken, 0, revoked).valid === false)
+  check('两个时间字段都缺时保守拒绝（安全优先）', checkSession(claims({ ver: 0, dev: devA }), 0, revoked).valid === false)
+  check('dev 缺失的旧令牌仍不受设备撤销影响', checkSession(claims({ ver: 0, iatMs: t0 }), 0, revoked).valid === true)
+
+  // 辅助函数本身
+  check('sessionIssuedAtMs 优先取毫秒字段', sessionIssuedAtMs({ iatMs: t0, iat: 1 }) === t0)
+  check('sessionIssuedAtMs 缺少毫秒字段时换算秒', sessionIssuedAtMs({ iat: 1_700_000_000 }) === 1_700_000_000_000)
+  check('sessionIssuedAtMs 全缺返回 0', sessionIssuedAtMs({}) === 0)
+  // 不传 issuedAtMs 时保持旧语义，兼容既有直接调用
+  check('isDeviceRevoked 不传签发时刻时保持旧语义', isDeviceRevoked(devA, revoked) === true)
+  check('isDeviceRevoked 传入签发时刻后按时间判定', isDeviceRevoked(devA, revoked, logoutAt + 1) === false)
 }
 
 console.log(failed === 0 ? '\nALL PASSED' : `\n${failed} FAILED`)

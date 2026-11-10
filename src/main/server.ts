@@ -255,7 +255,12 @@ function signSessionToken(
       ver: args.tokenVersion ?? 0,
       // dev 声明设备指纹：普通「登出」靠它做到只吊销本设备。
       // 缺失（旧签发路径漏传）时该令牌无法被设备级撤销，仍由 tokenVersion 兜底。
-      dev: args.dev || ''
+      dev: args.dev || '',
+      // 毫秒级签发时刻：设备级撤销按「撤销时间 > 签发时间」判定，
+      // 否则重新登录拿到的新令牌会因 UA 未变、dev 相同，被自己刚才的登出记录误杀
+      // （表现为「登出后无法再登录」）。不能用 JWT 自带的秒级 iat ——
+      // 登出与重新登录常落在同一秒内，秒级精度不足以区分新旧令牌。
+      iatMs: Date.now()
     },
     JWT_SECRET,
     { expiresIn: ttl }

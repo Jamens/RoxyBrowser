@@ -181,7 +181,12 @@ const TESTS = [
   // 横向 Space 溢出与操作列可访问性的源码级守卫：
   // 「横向 Space 不换行 + 子项自然宽度 > 容器宽度」→ label 被压成多行（中文竖排）。
   // 纯读源码，无需编译。行为级验证见 scripts/verify-env-operations-layout.mjs。
-  { name: 'envOperationsLayout', file: 'tests/envOperationsLayout.test.cjs' }
+  { name: 'envOperationsLayout', file: 'tests/envOperationsLayout.test.cjs' },
+  // 「登出后无法再登录」的源码级守卫：锁住 signSessionToken 注入毫秒级 iatMs、
+  // checkSession 把它传给设备撤销判定、判定按「撤销时间 > 签发时间」比较。
+  // 漏任何一环都无编译错误、无报错，只会让用户永远登不回来。
+  // 纯读源码，无需编译。行为级验证见 scripts/verify-session-relogin.mjs。
+  { name: 'sessionRelogin', file: 'tests/sessionRelogin.test.cjs' }
 ]
 
 function run(bin, args, label) {
