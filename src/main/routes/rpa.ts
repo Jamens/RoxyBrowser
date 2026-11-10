@@ -5,7 +5,7 @@ import { ownerScope } from '../authScope'
 import type { AuthedRequest } from '../authScope'
 import { MARKET_SCRIPTS } from '../rpaMarket'
 import { substituteSteps } from '../../shared/rpa'
-import { normalizeScheduleInterval, normalizeVariables } from '../../shared/rpa'
+import { normalizeScheduleInterval, normalizeVariables, mergeRunVariables } from '../../shared/rpa'
 import {
   getRunningWindowIds,
   replayRpaScript,
@@ -254,11 +254,12 @@ export function registerRpaRoutes(router: Router, deps: RpaRouteDeps): void {
       where: { id: profileId, ...ownerScope(req) }
     })
     if (!profile) return res.status(404).json({ message: '环境不存在' })
-    // 变量替换：回放时可传入覆盖变量；否则用脚本自带变量
+    // 变量替换：回放覆盖值按**键**合并到脚本默认值上，空串视为「没覆盖」。
+    // 旧写法只要收到 variables 对象就整体替换，用户清空输入框后
+    // {{keyword}} 会被换成空串，URL 变成 `?k=` —— 与弹窗「清空则恢复默认值」
+    // 恰好相反。前端已过滤空值，这里再兜一次（v1 自动化 API 同样走此语义）。
     const reqVars = (req.body || {}).variables
-    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
-      ? normalizeVariables(reqVars) || {}
-      : s.variables || {}
+    const vars = mergeRunVariables(s.variables || {}, normalizeVariables(reqVars))
     const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
     // 前置校验环境必须处于运行态（否则后台任务会静默失败，用户无从得知）
     const runningIds = getRunningWindowIds()

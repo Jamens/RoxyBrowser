@@ -8,7 +8,7 @@ import { getCdpInfo } from '../cdpManager'
 import { applyCookies, getRunningWindowIds, replayRpaScript } from '../browserManager'
 import { allocateProxy, applyProxyCheckResult, checkProxy, computeProxyUsage, ApiError } from '../proxyService'
 import { randomFingerprint, normalizeFingerprint, listFingerprintPresets } from '../../shared/fingerprint'
-import { substituteSteps, normalizeVariables } from '../../shared/rpa'
+import { substituteSteps, normalizeVariables, mergeRunVariables } from '../../shared/rpa'
 import { DEFAULT_START_URL, type RpaStep, type OSKind, type AppSettings } from '../../shared/types'
 import { registerV1CookieRoutes } from './v1Cookie'
 import { apiShouldAudit, apiActionName, apiAuditDetail } from '../apiAudit'
@@ -381,9 +381,9 @@ export function createV1Router(deps: V1RouteDeps): express.Router {
     const profile = await getDs().getRepository(ProfileEntity).findOne({ where: { id: profileId, teamId: tid } })
     if (!profile) return res.status(404).json({ code: 404, message: 'profile not found' })
     const reqVars = (req.body || {}).variables
-    const vars = reqVars && typeof reqVars === 'object' && Object.keys(reqVars).length
-      ? normalizeVariables(reqVars) || {}
-      : s.variables || {}
+    // 与 /api/rpa/:id/run 保持同一语义：空覆盖值回退到脚本默认值，
+    // 否则外部自动化传 {"keyword":""} 会把占位符替换成空串。
+    const vars = mergeRunVariables(s.variables || {}, normalizeVariables(reqVars))
     const steps = substituteSteps(s.steps as unknown as RpaStep[], vars)
     const runningIds = getRunningWindowIds()
     if (!runningIds.includes(profileId)) {

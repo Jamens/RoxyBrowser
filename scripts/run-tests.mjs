@@ -186,7 +186,12 @@ const TESTS = [
   // checkSession 把它传给设备撤销判定、判定按「撤销时间 > 签发时间」比较。
   // 漏任何一环都无编译错误、无报错，只会让用户永远登不回来。
   // 纯读源码，无需编译。行为级验证见 scripts/verify-session-relogin.mjs。
-  { name: 'sessionRelogin', file: 'tests/sessionRelogin.test.cjs' }
+  { name: 'sessionRelogin', file: 'tests/sessionRelogin.test.cjs' },
+  // RPA 变量覆盖：标签不得再把 {{key}} 模板字面量当字段名，且「清空则恢复默认值」
+  // 必须在前端过滤 + 两条 run 路由逐键合并上同时成立。漏任何一环都无报错，
+  // 用户只会看到一串英文占位符 / 打开 ?k= 空搜索页。纯读源码，无需编译。
+  // 行为级验证见 scripts/verify-rpa-variable-ux.mjs。
+  { name: 'rpaVariableUx', file: 'tests/rpaVariableUx.test.cjs' }
 ]
 
 function run(bin, args, label) {

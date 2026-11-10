@@ -10,7 +10,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { api, apiFetch, getToken } from '../api'
 import type { ProfileDTO, RpaScriptDTO, RpaStep } from '@shared/types'
-import { varsToArray, arrayToVars } from '@shared/rpa'
+import { varsToArray, arrayToVars, variableLabel } from '@shared/rpa'
 import { useAppCtx } from '../hooks/useApp'
 import { countryTimezone } from '@shared/countries'
 import { formatDateTimeInZone } from '@shared/timezone'
@@ -251,7 +251,13 @@ export default function Rpa() {
     if (!runScript || !runProfileId) return message.warning('请选择回放的环境')
     try {
       const payload: Record<string, unknown> = { profileId: runProfileId }
-      if (Object.keys(runVars).length) payload.variables = runVars
+      // 只传真正填了值的覆盖项。输入框预填的是脚本默认值，用户清空即表示
+      // 「用默认值」—— 不能把空串发给后端，否则占位符会被替换成空串，
+      // 亚马逊搜索会变成 https://www.amazon.com/s?k= 。后端另有逐键回退兜底。
+      const overrides = Object.fromEntries(
+        Object.entries(runVars).filter(([, v]) => String(v ?? '').trim() !== '')
+      )
+      if (Object.keys(overrides).length) payload.variables = overrides
       const res = await api.post<{ started: boolean; steps: number }>(`/api/rpa/${runScript.id}/run`, payload)
       message.success(`开始回放「${runScript.name}」（${res.steps} 步），执行结果见操作日志`)
       setRunScript(null)
@@ -549,7 +555,7 @@ export default function Rpa() {
                           </Space>
                           <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>
                             步骤 {m.stepCount} · 变量：
-                            {Object.keys(m.variables).map((k) => ` {{${k}}}`).join('、') || ' 无'}
+                            {Object.keys(m.variables).map((k) => ` ${variableLabel(k)}`).join('、') || ' 无'}
                           </div>
                           {m.note && (
                             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
@@ -641,13 +647,26 @@ export default function Rpa() {
         {runScriptVarKeys.length ? (
           <div style={{ marginTop: 12 }}>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              变量覆盖（留空则用脚本默认值）
+              变量覆盖（默认值已预填，可直接修改；清空则恢复脚本默认值）
             </Typography.Text>
             {runScriptVarKeys.map((k) => (
               <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                <Typography.Text style={{ width: 120, fontSize: 12 }} ellipsis>
-                  {`{{${k}}}`}
-                </Typography.Text>
+                {/* 标签给人看：显示中文可读名，不再把 {{key}} 这种引擎占位符
+                    当成字段名渲染。变量名与步骤写法保留在 hover 提示里。 */}
+                <span
+                  title={`变量名：${k}（步骤里写作 {{${k}}}）`}
+                  style={{
+                    width: 120,
+                    flexShrink: 0,
+                    fontSize: 12,
+                    color: 'inherit',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  {variableLabel(k)}
+                </span>
                 <Input
                   style={{ flex: 1 }}
                   placeholder={runScriptVars[k]}

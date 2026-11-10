@@ -76,3 +76,63 @@ export function arrayToVars(arr: Array<{ key?: string; value?: string }> | undef
   }
   return out
 }
+
+/**
+ * 常见变量名的中文显示名（**纯展示层**，不参与步骤替换）。
+ *
+ * 回放弹窗此前把 `{{keyword}}` 这类**模板字面量**直接当字段名渲染 —— 那是
+ * 步骤里给引擎看的写法，不是给人看的标签。用户从市场装完脚本看到一串英文
+ * 占位符，第一反应是「模板没渲染 / 脚本坏了」。市场脚本的 9 个变量全部在此收录；
+ * 用户自建脚本的任意变量名走 `variableLabel` 的回退分支。
+ *
+ * 维护约定：往 `main/rpaMarket.ts` 加新预设变量时，必须同步加到这里，
+ * 否则 UI 又会露出裸英文名。源码级守卫 tests/rpaVariableUx.test.cjs 会拦截。
+ */
+export const RPA_VARIABLE_LABELS: Record<string, string> = {
+  keyword: '搜索关键词',
+  query: '搜索词',
+  domain: '域名',
+  productUrl: '商品链接',
+  loginUrl: '登录页地址',
+  username: '账号',
+  password: '密码',
+  composeUrl: '发布页地址',
+  content: '正文内容'
+}
+
+/** 变量在 UI 上的可读名字：未收录时回退到变量名本身（**绝不再拼 {{}}**） */
+export function variableLabel(key: string): string {
+  const k = String(key || '').trim()
+  return RPA_VARIABLE_LABELS[k] || k
+}
+
+/**
+ * 合并「脚本自带变量」与「回放时的覆盖值」，供 run 接口生成最终变量表。
+ *
+ * ## 修的是什么
+ * UI 写着「留空则用脚本默认值」，旧实现却是：只要 body 带 variables 对象就
+ * **整体替换**。回放弹窗把默认值预填进输入框，用户一清空 → 传 `{keyword:''}`
+ * → `substituteVars` 把 `{{keyword}}` 换成空串 → 打开 `?k=` 空搜索页。
+ * 提示语与真实行为相反，且没有任何报错。
+ *
+ * ## 语义
+ * - 覆盖值为空串 / 纯空白 / 缺失 → 回退到脚本默认值；
+ * - 非空覆盖值 → 按原名覆盖（值本身不做 trim，保留用户输入的空格）；
+ * - 只接受 base 里已有的键：回放时不该凭空造出新变量。
+ *
+ * 取舍：本约定下「把某变量替换成空串」不可用，需要清空请在「编辑脚本」里
+ * 改默认值。这与弹窗提示一致，且避免了「空串」既是有效值又是哨兵的歧义。
+ */
+export function mergeRunVariables(
+  base: Record<string, string> | null | undefined,
+  override: Record<string, string | undefined> | null | undefined
+): Record<string, string> {
+  const out: Record<string, string> = { ...(base || {}) }
+  if (!override || typeof override !== 'object') return out
+  for (const [k, v] of Object.entries(override)) {
+    if (!Object.prototype.hasOwnProperty.call(out, k)) continue
+    const s = v === undefined || v === null ? '' : String(v)
+    if (s.trim() !== '') out[k] = s
+  }
+  return out
+}
