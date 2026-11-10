@@ -9,6 +9,46 @@
 
 ---
 
+## 2026-11-10 · RPA 变量覆盖：模板占位符当字段名 + 「留空回退默认值」是假的（`fix(rpa)`）
+
+用户报障：「RPA 脚本有 bug，我安装了一个后竟然显示 keywords」。截图里回放弹窗
+「变量覆盖」左侧是 `{{keyword}}`，右侧是默认值 `wireless earbuds`。
+
+### 根因（两个问题叠在同一处）
+
+1. `{{keyword}}` 是步骤里给引擎看的**模板字面量**，`Rpa.tsx` 却把它当可见字段名
+   渲染（``{`{{${k}}}`}``）。用户从市场装完脚本看到一串英文占位符，
+   第一反应就是模板没渲染 / 脚本坏了。市场卡片里也有一份。
+2. 弹窗写着「留空则用脚本默认值」，实现却相反：输入框预填默认值，前端把整个
+   `runVars` 下发，后端只要收到 `variables` 对象就**整体替换**。用户清空输入框
+   → `{keyword:''}` → `substituteVars` 把 `{{keyword}}` 换成空串 →
+   打开 `https://www.amazon.com/s?k=`。全程无编译错误、无报错。
+
+### 修复
+
+- `shared/rpa.ts` 新增 `RPA_VARIABLE_LABELS` / `variableLabel()`：市场脚本 9 个
+  变量都有中文显示名，自建变量回退到变量名本身（**不再拼 `{{}}`**）；
+  变量名与 `{{key}}` 写法保留在 hover 提示里，技术信息不丢。
+- `shared/rpa.ts` 新增 `mergeRunVariables()`：空 / 纯空白的覆盖值**逐键回退**到
+  脚本默认值，非空才覆盖，且不接受 base 里不存在的键。
+- 前端 `run()` 只下发非空覆盖值；两条 run 路由（`/api/rpa/:id/run`、
+  `/v1/rpa/:id/run`）统一改用 `mergeRunVariables`，外部自动化 API 同样受益。
+- 提示语改为「默认值已预填，可直接修改；清空则恢复脚本默认值」，与行为一致。
+
+### 验证
+
+- 纯函数 `tests/rpa.test.ts` 新增 19 项（中文标签、合并回退、URL 端到端反证）；
+  源码级守卫 `tests/rpaVariableUx.test.cjs` 12 项，锁住「标签 → 前端过滤 →
+  两条路由合并」整条链，并检查市场变量与中文标签表一一对应。
+- 行为级 `scripts/verify-rpa-variable-ux.mjs`：真 HTTP 校验市场目录 / 已安装脚本
+  变量一致，CDP 驱动真实 UI 校验弹窗文本与请求体。**无头 Electron 里 React
+  合成事件不派发时 UI 断言明确标 SKIP，绝不假通过**（详见 VERIFY.md §22）。
+- 反向验证 4 处（标签退回占位符 / 路由退回整体替换 / 前端退回无条件下发 /
+  删掉 keyword 中文名）全部让源码守卫变红。
+- 离线单测 **55 passed / 0 failed**；typecheck + build 通过。
+
+---
+
 ## 2026-11-10 · 登出后无法再登录：设备级撤销误把「登出」做成了「永久封禁设备」（`fix(auth)`）
 
 用户报障：「我发现登出后就无法再登陆了」。登录接口明明返回了 token，
@@ -46,7 +86,7 @@
 - 纯函数 `tests/sessionRevoke.test.cjs` 新增第 14 组回归（20 项断言）。
 - 源码级 `tests/sessionRelogin.test.cjs`（新建，进 `pnpm test`）：8 项断言锁住
   「签发注入 `iatMs` → 判定收到签发时刻 → 按时间比较」整条链路。
-- 离线单测 **54 passed / 0 failed**；typecheck + build 通过。
+- 离线单测 **55 passed / 0 failed**；typecheck + build 通过。
 - 三档都做过反向验证：修复前的行为级实测 S7 = 401 `session_revoked`（bug 复现）；
   回退源码后纯函数 3 条、源码守卫 2 条同时变红。
 

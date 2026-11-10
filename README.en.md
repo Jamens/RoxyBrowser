@@ -46,7 +46,7 @@ pnpm build        # production build (outputs to out/)
 pnpm app          # launch the client from the production build
 pnpm dist         # build the Windows installer (outputs to release/)
 
-pnpm test         # run the full offline test suite (54 tests: compile shared modules + run each)
+pnpm test         # run the full offline test suite (55 tests: compile shared modules + run each)
 pnpm db:check     # read-only check for schema/entity drift (executes no DDL)
 pnpm db:sync      # create tables + seed data (default admin / 123456, idempotent)
 pnpm migrate:secrets        # encrypt legacy plaintext credentials (dry-run by default)
@@ -1415,7 +1415,7 @@ fail to save, it *pretends* to save, and the user has no clue which of the two t
 
 - **Verification**: pure-function level `tests/cloudConfigValidation.test.cjs` (11) + behavior level
   `scripts/verify-settings-save-visibility.mjs` (**13** assertions, CDP driving the real UI; backs up
-  and restores the database settings it touches); **54 passed / 0 failed** in the offline suite.
+  and restores the database settings it touches); **55 passed / 0 failed** in the offline suite.
 
 > Side note: for DeepSeek, **the text model and the vision model can share one name**. They remain two
 > separate fields (probed and called separately), but `deepseek-v4-flash` actually routes to
@@ -1733,7 +1733,7 @@ src/
     could mint JWTs and bypass all auth. After an upgrade, old tokens become invalid and one
     re-login is expected; deleting the file is equivalent to rotating the key.
 11. **Run the tests before changing entities**: `pnpm test` compiles shared modules and runs
-    the full offline suite (54 tests). Invariants like "`normalizeFingerprint` must preserve
+    the full offline suite (55 tests). Invariants like "`normalizeFingerprint` must preserve
     custom keys such as `expiresAt`" are locked by tests and turn red immediately if broken.
 12. **Register new entities in DataSource**: `synchronize` only creates tables for entities
     **registered** in the `entities` array in `server.ts`. Missing one means the table does not

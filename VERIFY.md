@@ -1396,3 +1396,79 @@ status=401  code=session_revoked  msg=本设备已登出，请重新登录
    把用户正在用的会话弄脏。记录随 7 天 TTL 自动回收。
 4. **秒级 `iat` 不够用**：JWT 的 `iat` 是整秒，同一秒内「登出 → 重登录」
    两个令牌的 `iat` 完全相同，按它比较等于没比较。
+
+---
+
+## 22. RPA 变量覆盖：模板占位符被当成字段名 +「留空回退默认值」是假的
+
+### 22.1 现象与根因
+
+用户从脚本市场安装「亚马逊商品搜索比价」后报障：「RPA 脚本有 bug，我安装了
+一个后竟然显示 keywords」。放大截图后可见：回放弹窗「变量覆盖」左侧是
+`{{keyword}}`，右侧输入框是 `wireless earbuds`。
+
+两个问题叠在同一处：
+
+1. **显示**：``{`{{${k}}}`}`` 是步骤里给 `substituteVars` 看的模板字面量，
+   `Rpa.tsx` 却把它当**可见字段名**渲染。用户看到的是一串没渲染的英文占位符。
+   市场卡片里的「变量：{{keyword}}」是同一份信息，同样不该给人看。
+2. **行为**：弹窗提示「留空则用脚本默认值」，但输入框预填了默认值，前端
+   `run()` 无条件下发整个 `runVars`，后端只要收到 `variables` 对象就
+   **整体替换** `s.variables`。清空输入框 → `{keyword: ''}` →
+   URL 变成 `https://www.amazon.com/s?k=`。提示语与真实行为相反，且零报错。
+
+### 22.2 修复链路（缺任何一环都静默退化）
+
+| 环节 | 改动 |
+| -- | -- |
+| 共享层 | `RPA_VARIABLE_LABELS` + `variableLabel()`：9 个市场变量中文名，自建变量回退原名且不带 `{{}}` |
+| 共享层 | `mergeRunVariables(base, override)`：空 / 纯空白覆盖值逐键回退，不接受 base 之外的键 |
+| 前端 | 标签改用 `variableLabel(k)`；`run()` 用 `filter` 只下发非空覆盖值；提示语改为「默认值已预填…清空则恢复脚本默认值」 |
+| 后端 | `/api/rpa/:id/run` 与 `/v1/rpa/:id/run` 都改为 `mergeRunVariables(s.variables \|\| {}, normalizeVariables(reqVars))` |
+
+取值取舍：本约定下「把变量替换成空串」不可用（需要清空就在「编辑脚本」里改
+默认值），与弹窗提示一致，避免空串既是有效值又是哨兵的歧义。
+
+### 22.3 三档验证
+
+- **纯函数** `tests/rpa.test.ts` 新增 19 项：`variableLabel` 回退不含模板括号、
+  合并的 12 种边界（空串 / 纯空白 / undefined / 多余键 / 值不 trim …）、
+  端到端 URL（清空 → `?k=wireless earbuds`，改成 `iphone` → `?k=iphone`），
+  并用一条 `substituteVars(..., {keyword:''})` 反证旧实现确实会得到 `?k=`。
+- **源码级** `tests/rpaVariableUx.test.cjs` 12 项（进 `pnpm test`）：锁住标签不再
+  拼 `{{${k}}}`、`run()` 过滤空值、两条路由都调用 `mergeRunVariables` 且不再
+  残留旧的整体替换表达式；并**从 `rpaMarket.ts` 提取全部变量名**逐个断言都有
+  中文显示名（以后加预设变量忘了加标签会直接红）。
+- **行为级** `scripts/verify-rpa-variable-ux.mjs`：
+  - V6（始终执行，真 HTTP）：`/api/rpa/market` 与 `/api/rpa` 的变量数据一致，
+    均为 `{ keyword: 'wireless earbuds' }`；
+  - V1–V5（CDP 驱动真实 UI）：弹窗文本不含 `{{keyword}}`、字段名为「搜索关键词」、
+    默认值预填、hover 保留变量名、清空后真实请求体不带空 `variables`。
+  空库时自举最小环境 / 脚本，`finally` 硬删脚本、软删环境再 `purge`，零残留。
+
+### 22.4 反向验证（4 处回退全部让源码守卫变红）
+
+| 回退动作 | 结果 |
+| -- | -- |
+| 标签改回 ``{`{{${k}}}`}`` | 守卫「回放弹窗不再把 {{${k}}} 当字段名渲染」FAIL |
+| `/api/rpa/:id/run` 改回整体替换 | 守卫「两条 run 路由都逐键合并」FAIL |
+| 前端 `run()` 改回无条件下发 `runVars` | 守卫「run() 只把非空覆盖值发给后端」FAIL |
+| 删掉 `keyword: '搜索关键词'` | 守卫「市场脚本的每个变量都有中文显示名」FAIL |
+
+### 22.5 踩坑备忘
+
+1. **无头 Electron 的 React 合成事件**：脚本 spawn 的独立窗口里，CDP 真实鼠标、
+   键盘 Enter、DOM `btn.click()` 三种方式都让事件冒泡到 `#root`（`rootSeen` 有值），
+   但 `__reactProps$.onClick` 始终不被调用、`runScript` state 保持 `null`。
+   这是验证环境限制，**不是产品缺陷**——用户实机截图里的弹窗正常打开。
+   脚本对此明确打印 `SKIP` 并说明原因，**绝不把没跑到的断言算成通过**；
+   UI 显示的主防线由源码守卫 + 纯函数承担。后续若找到该环境下事件系统失效的
+   根因，可去掉 SKIP 分支恢复 V1–V5。
+2. **守卫自己的正则也会踩坑**：从 `rpaMarket.ts` 提变量名时，
+   `loginUrl: 'https://example.com/login'` 里的 `https:` 会被当成变量名。
+   必须先抹掉字符串字面量再匹配 `key:`。
+3. **守卫的取值边界**：断言「函数体不含 `{{`」时，若按固定字符数截取，
+   会把紧随其后的文档注释里的反例算进去而误报。按 `/**` 切分只取函数体。
+4. **市场脚本变量是「变量名 → 中文名」的隐式契约**：新增预设变量时
+   `rpaMarket.ts` 和 `shared/rpa.ts` 必须同步，否则 UI 又露出裸英文名；
+   这条已固化成测试，不能靠人工记忆。

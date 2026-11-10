@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（54 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（55 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -635,7 +635,7 @@ for (const ctx of browser.contexts()) {
 
   三个「为什么不用另一个方案」值得记住：`JSON.stringify` 比较**依赖键序**，内容相同但键序不同会误报 —— **误报比漏报更糟，提示一旦不可信用户就再也不会注意它**（故用模块级 `deepEqual`）；`isFieldsTouched()` 只反映「碰过哪个字段」，改回原值仍为 `true`（故用逐字段比对）；`useBlocker` 需要 data router，本项目是 `HashRouter` + `<Routes>` 声明式模式，用它会直接抛错（故站内切换拦不住，只能靠就近按钮 + 显式提示，`beforeunload` 只拦关闭应用 / 刷新）。
 
-- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **54 passed / 0 failed**。
+- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **55 passed / 0 failed**。
 
 > 顺带澄清：DeepSeek 的**文本模型与视觉模型可以是同一个名字**。字段上仍是两个独立字段（分别探活、分别调用），但 `deepseek-v4-flash` 实际路由到 **V4.1-Flash**，而 V4.1-Flash **原生支持图像输入**；`deepseek-v4-flash-vision-exp` 是 2026-08-21 发布的实验性多模态视觉模型。
 
@@ -812,7 +812,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 54 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 55 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
