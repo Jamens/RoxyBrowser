@@ -36,7 +36,7 @@ pnpm build        # 生产构建（输出到 out/）
 pnpm app          # 以生产构建启动客户端
 pnpm dist         # 打包 Windows 安装包（输出到 release/）
 
-pnpm test         # 一键跑完全量离线测试（51 个：自动编译共享模块 + 逐个运行）
+pnpm test         # 一键跑完全量离线测试（54 个：自动编译共享模块 + 逐个运行）
 pnpm db:check     # 只读检查库表结构与实体定义的差异（不执行任何 DDL）
 pnpm db:sync      # 建表 + 种子数据（默认 admin / 123456，幂等，可重复执行）
 pnpm migrate:secrets        # 把历史明文凭据加密成密文（默认 dry-run）
@@ -470,6 +470,26 @@ app.listen(4000)
 - **拿不到设备指纹时降级为全设备撤销**：某些代理会剥离 UA 头，此时**不能静默成功**（否则用户点了退出登录、令牌却仍有效 7 天，正是这个功能要修的洞），而是宁可多踢其他设备。降级路径有 `console.warn` 留痕。
 - **`revokeAllSessions` 会清空撤销列表**：tokenVersion 已让所有旧令牌失效，列表里每条记录都无对象可撤销，留着只会在下次登录时误杀同指纹设备。
 - **改密码仍走 tokenVersion**：密码泄露时用户正是期望「其他设备全下线」，这是既有正确行为，不因本次改动而改变。
+
+#### 登出后必须能重新登录（撤销的时间维度）
+
+只比对 `dev` 的撤销列表**没有时间维度**：登出把设备指纹写进 `revokedDevices`，
+而重新登录签发的新令牌 UA 没变、`dev` 相同，于是立刻被自己刚才的登出记录拒绝 ——
+用户看到的是「登录成功却立刻掉线」，前端清 token 跳登录页，再登录又被拒，**死循环**。
+这等于把「登出」实现成了「永久封禁这个 User-Agent」；撤销记录累积后，连首次登录都不可用。
+
+- **令牌带毫秒级 `iatMs`**（由唯一签发入口 `signSessionToken()` 注入），
+  `checkSession()` 把它传给设备撤销判定；只有 `at > 签发时刻` 的撤销记录才命中。
+- **不能用 JWT 自带的秒级 `iat`**：「登出 → 立刻重登录」常在同一秒内，
+  两个令牌的 `iat` 完全相同，按它比较等于没比较。
+- **旧令牌仍被吊销**（含已泄露的那份），新令牌放行，其他设备不受牵连，
+  二次登出仍能吊销这一轮的新令牌。
+- 没有选择「登录时清除撤销记录」—— 那会让旧令牌复活，撤销功能破防；
+  也没有递增 `tokenVersion` —— 那会把其他设备一起踢下线。
+- 旧令牌无 `iatMs` 时按 `iat * 1000` 兜底，两个字段都没有时按 0（保守拒绝）。
+- **验证**：行为级 `scripts/verify-session-relogin.mjs`（14 项，真 HTTP）、
+  源码级 `tests/sessionRelogin.test.cjs`（8 项，进 `pnpm test`）、
+  纯函数回归 `tests/sessionRevoke.test.cjs` 第 14 组。详见 `VERIFY.md` §21。
 - **⚠️ 升级用户需手动执行 `pnpm db:sync`** 补`revokedDevices` 列——`synchronize` 已改为按需执行（仅首次建表时跑），新增列不会自动出现。
 
 ### 环境数据分区清理（`persist:env-<id>` 生命周期）
@@ -615,7 +635,7 @@ for (const ctx of browser.contexts()) {
 
   三个「为什么不用另一个方案」值得记住：`JSON.stringify` 比较**依赖键序**，内容相同但键序不同会误报 —— **误报比漏报更糟，提示一旦不可信用户就再也不会注意它**（故用模块级 `deepEqual`）；`isFieldsTouched()` 只反映「碰过哪个字段」，改回原值仍为 `true`（故用逐字段比对）；`useBlocker` 需要 data router，本项目是 `HashRouter` + `<Routes>` 声明式模式，用它会直接抛错（故站内切换拦不住，只能靠就近按钮 + 显式提示，`beforeunload` 只拦关闭应用 / 刷新）。
 
-- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **53 passed / 0 failed**。
+- **验证**：纯函数级 `tests/cloudConfigValidation.test.cjs`（11 项）+ 行为级 `scripts/verify-settings-save-visibility.mjs`（**13 项**，CDP 驱动真实 UI；运行时备份并还原数据库设置）；离线单测总计 **54 passed / 0 failed**。
 
 > 顺带澄清：DeepSeek 的**文本模型与视觉模型可以是同一个名字**。字段上仍是两个独立字段（分别探活、分别调用），但 `deepseek-v4-flash` 实际路由到 **V4.1-Flash**，而 V4.1-Flash **原生支持图像输入**；`deepseek-v4-flash-vision-exp` 是 2026-08-21 发布的实验性多模态视觉模型。
 
@@ -792,7 +812,7 @@ src/
 7. **构建默认不清理输出目录**：`electron.vite.config.ts` 中已设置 `emptyOutDir: false`，避免受限环境下批量删除失败。若在正常终端下希望每次构建前清空，改为 `true` 即可；或用 `pnpm clean:out` 精确回收——它从当前构建入口递归解析可达 chunk，**只删证明不可达的文件**（默认 dry-run，`--apply` 才真删），既回收磁盘又不违反上面的受限环境假设。
 8. **存 base64 图片不要用 `text` 列**：MySQL 的 `text` 上限仅 64KB，而图片转 base64 常达数百 KB 甚至 1MB+，用 `text` 会静默截断 / 写入失败，表现为「上传大图既不报错也存不进去」。此类字段请用 `longtext`（见 `TeamEntity.icon`），并在前端先压缩再上传。
 9. **JWT 密钥没有默认值**：首次启动用 `crypto.randomBytes(32)` 生成并落盘到 `~/.roxy-clone/jwt-secret`，也可用环境变量 `JWT_SECRET` 指定。**绝不回落任何硬编码默认值**——那等于任何拿到该值的人都能自行签发 JWT、绕过全部鉴权。升级后旧令牌失效、需重新登录一次，属预期；删除该文件即等同重置密钥。
-10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 50 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
+10. **改动实体前先跑测试**：`pnpm test` 会自动把共享模块编译后跑 54 个离线单测。`normalizeFingerprint` 必须保留 `expiresAt` 等自定义键这类不变量，都在测试里锁着，改坏了会立刻红。
 11. **新增实体必须注册进 DataSource**：`synchronize` 只会为 `server.ts` 中 `entities` 数组里**已注册**的实体建表。漏注册会导致该表在全新安装时根本不存在（且 `db/schema.sql` 也不会补建），表现为功能一调用就报 `ER_NO_SUCH_TABLE`。加完实体后跑 `pnpm db:check` 确认：应看到对应的 `CREATE TABLE` 增量变更。
 12. **新增凭据列必须挂 `secretTransformer` 且给足列宽**：往 `entities.ts` 加带密码 / 密钥语义的列时，**务必**带上 `transformer: secretTransformer`，否则该列又会以明文入库——加解密只在这一层自动生效，绕过 ORM（如手写 SQL、`QueryBuilder.getRawMany()`）拿到的会是密文。加解密靠 `server.ts` 的 `getSettings()` / `PUT /settings` 收口（JSON 列用不了 Transformer），新增 JSON 内的凭据字段还需同步加进 `SETTINGS_SECRET_PATHS`。**列宽不能只加 256**：密文比明文长（约 1.5 倍），沿用 `SECRET_COLUMN_LENGTH = 512`，否则 MySQL 会**静默截断**，症状是「密码莫名错误」且极难定位。
 13. **凭据加密密钥不可更换**：`~/.roxy-clone/secret-key`（或 `ROXY_SECRET_KEY`）一旦更换，此前所有密文**无法恢复**——这是对称加密的固有性质。换密钥前先「设置 → 空间快照」导出备份。反过来，删除该文件会生成新密钥，旧数据将 fail-closed（登录失败 + 应用打 error 日志指明原因），不会静默出错值。
